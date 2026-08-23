@@ -1,0 +1,24 @@
+{
+  "model": {
+    "provider": "my-relay",
+    "id": "claude-sonnet-4-6"
+  },
+  "providers": {
+    "my-relay": {
+      "name": "My Anthropic-compatible relay",
+      "api": "anthropic-messages",
+      "baseUrl": "https://relay.example.com",
+      "apiKeyEnv": "MY_RELAY_API_KEY",
+      "models": [
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6 via relay",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 200000,
+          "maxTokens": 64000
+        }
+      ]
+    }
+  }
+}

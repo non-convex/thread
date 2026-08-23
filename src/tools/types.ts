@@ -1,0 +1,42 @@
+import type { TSchema } from "@earendil-works/pi-ai";
+
+export interface ToolResult {
+  content: string;
+  isError: boolean;
+  details?: unknown;
+}
+
+export interface ToolContext {
+  rootPath: string;
+  signal: AbortSignal;
+}
+
+export interface AgentTool<TArgs = Record<string, unknown>> {
+  name: string;
+  description: string;
+  parameters: TSchema;
+  replay: "safe" | "never";
+  execute(args: TArgs, context: ToolContext): Promise<ToolResult>;
+}
+
+export class ToolRegistry {
+  private readonly tools = new Map<string, AgentTool>();
+
+  register(tool: AgentTool): () => void {
+    if (this.tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`);
+    this.tools.set(tool.name, tool);
+    return () => this.tools.delete(tool.name);
+  }
+
+  get(name: string): AgentTool | undefined {
+    return this.tools.get(name);
+  }
+
+  list(): AgentTool[] {
+    return [...this.tools.values()];
+  }
+
+  modelDefinitions() {
+    return this.list().map(({ name, description, parameters }) => ({ name, description, parameters }));
+  }
+}
