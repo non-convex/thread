@@ -1,3 +1,8 @@
+/*
+ * Context-estimation logic in this file is derived from earendil-works/pi.
+ * Copyright (c) 2025 Mario Zechner. Licensed under the MIT License.
+ * See the external-project attribution in README.md.
+ */
 import type { AssistantMessage, Context, ImageContent, Message, TextContent, Tool, Usage } from "@earendil-works/pi-ai";
 
 export interface ContextUsageEstimate {

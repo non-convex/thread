@@ -1,5 +1,7 @@
 # thread
 
+English | [简体中文](README.zh-CN.md)
+
 `thread` is a mini coding-agent harness in which a Project Session lasts for the life of a project. A thread version is the combination of a workspace snapshot and a conversation-context head. Thread branches, restore, diff and merge operate on those two dimensions together.
 
 It deliberately does not reproduce all of Git. There is no staging area, rebase, stash or per-tool revision, and there is no separate external-memory store. Durable project knowledge is carried by the versioned conversation context and its compaction state.
@@ -226,3 +228,26 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 ## Verification policy
 
 This project intentionally avoids a broad test matrix. The retained checks cover only sidecar self-containment/restore, interrupted non-replayable tools, clean/conflicting merge safety and one end-to-end Project Session version loop.
+
+## External projects and attribution
+
+`thread` uses or was informed by the following external open-source projects:
+
+- [earendil-works/pi](https://github.com/earendil-works/pi): the published [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi/tree/main/packages/ai) and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui) packages provide model/provider APIs and terminal UI primitives. `src/utils/estimate.ts` derives its context-estimation logic from pi and retains the upstream MIT attribution below.
+- [OpenCode](https://github.com/anomalyco/opencode): its [`websearch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts) and [`webfetch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/webfetch.ts) tools informed the provider contract and user-facing behavior of thread's web tools. Thread's implementation is adapted to its own tool/runtime boundaries.
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): its [`tool-web`](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/web/tool-web) package was reviewed when comparing web-search, fetch and SSRF trade-offs.
+- [htmlparser2](https://github.com/fb55/htmlparser2) and [Turndown](https://github.com/mixmark-io/turndown): direct runtime dependencies used for HTML parsing and HTML-to-Markdown conversion in `webfetch`.
+
+The direct dependencies above are distributed under the MIT License. The following notice is retained for the context-estimation code derived from pi:
+
+```text
+MIT License
+Copyright (c) 2025 Mario Zechner
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## License
+
+`thread` is released under the [MIT License](LICENSE). Third-party portions remain subject to their respective notices above.

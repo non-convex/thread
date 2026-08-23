@@ -29,6 +29,7 @@ workspace snapshot + conversation context head
 - 从启动目录发现并关联 Git workspace。
 - 全局 thread 模型配置；未配置 thread 时可回退读取本机 pi 模型配置。
 - `/model` 在 TUI 中打开二级模型选择列表，支持 ↑/↓ 或 j/k 循环选择、Enter 切换、Esc 取消及长目录窗口化显示；plain/direct 模式仍可查看当前模型、列出全部或指定 provider 的模型，并用显式参数切换。切换会保留现有 workspace/context，同时统一更新主 agent loop、compaction、Capsule、semantic diff/merge 和 TUI 状态。
+- GitHub 仓库公开发布并采用 MIT License；英文/简体中文 README 在顶部双向跳转，并在 README 内集中记录 pi、OpenCode、DeepSeek Harness、htmlparser2、Turndown 的依赖/参考关系和 pi 派生代码的 MIT 归属声明。
 
 ### Session 与持久化
 
@@ -111,6 +112,7 @@ workspace snapshot + conversation context head
 
 ## 最近完成
 
+- 将仓库改为公开 MIT 项目，补充完整简体中文 README、双向语言入口和带超链接的外部项目/第三方许可说明；不额外拆分 attribution 文档。
 - 增加 `/model` 运行时模型切换和 TUI 二级模型 picker：从斜杠补全回车后直接进入可上下选择的模型列表；切换时原子替换对话、压缩及版本语义服务所用模型，并动态刷新 TUI 模型标签和上下文占比。
 - 参考 OpenCode 增加 `websearch` / `webfetch`：复用 Exa/Parallel MCP 搜索协议，实现可取消、限时、限长的 HTTP 抓取、HTML→Markdown/纯文本转换，并将网络请求标记为不可自动重放。
 - 将 Thread Version 命令空间统一为 `/thread`，同步路由边界、帮助与 usage、TUI 补全和状态提示、扩展命令、测试、文档及概念图。
@@ -134,6 +136,7 @@ workspace snapshot + conversation context head
 - 无密钥真实网络 smoke 通过：Exa MCP `web_search_exa` 能返回 Node.js 官方站点结果，`webfetch` 能获取并提取 `https://example.com` 的文本。
 - `thread` 更名通过全仓旧名称零匹配扫描；`thread --help` 文案和 `ThreadApp` / `ThreadTerminalApp` / `THREAD_VERSION` 等构建产物公开导出已验证。
 - `/thread` 命令空间通过旧命令字符串零匹配扫描和构建产物路由检查；`/thread` 可列出并执行命令，旧前缀不再被命令路由器接收。
+- MIT `LICENSE` 与 npm package metadata 一致；英文/中文 README 均为 13 个对应正文 section，双向入口和全部相对链接可解析，pi/OpenCode/DeepSeek Harness 的外部源码链接已按实际分支核验。
 - 按项目约定只做与变更风险相称的必要检查，不进行大范围或重复测试。
 
 ## 建议的下一步
