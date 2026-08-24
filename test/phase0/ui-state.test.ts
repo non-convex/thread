@@ -45,3 +45,32 @@ test("the UI event batcher keeps thinking and reply streams separate", () => {
     batcher.dispose();
   }
 });
+
+test("live blocks and tools carry timing for collapsed thinking lines and elapsed tool rows", () => {
+  const state = createUiState("main", "checkpoint", []);
+  reduceUiEvent(state, { type: "turn_started", turnId: "turn-1", input: "inspect", branch: "main" });
+  reduceUiEvent(state, { type: "assistant_thinking_delta", step: 1, delta: "look at README" });
+  reduceUiEvent(state, { type: "tool_started", id: "call-1", name: "read", args: { path: "README.md" } });
+
+  const thinking = state.liveTurn?.blocks[0];
+  assert.equal(thinking?.streaming, false, "starting a tool closes the thinking stream");
+  assert.equal(typeof thinking?.startedAt, "number");
+  assert.equal(typeof thinking?.finishedAt, "number");
+  assert.ok(thinking!.finishedAt! >= thinking!.startedAt!);
+
+  const tool = state.liveTurn?.blocks[1]?.tool;
+  assert.equal(typeof tool?.startedAt, "number");
+  assert.equal(tool?.finishedAt, undefined, "running tools have no finish time yet");
+
+  reduceUiEvent(state, {
+    type: "tool_finished",
+    id: "call-1",
+    name: "read",
+    result: { content: "ok", isError: false },
+    isError: false,
+  });
+  const finished = state.liveTurn?.blocks[1]?.tool;
+  assert.equal(finished?.status, "completed");
+  assert.ok(finished!.finishedAt! >= finished!.startedAt!);
+});
+

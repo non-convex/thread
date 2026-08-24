@@ -18,7 +18,7 @@ import {
   MergeScreen,
   ModelPicker,
 } from "./screens.js";
-import { estimatedWrappedLines, SessionScreen } from "./session-screen.js";
+import { estimatedWrappedLines, COMPOSER_MAX_LINES, COMPOSER_MIN_LINES, SessionScreen } from "./session-screen.js";
 import { createThreadSyntaxStyle, terminalTheme } from "./theme.js";
 
 export function ThreadRoot(props: {
@@ -51,8 +51,8 @@ export function ThreadRoot(props: {
     forcePaths: forcePathCompletion(),
   }));
   const composerHeight = createMemo(() => Math.max(
-    2,
-    Math.min(6, estimatedWrappedLines(composerText(), Math.max(12, dimensions().width - 4))),
+    COMPOSER_MIN_LINES,
+    Math.min(COMPOSER_MAX_LINES, estimatedWrappedLines(composerText(), Math.max(12, dimensions().width - 8))),
   ));
   const unsubscribe = props.controller.subscribe(() => setRevision((value) => value + 1));
   onCleanup(unsubscribe);
@@ -156,7 +156,7 @@ export function ThreadRoot(props: {
       }
       if (key.name === "pageup" || key.name === "pagedown") {
         key.preventDefault();
-        sessionScroll?.scrollBy(key.name === "pageup" ? -10 : 10);
+        sessionScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
       }
       return;
     }
@@ -165,8 +165,11 @@ export function ThreadRoot(props: {
     const mergePageScroll = screen().type === "merge" && (key.name === "pageup" || key.name === "pagedown");
     if ((scrollableScreen && scrollKey) || mergePageScroll) {
       key.preventDefault();
-      const amount = key.name === "pageup" ? -10 : key.name === "pagedown" ? 10 : key.name === "up" ? -1 : 1;
-      screenScroll?.scrollBy(amount);
+      if (key.name === "pageup" || key.name === "pagedown") {
+        screenScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
+      } else {
+        screenScroll?.scrollBy(key.name === "up" ? -3 : 3);
+      }
       return;
     }
     if (props.controller.handleScreenKey(key)) key.preventDefault();

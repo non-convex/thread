@@ -74,6 +74,8 @@ function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, T
       id: entry.id,
       kind: "tool",
       label: target ? `${name}  ${target}` : name,
+      name,
+      args: target,
       content: toolResultSummary(name, args, text),
       isError: message.isError,
     }];

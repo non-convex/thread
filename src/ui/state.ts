@@ -11,6 +11,9 @@ export interface TranscriptItem {
   content: string;
   label?: string;
   isError?: boolean;
+  /** Tool items only: bare tool name and a one-line argument summary. */
+  name?: string;
+  args?: string;
 }
 
 export interface LiveTool {
@@ -19,6 +22,8 @@ export interface LiveTool {
   args: Record<string, unknown>;
   status: "running" | "completed" | "failed";
   result?: ToolResult;
+  startedAt: number;
+  finishedAt?: number;
 }
 
 export interface LiveBlock {
@@ -27,6 +32,8 @@ export interface LiveBlock {
   content: string;
   streaming?: boolean;
   tool?: LiveTool;
+  startedAt?: number;
+  finishedAt?: number;
 }
 
 export interface LiveTurn {
@@ -141,7 +148,7 @@ function endStreaming(live: LiveTurn): LiveTurn {
   if (!last?.streaming) return live;
   return {
     ...live,
-    blocks: [...live.blocks.slice(0, -1), { ...last, streaming: false }],
+    blocks: [...live.blocks.slice(0, -1), { ...last, streaming: false, finishedAt: Date.now() }],
   };
 }
 
@@ -164,6 +171,7 @@ function appendLiveText(live: LiveTurn, kind: "thinking" | "assistant", delta: s
         kind,
         content: delta,
         streaming: true,
+        startedAt: Date.now(),
       },
     ],
   };
@@ -232,6 +240,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
               name: event.name,
               args: event.args,
               status: "running",
+              startedAt: Date.now(),
             },
           },
         ],
@@ -251,6 +260,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
                 ...block.tool,
                 status: event.isError ? "failed" : "completed",
                 result: event.result,
+                finishedAt: Date.now(),
               },
             };
           }),

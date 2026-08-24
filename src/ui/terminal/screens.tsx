@@ -6,6 +6,7 @@ import type { ThreadDiffFacts } from "../../revisions/diff-service.js";
 import type { UiScreen, UiState } from "../state.js";
 import { short, type TerminalMeta } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
+import { wheelScrollAcceleration } from "./scroll.js";
 import { normalizeMarkdownForTerminal } from "./transcript.js";
 import { bold } from "./theme.js";
 import { useTerminalDimensions } from "@opentui/solid";
@@ -168,7 +169,14 @@ export function DiffScreen(props: {
         right={["summary", "context", "workspace"].map((tab) => tab === props.screen().tab ? `[${tab}]` : tab).join("  ")}
         resources={props.resources}
       />
-      <scrollbox ref={props.setScroll} flexGrow={1} viewportCulling={true} verticalScrollbarOptions={{ visible: false }} paddingX={2}>
+      <scrollbox
+        ref={props.setScroll}
+        flexGrow={1}
+        viewportCulling={true}
+        scrollAcceleration={wheelScrollAcceleration}
+        verticalScrollbarOptions={{ visible: false }}
+        paddingX={2}
+      >
         <Switch>
           <Match when={props.screen().tab === "summary"}>
             <SectionTitle resources={props.resources}>What changed</SectionTitle>
@@ -205,7 +213,14 @@ export function MergeScreen(props: {
   return (
     <>
       <ScreenHeader left="THREAD MERGE" center={`${screen().preview.incomingLabel} → ${screen().preview.currentBranch}`} right="preview · nothing applied yet" resources={props.resources} />
-      <scrollbox ref={props.setScroll} flexGrow={1} viewportCulling={true} verticalScrollbarOptions={{ visible: false }} paddingX={2}>
+      <scrollbox
+        ref={props.setScroll}
+        flexGrow={1}
+        viewportCulling={true}
+        scrollAcceleration={wheelScrollAcceleration}
+        verticalScrollbarOptions={{ visible: false }}
+        paddingX={2}
+      >
         <SectionTitle resources={props.resources}>1  Workspace merge</SectionTitle>
         <text fg={screen().preview.clean ? props.resources.theme.success : props.resources.theme.error} attributes={bold}>
           {screen().preview.clean
@@ -311,6 +326,7 @@ export function DocumentScreen(props: {
         ref={props.setScroll}
         flexGrow={1}
         viewportCulling={true}
+        scrollAcceleration={wheelScrollAcceleration}
         verticalScrollbarOptions={{ visible: false }}
         paddingX={2}
         paddingY={1}
