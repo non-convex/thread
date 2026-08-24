@@ -319,27 +319,28 @@ export function SessionScreen(props: {
           />
         </box>
       </Show>
-      <Show when={modelPicker()}>
-        {(picker: Accessor<ModelPickerScreen>) => (
-          <box
-            position="absolute"
-            right={1}
-            bottom={controlsHeight()}
-            left={1}
-            height={modelOverlayHeight()}
-            zIndex={20}
-            border={true}
-            borderStyle="rounded"
-            borderColor={theme.borderStrong}
-            backgroundColor={theme.surface}
-          >
-            <ModelPickerOverlay
-              screen={picker}
-              resources={props.resources}
-              contentWidth={overlayContentWidth}
-            />
-          </box>
-        )}
+      {/* Do NOT use Show's callback form here: the controller mutates the
+          picker screen in place, so the object reference never changes and a
+          Show-scoped accessor would freeze the selection highlight. */}
+      <Show when={modelPicker() !== undefined}>
+        <box
+          position="absolute"
+          right={1}
+          bottom={controlsHeight()}
+          left={1}
+          height={modelOverlayHeight()}
+          zIndex={20}
+          border={true}
+          borderStyle="rounded"
+          borderColor={theme.borderStrong}
+          backgroundColor={theme.surface}
+        >
+          <ModelPickerOverlay
+            screen={() => modelPicker() as ModelPickerScreen}
+            resources={props.resources}
+            contentWidth={overlayContentWidth}
+          />
+        </box>
       </Show>
       <box
         position="absolute"
@@ -361,7 +362,7 @@ export function SessionScreen(props: {
           borderColor={state().busy ? theme.accent : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
-          <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
+          <box flexDirection="row" width="100%" paddingLeft={1}>
             <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
             <textarea
               ref={props.setComposer}
@@ -370,7 +371,7 @@ export function SessionScreen(props: {
               minHeight={COMPOSER_MIN_LINES}
               maxHeight={COMPOSER_MAX_LINES}
               wrapMode="word"
-              placeholder="ask thread, or / for commands…"
+              placeholder="ask thread, / for commands, @ to add files…"
               placeholderColor={theme.muted}
               textColor={theme.text}
               focusedTextColor={theme.text}
@@ -402,9 +403,6 @@ export function SessionScreen(props: {
                 void props.controller.submit(input);
               }}
             />
-            {/* Sole hint, riding on the textarea's first line instead of
-                taking its own row. */}
-            <text height={1} wrapMode="none" fg={theme.faint}> @ add files</text>
           </box>
         </box>
         <box flexShrink={0} width="100%">

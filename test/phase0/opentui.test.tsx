@@ -229,7 +229,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     assert.match(frame, /◇ thinking/, "committed thinking folds into a single line");
     assert.match(frame, /✓ bash {2}bun test/, "committed tools render as compact rows");
     assert.match(frame, /███░░░ ctx 42%/, "footer carries the context meter");
-    assert.match(frame, /❯ ask thread.*@ add files/, "the @ hint rides on the composer line");
+    assert.match(frame, /❯ ask thread, \/ for commands, @ to add files/, "composer placeholder carries the merged hints");
     assert.doesNotMatch(frame, /⏎ send/, "send/newline hints stay out of the composer");
     assert.match(frame, /⇧⇥ switch thinking level/, "footer explains the thinking-level shortcut");
     assert.match(frame, /esc interrupt/, "busy status keeps the escape hint");
