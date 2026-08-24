@@ -24,7 +24,7 @@ bun link
 
 ## 终端界面
 
-交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。`/model`、`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考折叠为单行，工具行会带上参数摘要与耗时。`/model` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
 
 进程启动、context restore 及后续 turn 完成时，可见 transcript 都限制为最近 8 次完整的用户主导交互。窗口内的 thinking 与紧凑工具轨迹会保留，并维持到达顺序。该限制只影响应用内 transcript；持久化 session、模型上下文和工具记录都不会删减。
 
@@ -35,7 +35,7 @@ thread --tui fullscreen   # 默认：全屏 OpenTUI
 thread --tui plain        # readline/文本输出
 ```
 
-`--tui hybrid` 与 `--tui regular` 仍作为 `fullscreen` 的兼容别名接受。非 TTY 输入或输出会自动选择 plain 模式。在二级 screen 中，使用方向键或 Page Up/Page Down 滚动，按 `Esc` 返回。`Ctrl+C` 会中断正在执行的工作；空闲时连续按两次可退出。使用推理模型时，`Shift+Tab` 会循环切换该模型支持的推理档位。OpenTUI 编辑器支持多行输入（`Shift+Enter`）、bracketed paste、项目路径补全和终端感知的光标定位。
+`--tui hybrid` 与 `--tui regular` 仍作为 `fullscreen` 的兼容别名接受。非 TTY 输入或输出会自动选择 plain 模式。在浮层和整屏 screen 中，使用方向键或 Page Up/Page Down 滚动与移动，按 `Esc` 返回。`Ctrl+C` 会中断正在执行的工作；空闲时连续按两次可退出。使用推理模型时，`Shift+Tab` 会循环切换该模型支持的推理档位。OpenTUI 编辑器支持多行输入（`Shift+Enter`）、bracketed paste、项目路径补全和终端感知的光标定位。
 
 ## 运行
 
@@ -130,7 +130,7 @@ thread
 /model <provider> <model>
 ```
 
-在全屏 TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会打开第二级列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓（或 `j`/`k`）移动，按 Enter 切换，按 Esc 返回 session screen。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
+在全屏 TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会在输入框上方打开浮层列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓ 移动，按 Enter 切换，按 Esc 关闭浮层。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
 
 使用推理模型时，在 session 主界面按 `Shift+Tab` 可以循环切换该模型声明支持的档位，当前档位会显示在 footer 的模型名旁边。这个档位会统一用于主 agent loop、自动与手动 compaction、Context Capsule、semantic diff 和 context merge。切换模型后，当前偏好会自动校准到新模型支持的范围。thread 回退使用 pi 配置时会继承 pi 的 `defaultThinkingLevel`；其他情况下缺省为 `medium`。
 
@@ -164,7 +164,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 /thread diff <from> <to> [--facts]
 /thread restore <ref> [--workspace|--context|--both]
 /thread merge <ref> [--context=keep-current|summarize]
-/rewind <turn-id-or-user-entry-id>
+/rewind [<turn-id-or-user-entry-id>]
 ```
 
 `/clear` 不改变任何持久状态：它隐藏当前 context head 之前的消息，之后的消息仍会使用完整后端上下文。重启终端或切换到其他 context 后，这些消息可能再次显示。
@@ -174,6 +174,8 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
 `diff --facts` 是确定性的，不调用模型。普通 diff 会额外调用隔离的模型生成语义解释，并在调用失败时回退为 facts。Semantic diff 输出是临时内容，不会进入主 transcript。
+
+在 TUI 中直接输入 `/rewind` 会打开浮层，按时间列出最近的用户消息；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选消息之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 以整屏形式展示同一批 turn，两者走同一条恢复路径。
 
 Workspace merge 是三方合并，v1 只会应用 clean 结果。在 TUI 中，`/thread merge <ref>` 会打开 preview，让用户选择 context 策略，并在应用前要求确认。`keep-current` 保留当前 context，不调用模型；`summarize` 先展示模型生成的只读 handoff note，确认后才写入 context。Plain/非交互模式可以通过显式 `--context=keep-current|summarize` 直接执行。
 
@@ -234,7 +236,7 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、滚轮加速度、turn 分组、重设计视觉语言的实际渲染、`/model` 与 `/rewind` 浮层的 view 侧导航、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { createUiState, type UiState } from "../../src/ui/state.js";
+import { createUiState, type TranscriptItem, type UiState } from "../../src/ui/state.js";
 import type { TerminalKey, TerminalMeta, ThreadTuiViewModel } from "../../src/ui/terminal/controller.js";
 import type { ThreadViewResources } from "../../src/ui/terminal/resources.js";
 import { createThreadSyntaxStyle, terminalTheme } from "../../src/ui/terminal/theme.js";
 import { createWheelScrollAcceleration, WHEEL_SCROLL_BASE } from "../../src/ui/terminal/scroll.js";
-import { groupTranscriptTurns, normalizeMarkdownForTerminal } from "../../src/ui/terminal/transcript.js";
+import { groupTranscriptTurns, normalizeMarkdownForTerminal, reconcileTurnGroups } from "../../src/ui/terminal/transcript.js";
 import { contextMeter } from "../../src/ui/terminal/session-screen.js";
 import { ThreadRoot } from "../../src/ui/terminal/view.js";
 
@@ -82,6 +82,36 @@ test("transcript items group into turns anchored by user messages", () => {
   );
 });
 
+test("unchanged turns keep their group identity when a new message arrives", () => {
+  const first: TranscriptItem[] = [
+    { id: "user-1", kind: "user", content: "first" },
+    { id: "reply-1", kind: "assistant", content: "done" },
+  ];
+  const groups = groupTranscriptTurns(first);
+  const settled = reconcileTurnGroups(groups, []);
+
+  // A later sync rebuilds every item from the session log.
+  const rebuilt = groupTranscriptTurns([
+    { id: "user-1", kind: "user", content: "first" },
+    { id: "reply-1", kind: "assistant", content: "done" },
+    { id: "user-2", kind: "user", content: "second" },
+  ]);
+  const reconciled = reconcileTurnGroups(rebuilt, settled);
+  assert.equal(reconciled[0], settled[0], "the untouched turn must keep its object identity");
+  assert.equal(reconciled.length, 2);
+  assert.equal(reconciled[1]!.id, "user-2");
+
+  // A turn whose content actually grew must be replaced.
+  const grown = reconcileTurnGroups(
+    groupTranscriptTurns([
+      { id: "user-1", kind: "user", content: "first" },
+      { id: "reply-1", kind: "assistant", content: "done, with more" },
+    ]),
+    settled,
+  );
+  assert.notEqual(grown[0], settled[0], "changed turns must produce a fresh group");
+});
+
 test("the context meter fills in six cells", () => {
   assert.equal(contextMeter(0), "░░░░░░");
   assert.equal(contextMeter(42), "███░░░");
@@ -142,6 +172,30 @@ test("the full-screen session updates in place while a streamed reply grows", as
     const updated = setup.renderer.root.findDescendantById("live-markdown-assistant:2");
     assert.equal(updated, first, "token deltas must update the existing Markdown renderable in place");
     assert.match(setup.captureCharFrame(), /First streamed reply update\./);
+
+    /* The reported jitter: sending a new message re-projected the whole
+     * transcript, and <For> rebuilt every committed reply. The settled reply
+     * must keep its renderable while a later turn streams above it. */
+    const settled = setup.renderer.root.findDescendantById("history-markdown-assistant-1");
+    assert.ok(settled, "committed replies need a stable id to be reconciled");
+    state.transcript = [
+      { id: "assistant-1", kind: "assistant", content: "A **completed** response." },
+      { id: "user-2", kind: "user", content: "a second question" },
+    ];
+    state.liveTurn = {
+      ...state.liveTurn,
+      blocks: [
+        state.liveTurn.blocks[0]!,
+        { ...state.liveTurn.blocks[1]!, content: "First streamed reply update. More." },
+      ],
+    };
+    viewModel.notify();
+    await setup.flush();
+    assert.equal(
+      setup.renderer.root.findDescendantById("history-markdown-assistant-1"),
+      settled,
+      "a new user message must not rebuild already-rendered replies",
+    );
   } finally {
     setup.renderer.destroy();
     viewResources.syntaxStyle.destroy();

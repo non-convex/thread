@@ -24,7 +24,7 @@ Tagged releases also produce standalone Windows, Linux and macOS archives for x6
 
 ## Terminal interface
 
-An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. `/model`, `/thread diff`, `/thread merge`, `/thread history` and long command results open in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
+An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. One agent turn — thinking, tool calls and reply — is tied together by an accent rail, completed thinking collapses to a single line, and tool rows carry their arguments and elapsed time. `/model` and a bare `/rewind` open compact panels floating above the composer, so the conversation and input stay visible. `/thread diff`, `/thread merge`, `/thread history` and long command results open full in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
 
 On process startup, context restoration and subsequent turns, the visible transcript is bounded to the eight most recent complete user-led interactions. Thinking and compact tool traces inside that window remain visible and preserve arrival order. This bound affects only the in-app transcript; the durable session, model context and tool records remain intact.
 
@@ -35,7 +35,7 @@ thread --tui fullscreen   # default: full-screen OpenTUI
 thread --tui plain        # readline/text output
 ```
 
-`--tui hybrid` and `--tui regular` remain accepted as compatibility aliases for `fullscreen`. Non-TTY input or output automatically selects plain mode. In secondary screens, use arrow/Page Up/Page Down keys to scroll and `Esc` to return. `Ctrl+C` interrupts active work; press it twice while idle to exit. For reasoning models, `Shift+Tab` cycles the model's supported thinking levels. The OpenTUI editor supports multiline input (`Shift+Enter`), bracketed paste, project-path completion and terminal-aware cursor positioning.
+`--tui hybrid` and `--tui regular` remain accepted as compatibility aliases for `fullscreen`. Non-TTY input or output automatically selects plain mode. In floating panels and full screens, use arrow/Page Up/Page Down keys to scroll or move and `Esc` to return. `Ctrl+C` interrupts active work; press it twice while idle to exit. For reasoning models, `Shift+Tab` cycles the model's supported thinking levels. The OpenTUI editor supports multiline input (`Shift+Enter`), bracketed paste, project-path completion and terminal-aware cursor positioning.
 
 ## Run
 
@@ -130,7 +130,7 @@ The active model can be inspected or changed without restarting `thread`:
 /model <provider> <model>
 ```
 
-In the full-screen TUI, selecting `model` from slash-command completion and pressing Enter opens a list containing models explicitly declared in the active thread/pi configuration. The current model is always included and marked with `●`, even when it came from the built-in catalog or a direct switch. Use ↑/↓ (or `j`/`k`) to move, Enter to switch, and Esc to return to the session screen. `/model all` opens the complete built-in and configured catalog; long catalogs stay centered around the selected row.
+In the full-screen TUI, selecting `model` from slash-command completion and pressing Enter opens a panel above the composer containing models explicitly declared in the active thread/pi configuration. The current model is always included and marked with `●`, even when it came from the built-in catalog or a direct switch. Use ↑/↓ to move, Enter to switch, and Esc to dismiss the panel. `/model all` opens the complete built-in and configured catalog; long catalogs stay centered around the selected row.
 
 For a reasoning model, press `Shift+Tab` on the session screen to cycle through the levels that model declares as supported. The active level appears beside the model in the footer. It is applied consistently to the main agent loop, automatic and manual compaction, Context Capsules, semantic diffs, and context merges. Switching models clamps the current preference to the new model's capabilities. When thread falls back to pi configuration, it inherits pi's `defaultThinkingLevel`; otherwise the default is `medium`.
 
@@ -164,7 +164,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 /thread diff <from> <to> [--facts]
 /thread restore <ref> [--workspace|--context|--both]
 /thread merge <ref> [--context=keep-current|summarize]
-/rewind <turn-id-or-user-entry-id>
+/rewind [<turn-id-or-user-entry-id>]
 ```
 
 `/clear` changes no durable state: it hides messages through the current context head, while later messages continue to use the complete backend context. Restarting the terminal or navigating to another context may show those messages again.
@@ -174,6 +174,8 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 `HEAD`, thread branch names, full IDs and unambiguous commit/checkpoint ID prefixes are valid refs. Thread branches are independent of the main repository's Git branches: switching a thread branch never moves the main Git HEAD, index, refs or reflog.
 
 `diff --facts` is deterministic and does not call a model. Normal `diff` adds a separately invoked semantic explanation and falls back to facts if that call fails. Semantic diff output is ephemeral and does not enter the main transcript.
+
+A bare `/rewind` in the TUI opens a panel listing recent user messages with their times; arrow keys move the highlight and Enter must be pressed twice, because the second press discards everything after the selected message. Passing an explicit ID rewinds directly. `/thread history` shows the same turns as a full screen, and both restore through the same path.
 
 Workspace merge is three-way and v1 only applies clean results. In the TUI, `/thread merge <ref>` opens a preview, lets the user choose a context strategy, and requires confirmation before applying. `keep-current` retains the current context without a model call. `summarize` first shows a model-generated, read-only handoff note and only writes it to context after confirmation. Plain/non-interactive use can execute directly with an explicit `--context=keep-current|summarize` flag.
 
@@ -234,7 +236,7 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-`bun run check`, `bun test` and `bun run build` are the local verification entry points. The intentionally compact suite covers the Project Session version loop, sidecar and replay safety, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen session updates, stable streaming Markdown identity, controller screen routing and composer submission. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun test` and `bun run build` are the local verification entry points. The intentionally compact suite covers the Project Session version loop, sidecar and replay safety, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen session updates, stable streaming Markdown identity, wheel scroll acceleration, turn grouping, the redesign's rendered language, view-side navigation of the `/model` and `/rewind` panels, controller screen routing and composer submission. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

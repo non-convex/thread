@@ -84,15 +84,58 @@ export function groupTranscriptTurns(items: readonly TranscriptItem[]): Transcri
   return groups;
 }
 
+/* ── Group identity ───────────────────────────────────────────────────────
+ * `projectTranscript` rebuilds every TranscriptItem from the session log on
+ * each sync, and grouping then allocates fresh group objects. Solid's <For>
+ * keys rows by reference, so handing it new objects tears down and rebuilds
+ * every committed turn — including their markdown renderables — whenever the
+ * controller notifies. During a turn that happens per flushed delta batch, so
+ * earlier replies visibly re-wrap and the sticky-bottom scrollbox re-anchors.
+ * Reuse the previous object for any group whose values did not change so <For>
+ * leaves those rows mounted.
+ */
+
+function sameTranscriptItem(left: TranscriptItem, right: TranscriptItem): boolean {
+  return left.id === right.id
+    && left.kind === right.kind
+    && left.content === right.content
+    && left.isError === right.isError
+    && left.name === right.name
+    && left.args === right.args
+    && left.label === right.label;
+}
+
+function sameTurnGroup(left: TranscriptTurnGroup, right: TranscriptTurnGroup): boolean {
+  if (left.id !== right.id) return false;
+  if ((left.user === undefined) !== (right.user === undefined)) return false;
+  if (left.user && right.user && !sameTranscriptItem(left.user, right.user)) return false;
+  if (left.items.length !== right.items.length) return false;
+  return left.items.every((item, index) => sameTranscriptItem(item, right.items[index]!));
+}
+
+export function reconcileTurnGroups(
+  next: readonly TranscriptTurnGroup[],
+  previous: readonly TranscriptTurnGroup[],
+): TranscriptTurnGroup[] {
+  if (previous.length === 0) return [...next];
+  const byId = new Map(previous.map((group) => [group.id, group] as const));
+  return next.map((group) => {
+    const earlier = byId.get(group.id);
+    return earlier && sameTurnGroup(group, earlier) ? earlier : group;
+  });
+}
+
 /* ── Shared bits ────────────────────────────────────────────────────────── */
 
 function MarkdownReply(props: {
+  id?: string;
   content: string;
   resources: ThreadViewResources;
 }) {
   return (
     // OpenTUI 0.5.7 only paints markdown content in streaming mode.
     <markdown
+      {...(props.id ? { id: props.id } : {})}
       content={normalizeMarkdownForTerminal(props.content)}
       width="100%"
       syntaxStyle={props.resources.syntaxStyle}
@@ -201,7 +244,7 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
                   {systemLabel()}
                 </text>
               </Show>
-              <MarkdownReply content={item().content} resources={props.resources} />
+              <MarkdownReply id={`history-markdown-${item().id}`} content={item().content} resources={props.resources} />
             </box>
           }
         >
@@ -352,7 +395,13 @@ function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources:
 }
 
 export function TranscriptTurnsView(props: { items: readonly TranscriptItem[]; resources: ThreadViewResources }) {
-  const groups = createMemo(() => groupTranscriptTurns(props.items));
+  // Carry the previous grouping forward so unchanged turns keep their object
+  // identity and <For> keeps their rows (and markdown renderables) mounted.
+  let previous: TranscriptTurnGroup[] = [];
+  const groups = createMemo(() => {
+    previous = reconcileTurnGroups(groupTranscriptTurns(props.items), previous);
+    return previous;
+  });
   return (
     <For each={groups()}>
       {(group) => <TranscriptTurnGroupView group={group} resources={props.resources} />}
