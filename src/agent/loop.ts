@@ -22,7 +22,6 @@ const DEFAULT_SYSTEM_PROMPT = `You are thread, a coding agent working in a long-
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
-  maxSteps?: number;
   maxOutputTokens?: number;
   reasoning?: ThinkingLevel;
 }
@@ -50,7 +49,6 @@ export interface ManualCompactionResult {
 
 export class AgentLoop {
   private readonly systemPrompt: string;
-  private readonly maxSteps: number;
   private readonly maxOutputTokens: number;
   private readonly reasoning: ThinkingLevel | undefined;
   private readonly compactor: ContextCompactor;
@@ -65,7 +63,6 @@ export class AgentLoop {
     options: AgentLoopOptions = {},
   ) {
     this.systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
-    this.maxSteps = options.maxSteps ?? 24;
     this.maxOutputTokens =
       options.maxOutputTokens ??
       Math.min(model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(model.contextWindow * 0.2)));
@@ -211,10 +208,9 @@ export class AgentLoop {
     const assistantMessages: AssistantMessage[] = [];
     let outcome: TurnResult["outcome"] = "completed";
     let failure: Error | undefined;
-    let completed = false;
     try {
       await this.extensions.emit("turn_start", { turnId, branch: branchName, input });
-      for (let step = 0; step < this.maxSteps; step++) {
+      for (let step = 0; ; step++) {
         runSignal.throwIfAborted();
         const compactionObserver = {
           started: (reason: "manual" | "threshold" | "overflow") =>
@@ -289,7 +285,6 @@ export class AgentLoop {
         if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
         const calls = response.content.filter((content): content is ToolCall => content.type === "toolCall");
         if (calls.length === 0 || response.stopReason !== "toolUse") {
-          completed = true;
           break;
         }
         for (let toolIndex = 0; toolIndex < calls.length; toolIndex++) {
@@ -304,7 +299,6 @@ export class AgentLoop {
           );
         }
       }
-      if (!completed) throw new Error(`Agent exceeded maximum step count (${this.maxSteps})`);
     } catch (error) {
       failure = preparationFailure ?? (error instanceof Error ? error : new Error(String(error)));
       outcome = options.signal.aborted || failure.name === "AbortError" ? "aborted" : "failed";
