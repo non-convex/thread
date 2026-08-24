@@ -250,8 +250,8 @@ export function SessionScreen(props: {
 }) {
   const state = props.state;
   const theme = props.resources.theme;
-  // status line + composer (border + textarea + hint row) + footer
-  const controlsHeight = () => props.composerHeight() + 5;
+  // status line + composer (border + textarea row) + footer
+  const controlsHeight = () => props.composerHeight() + 4;
   const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
@@ -361,7 +361,7 @@ export function SessionScreen(props: {
           borderColor={state().busy ? theme.accent : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
-          <box flexDirection="row" width="100%" paddingLeft={1}>
+          <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
             <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
             <textarea
               ref={props.setComposer}
@@ -402,9 +402,9 @@ export function SessionScreen(props: {
                 void props.controller.submit(input);
               }}
             />
-          </box>
-          <box flexDirection="row" width="100%" height={1} paddingX={1}>
-            <text height={1} wrapMode="none" fg={theme.faint}>@ paths</text>
+            {/* Sole hint, riding on the textarea's first line instead of
+                taking its own row. */}
+            <text height={1} wrapMode="none" fg={theme.faint}> @ add files</text>
           </box>
         </box>
         <box flexShrink={0} width="100%">
