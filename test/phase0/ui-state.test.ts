@@ -28,6 +28,28 @@ test("live turns keep thinking, tools and replies in arrival order", () => {
   assert.equal(state.liveTurn?.blocks[2]?.streaming, true);
 });
 
+test("model retry events surface progress and discard the partial reply", () => {
+  const state = createUiState("main", "checkpoint", []);
+  reduceUiEvent(state, { type: "turn_started", turnId: "turn-1", input: "inspect", branch: "main" });
+  reduceUiEvent(state, { type: "assistant_started", step: 1 });
+  reduceUiEvent(state, { type: "assistant_text_delta", step: 1, delta: "partial reply" });
+  assert.ok(state.liveTurn?.blocks.some((block) => block.kind === "assistant" && block.streaming));
+
+  reduceUiEvent(state, {
+    type: "model_retry_scheduled",
+    step: 1,
+    attempt: 1,
+    maxAttempts: 6,
+    delayMs: 1_000,
+    errorMessage: "overloaded",
+  });
+  assert.equal(state.activity, "retrying model · attempt 1/6 in 1.0s");
+
+  reduceUiEvent(state, { type: "model_retry_started", step: 1, attempt: 1, maxAttempts: 6 });
+  assert.equal(state.activity, "retrying model · attempt 1/6");
+  assert.equal(state.liveTurn?.blocks.some((block) => block.kind === "assistant" && block.streaming), false);
+});
+
 test("the UI event batcher keeps thinking and reply streams separate", () => {
   const events: string[] = [];
   const batcher = new UiEventBatcher((event) => {

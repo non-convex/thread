@@ -247,6 +247,18 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       if (state.liveTurn) state.liveTurn = appendLiveText(state.liveTurn, "assistant", event.delta);
       state.activity = `responding · step ${event.step}`;
       return;
+    case "model_retry_scheduled":
+      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts} in ${(event.delayMs / 1000).toFixed(1)}s`;
+      return;
+    case "model_retry_started":
+      if (state.liveTurn) {
+        state.liveTurn = {
+          ...state.liveTurn,
+          blocks: state.liveTurn.blocks.filter((block) => !(block.kind === "assistant" && block.streaming)),
+        };
+      }
+      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts}`;
+      return;
     case "tool_started": {
       if (!state.liveTurn) return;
       const closed = endStreaming(state.liveTurn);

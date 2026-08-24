@@ -13,6 +13,15 @@ export type UiEvent =
   | { type: "assistant_started"; step: number }
   | { type: "assistant_text_delta"; step: number; delta: string }
   | { type: "assistant_thinking_delta"; step: number; delta: string }
+  | {
+      type: "model_retry_scheduled";
+      step: number;
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      errorMessage: string;
+    }
+  | { type: "model_retry_started"; step: number; attempt: number; maxAttempts: number }
   | { type: "tool_started"; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_finished"; id: string; name: string; result: ToolResult; isError: boolean }
   | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }

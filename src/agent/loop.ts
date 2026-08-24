@@ -255,6 +255,24 @@ export class AgentLoop {
           onThinkingDelta: (delta) => {
             safeUiEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: step + 1, delta });
           },
+          onRetryScheduled: (attempt, maxAttempts, delayMs, errorMessage) => {
+            safeUiEvent(options.onUiEvent, {
+              type: "model_retry_scheduled",
+              step: step + 1,
+              attempt,
+              maxAttempts,
+              delayMs,
+              errorMessage,
+            });
+          },
+          onRetryAttemptStart: (attempt, maxAttempts) => {
+            safeUiEvent(options.onUiEvent, {
+              type: "model_retry_started",
+              step: step + 1,
+              attempt,
+              maxAttempts,
+            });
+          },
         }), turnReady, stepAttempt]);
         assistantMessages.push(response);
         await this.session.appendEntry(

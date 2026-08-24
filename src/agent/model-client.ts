@@ -8,6 +8,7 @@ import {
   type MutableModels,
   createProvider,
   getSupportedThinkingLevels,
+  retryAssistantCall,
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -17,11 +18,29 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { resolveConfigHeaders, resolveConfigValue } from "../config/config-value.js";
 import type { CustomProviderConfig, SupportedCustomApi } from "../config/model-config.js";
 
+/** Transient provider errors (408/409/429/5xx and server-requested retries). */
+export const DEFAULT_MODEL_MAX_RETRIES = 6;
+/** Initial backoff for assistant-level retries; doubles each attempt. */
+export const DEFAULT_MODEL_RETRY_BASE_DELAY_MS = 500;
+
+export interface ModelRetryCallbacks {
+  onRetryScheduled?: (attempt: number, maxAttempts: number, delayMs: number, errorMessage: string) => void | Promise<void>;
+  onRetryAttemptStart?: (attempt: number, maxAttempts: number) => void | Promise<void>;
+  onRetryFinished?: (success: boolean, attempt: number, finalError?: string) => void | Promise<void>;
+}
+
 export interface ModelRequestOptions {
   signal: AbortSignal;
   maxTokens?: number;
   reasoning?: ThinkingLevel;
   sessionId?: string;
+  /** Assistant-level transient retries; defaults to {@link DEFAULT_MODEL_MAX_RETRIES}. */
+  maxRetries?: number;
+  /** Backoff before the first retry; defaults to {@link DEFAULT_MODEL_RETRY_BASE_DELAY_MS}. */
+  retryBaseDelayMs?: number;
+  onRetryScheduled?: ModelRetryCallbacks["onRetryScheduled"];
+  onRetryAttemptStart?: ModelRetryCallbacks["onRetryAttemptStart"];
+  onRetryFinished?: ModelRetryCallbacks["onRetryFinished"];
   onTextDelta?: (delta: string) => void;
   onThinkingDelta?: (delta: string) => void;
 }
@@ -73,31 +92,64 @@ export class PiModelClient implements ModelClient {
   }
 
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
-    const stream = this.models.streamSimple(this.model, context, {
-      signal: options.signal,
-      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-      ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
-      sessionId: options.sessionId ?? `thread:${this.providerId}:${this.modelId}`,
-    });
-    for await (const event of stream) {
-      if (event.type === "text_delta") options.onTextDelta?.(event.delta);
-      if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
-    }
-    return stream.result();
+    const maxRetries = options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES;
+    const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
+    let scheduledAttempt = 0;
+    return retryAssistantCall(
+      async () => {
+        const stream = this.models.streamSimple(this.model, context, {
+          signal: options.signal,
+          ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+          ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+          // Retries are handled above so the TUI can observe every attempt.
+          maxRetries: 0,
+          sessionId: options.sessionId ?? `thread:${this.providerId}:${this.modelId}`,
+        });
+        for await (const event of stream) {
+          if (event.type === "text_delta") options.onTextDelta?.(event.delta);
+          if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
+        }
+        return stream.result();
+      },
+      { enabled: true, maxRetries, baseDelayMs },
+      options.signal,
+      {
+        onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
+          scheduledAttempt = attempt;
+          await options.onRetryScheduled?.(attempt, maxAttempts, delayMs, errorMessage);
+        },
+        onRetryAttemptStart: async () => {
+          await options.onRetryAttemptStart?.(scheduledAttempt, maxRetries);
+        },
+        onRetryFinished: async (success, attempt, finalError) => {
+          await options.onRetryFinished?.(success, attempt, finalError);
+        },
+      },
+    );
   }
 
   async completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string> {
-    const message = await this.models.completeSimple(
-      this.model,
+    const message = await retryAssistantCall(
+      async () =>
+        this.models.completeSimple(
+          this.model,
+          {
+            systemPrompt,
+            messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+          },
+          {
+            signal: options.signal,
+            ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+            ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+            maxRetries: 0,
+          },
+        ),
       {
-        systemPrompt,
-        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+        enabled: true,
+        maxRetries: options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES,
+        baseDelayMs: options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS,
       },
-      {
-        signal: options.signal,
-        ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-        ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
-      },
+      options.signal,
     );
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage ?? `Semantic model stopped with ${message.stopReason}`);

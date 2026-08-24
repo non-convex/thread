@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, type Context } from "@earendil-works/pi-ai";
 import { ThreadApp, type InputResult } from "../../src/app.js";
-import { createConfiguredModelCatalog, PiModelCatalog } from "../../src/agent/model-client.js";
+import { createConfiguredModelCatalog, DEFAULT_MODEL_MAX_RETRIES, PiModelCatalog, PiModelClient } from "../../src/agent/model-client.js";
 import { loadModelConfig } from "../../src/config/model-config.js";
 import { createUiState, moveSelection, openEphemeralView } from "../../src/ui/state.js";
 import { ThreadTuiController } from "../../src/ui/terminal/controller.js";
@@ -15,6 +15,44 @@ function commandContent(result: InputResult): string {
   assert.equal(result.kind, "command");
   return result.kind === "command" ? result.result.content : "";
 }
+
+test("PiModelClient retries transient model errors six times and reports each attempt", async () => {
+  assert.equal(DEFAULT_MODEL_MAX_RETRIES, 6);
+  const faux = fauxProvider();
+  let streamCalls = 0;
+  const fakeModels = {
+    streamSimple() {
+      streamCalls++;
+      return {
+        async *[Symbol.asyncIterator]() {},
+        async result() {
+          return {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "overloaded",
+            timestamp: Date.now(),
+          };
+        },
+      };
+    },
+  };
+  const client = new PiModelClient(fakeModels as never, faux.getModel());
+  const scheduled: number[] = [];
+  const started: number[] = [];
+  const context: Context = { systemPrompt: "", messages: [], tools: [] };
+  const message = await client.stream(context, {
+    signal: new AbortController().signal,
+    maxRetries: 6,
+    retryBaseDelayMs: 1,
+    onRetryScheduled: (attempt) => { scheduled.push(attempt); },
+    onRetryAttemptStart: (attempt) => { started.push(attempt); },
+  });
+  assert.equal(message.stopReason, "error");
+  assert.equal(streamCalls, 7, "one initial attempt plus six retries");
+  assert.deepEqual(scheduled, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(started, [1, 2, 3, 4, 5, 6]);
+});
 
 test("configured model catalogs hide built-ins from the default list", () => {
   const catalog = createConfiguredModelCatalog({
