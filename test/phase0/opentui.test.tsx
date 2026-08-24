@@ -97,6 +97,7 @@ test("the full-screen session updates in place while a streamed reply grows", as
   const meta: TerminalMeta = {
     rootPath: process.cwd(),
     modelLabel: "faux/reasoner",
+    modelName: "reasoner",
     thinkingLevel: "high",
     supportsThinking: true,
     contextPercent: 4,
@@ -153,6 +154,7 @@ test("the composer submits multiline input and selected slash commands", async (
   const meta: TerminalMeta = {
     rootPath: process.cwd(),
     modelLabel: "faux/model",
+    modelName: "model",
     thinkingLevel: "off",
     supportsThinking: false,
     contextPercent: 0,
@@ -195,6 +197,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   const meta: TerminalMeta = {
     rootPath: process.cwd(),
     modelLabel: "faux/reasoner",
+    modelName: "reasoner",
     thinkingLevel: "high",
     supportsThinking: true,
     contextPercent: 42,
@@ -220,7 +223,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   try {
     await setup.flush();
     const frame = setup.captureCharFrame();
-    assert.match(frame, /● thread · faux\/reasoner/, "turn rail keeps its label");
+    assert.match(frame, /● thread · reasoner/, "turn rail names the bare model");
     assert.match(frame, /◇ thought 2\.4s/, "finished thinking collapses to one timed line");
     assert.match(frame, /✓ read {2}src\/app\.ts +2\.1s/, "tool row ends with its elapsed time");
     assert.match(frame, /◇ thinking/, "committed thinking folds into a single line");

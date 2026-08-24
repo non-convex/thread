@@ -134,7 +134,7 @@ function TurnRail(props: { label: string; resources: ThreadViewResources; childr
 function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   return (
-    <box width="100%" flexDirection="row" justifyContent="flex-end" marginBottom={1} paddingRight={1}>
+    <box width="100%" flexDirection="row" justifyContent="flex-start" marginBottom={1} paddingLeft={1}>
       <box
         flexDirection="column"
         flexShrink={1}

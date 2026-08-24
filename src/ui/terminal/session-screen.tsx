@@ -39,6 +39,9 @@ export function contextMeter(percent: number, cells = 6): string {
   return "█".repeat(filled) + "░".repeat(cells - filled);
 }
 
+/** The meter stays quiet until the context window actually fills up. */
+const CONTEXT_WARN_PERCENT = 80;
+
 function Footer(props: {
   state: Accessor<UiState>;
   meta: Accessor<TerminalMeta>;
@@ -50,6 +53,7 @@ function Footer(props: {
   const theme = () => props.resources.theme;
   const compact = () => props.width() < 72;
   const narrow = () => props.width() < 96;
+  const meterColor = () => meta().contextPercent >= CONTEXT_WARN_PERCENT ? theme().warning : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <text height={1} wrapMode="none" fg={theme().softText}>⎇ {state().branch}</text>
@@ -59,13 +63,13 @@ function Footer(props: {
       </Show>
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
-        <text height={1} wrapMode="none" fg={theme().accentDim}>{contextMeter(meta().contextPercent)}</text>
+        <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
         <text height={1} wrapMode="none" fg={theme().muted}> ctx {meta().contextPercent}%</text>
       </Show>
       <box flexGrow={1} />
-      <text height={1} wrapMode="none" fg={theme().accent} attributes={bold}>{meta().modelLabel}</text>
+      <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
-        <text height={1} wrapMode="none" fg={theme().muted}> · {meta().thinkingLevel}</text>
+        <text height={1} wrapMode="none" fg={theme().faint}> · {meta().thinkingLevel}</text>
       </Show>
     </box>
   );
@@ -160,8 +164,8 @@ export function SessionScreen(props: {
 }) {
   const state = props.state;
   const theme = props.resources.theme;
-  // status line + composer (textarea + hints + border) + footer
-  const controlsHeight = () => props.composerHeight() + 5;
+  // status line + composer (border + textarea) + hint row + footer
+  const controlsHeight = () => props.composerHeight() + 6;
   const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
   return (
     <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
@@ -190,7 +194,7 @@ export function SessionScreen(props: {
           <TranscriptTurnsView items={state().transcript} resources={props.resources} />
           <Show when={state().liveTurn}>
             {(live: Accessor<LiveTurn>) => (
-              <LiveTurnView turn={live} label={`thread · ${props.meta().modelLabel}`} resources={props.resources} />
+              <LiveTurnView turn={live} label={`thread · ${props.meta().modelName}`} resources={props.resources} />
             )}
           </Show>
         </scrollbox>
@@ -228,63 +232,62 @@ export function SessionScreen(props: {
         <box flexShrink={0} width="100%"><Status state={props.state} resources={props.resources} /></box>
         <box
           flexShrink={0}
-          flexDirection="column"
+          flexDirection="row"
           marginX={1}
+          paddingLeft={1}
           border={true}
           borderStyle="rounded"
-          borderColor={state().busy ? theme.accent : theme.accentDim}
+          borderColor={state().busy ? theme.accent : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
-          <box flexDirection="row" width="100%" paddingLeft={1}>
-            <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
-            <textarea
-              ref={props.setComposer}
-              flexGrow={1}
-              height={props.composerHeight()}
-              minHeight={COMPOSER_MIN_LINES}
-              maxHeight={COMPOSER_MAX_LINES}
-              wrapMode="word"
-              placeholder="ask thread, or / for commands…"
-              placeholderColor={theme.muted}
-              textColor={theme.text}
-              focusedTextColor={theme.text}
-              backgroundColor={theme.surfaceHigh}
-              focusedBackgroundColor={theme.surfaceHigh}
-              cursorColor={theme.accent}
-              selectionBg={theme.selection}
-              selectionFg={theme.selectionText}
-              keyBindings={COMPOSER_KEY_BINDINGS}
-              onContentChange={() => {
-                const editor = props.composer();
-                props.setComposerText(editor?.plainText ?? "");
-                props.setComposerCursor(editor?.cursorOffset ?? 0);
-                props.setForcePathCompletion(false);
-              }}
-              onCursorChange={() => {
-                const editor = props.composer();
-                props.setComposerCursor(editor?.cursorOffset ?? 0);
-                props.setForcePathCompletion(false);
-              }}
-              onSubmit={() => {
-                const editor = props.composer();
-                if (!editor || state().busy) return;
-                const input = editor.plainText;
-                editor.clear();
-                props.setComposerText("");
-                props.setComposerCursor(0);
-                props.setForcePathCompletion(false);
-                void props.controller.submit(input);
-              }}
-            />
-          </box>
-          <box flexDirection="row" width="100%" height={1} paddingX={1}>
-            <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
-              ⏎ send · ⇧⏎ newline · / commands · @ paths
-            </text>
-            <Show when={props.meta().supportsThinking}>
-              <text height={1} wrapMode="none" fg={theme.faint}>⇧⇥ thinking</text>
-            </Show>
-          </box>
+          <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
+          <textarea
+            ref={props.setComposer}
+            flexGrow={1}
+            height={props.composerHeight()}
+            minHeight={COMPOSER_MIN_LINES}
+            maxHeight={COMPOSER_MAX_LINES}
+            wrapMode="word"
+            placeholder="ask thread, or / for commands…"
+            placeholderColor={theme.muted}
+            textColor={theme.text}
+            focusedTextColor={theme.text}
+            backgroundColor={theme.surfaceHigh}
+            focusedBackgroundColor={theme.surfaceHigh}
+            cursorColor={theme.accent}
+            selectionBg={theme.selection}
+            selectionFg={theme.selectionText}
+            keyBindings={COMPOSER_KEY_BINDINGS}
+            onContentChange={() => {
+              const editor = props.composer();
+              props.setComposerText(editor?.plainText ?? "");
+              props.setComposerCursor(editor?.cursorOffset ?? 0);
+              props.setForcePathCompletion(false);
+            }}
+            onCursorChange={() => {
+              const editor = props.composer();
+              props.setComposerCursor(editor?.cursorOffset ?? 0);
+              props.setForcePathCompletion(false);
+            }}
+            onSubmit={() => {
+              const editor = props.composer();
+              if (!editor || state().busy) return;
+              const input = editor.plainText;
+              editor.clear();
+              props.setComposerText("");
+              props.setComposerCursor(0);
+              props.setForcePathCompletion(false);
+              void props.controller.submit(input);
+            }}
+          />
+        </box>
+        <box flexShrink={0} flexDirection="row" width="100%" height={1} paddingX={2}>
+          <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.faint}>
+            ⏎ send · ⇧⏎ newline · / commands · @ paths
+          </text>
+          <Show when={props.meta().supportsThinking}>
+            <text height={1} wrapMode="none" fg={theme.faint}>⇧⇥ thinking</text>
+          </Show>
         </box>
         <box flexShrink={0} width="100%">
           <Footer state={props.state} meta={props.meta} resources={props.resources} width={props.terminalWidth} />

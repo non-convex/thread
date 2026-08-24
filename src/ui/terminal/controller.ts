@@ -15,7 +15,10 @@ import { projectTranscript } from "./transcript-projection.js";
 
 export interface TerminalMeta {
   rootPath: string;
+  /** provider/model — shown where provider disambiguates, e.g. the model picker. */
   modelLabel: string;
+  /** Bare model id — shown in the footer and turn labels. */
+  modelName: string;
   thinkingLevel: ModelThinkingLevel;
   supportsThinking: boolean;
   contextPercent: number;
@@ -82,6 +85,7 @@ export class ThreadTuiController {
     this.meta = {
       rootPath: app.rootPath,
       modelLabel: app.model ? `${app.model.providerId}/${app.model.modelId}` : "no model",
+      modelName: app.model?.modelId ?? "no model",
       thinkingLevel: app.thinkingLevel,
       supportsThinking: app.supportsThinking,
       contextPercent: 0,
@@ -527,6 +531,7 @@ export class ThreadTuiController {
     const model = this.app.model;
     const window = model?.contextWindow ?? 0;
     this.meta.modelLabel = model ? `${model.providerId}/${model.modelId}` : "no model";
+    this.meta.modelName = model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
     this.meta.contextPercent = window > 0 ? Math.min(999, Math.round(tokens / window * 100)) : 0;
