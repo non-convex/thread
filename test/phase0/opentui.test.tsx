@@ -280,7 +280,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     assert.match(frame, /● thread · reasoner/, "turn rail names the bare model");
     assert.match(frame, /◇ thought 2\.4s/, "finished thinking collapses to one timed line");
     assert.match(frame, /✓ read {2}src\/app\.ts +2\.1s/, "tool row ends with its elapsed time");
-    assert.match(frame, /◇ thinking/, "committed thinking folds into a single line");
+    assert.match(frame, /◇ thinking/, "committed thinking keeps its heading in the preview");
     assert.match(frame, /✓ bash {2}bun test/, "committed tools render as compact rows");
     assert.match(frame, /context main/, "footer labels the displayed version as context");
     assert.doesNotMatch(frame, /dirty/, "footer omits workspace dirty status");
