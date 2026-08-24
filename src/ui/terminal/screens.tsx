@@ -4,17 +4,16 @@ import type { ModelDescriptor } from "../../agent/model-client.js";
 import type { HistoryViewItem } from "../../commands/types.js";
 import type { ThreadDiffFacts } from "../../revisions/diff-service.js";
 import type { UiScreen, UiState } from "../state.js";
-import { short, type TerminalMeta } from "./controller.js";
+import { short } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
 import { normalizeMarkdownForTerminal } from "./transcript.js";
 import { bold } from "./theme.js";
 import { useTerminalDimensions } from "@opentui/solid";
 
-const MODEL_PICKER_MAX_VISIBLE = 18;
 const HISTORY_MAX_VISIBLE = 18;
 
-function selectedWindow<T>(items: readonly T[], selected: number, visible: number): Array<{ item: T; index: number }> {
+export function selectedWindow<T>(items: readonly T[], selected: number, visible: number): Array<{ item: T; index: number }> {
   const count = Math.min(visible, items.length);
   const start = Math.max(0, Math.min(selected - Math.floor(count / 2), items.length - count));
   return items.slice(start, start + count).map((item, offset) => ({ item, index: start + offset }));
@@ -47,76 +46,12 @@ function ScreenFooter(props: { hint: string; state: Accessor<UiState>; resources
   );
 }
 
-function modelDetail(model: ModelDescriptor): string {
+export function modelDetail(model: ModelDescriptor): string {
   return [
     model.name !== model.modelId ? model.name : undefined,
-    `${model.contextWindow.toLocaleString("en-US")} context`,
-    `${model.maxOutputTokens.toLocaleString("en-US")} output`,
+    `${model.contextWindow.toLocaleString("en-US")} ctx`,
     model.reasoning ? "reasoning" : undefined,
   ].filter((value): value is string => value !== undefined).join(" · ");
-}
-
-export function ModelPicker(props: {
-  screen: () => Extract<UiScreen, { type: "model_picker" }>;
-  state: Accessor<UiState>;
-  meta: Accessor<TerminalMeta>;
-  resources: ThreadViewResources;
-}) {
-  const dimensions = useTerminalDimensions();
-  const rowCount = createMemo(() => visibleRows(
-    dimensions().height,
-    8 + Number(props.screen().busy) + Number(Boolean(props.screen().error)),
-    MODEL_PICKER_MAX_VISIBLE,
-  ));
-  const visible = createMemo(() => selectedWindow(props.screen().models, props.screen().selected, rowCount()));
-  const first = () => visible()[0]?.index ?? 0;
-  const last = () => visible().at(-1)?.index ?? -1;
-  return (
-    <>
-      <ScreenHeader
-        left="SELECT MODEL"
-        center={props.meta().modelLabel}
-        right={`${props.screen().models.length > 0 ? props.screen().selected + 1 : 0} / ${props.screen().models.length}`}
-        resources={props.resources}
-      />
-      <box flexDirection="column" flexGrow={1} paddingX={2} paddingTop={1}>
-        <text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.muted}>
-          {props.screen().scope === "all"
-            ? "All built-in and configured models."
-            : "Configured models plus the current model. Use /model all for the complete catalog."}
-        </text>
-        <Show when={first() > 0}><text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.muted}>↑ {first()} earlier model(s)</text></Show>
-        <For each={visible()}>
-          {({ item: model, index }) => {
-            const selected = () => index === props.screen().selected;
-            const current = () => model.providerId === props.screen().currentProviderId && model.modelId === props.screen().currentModelId;
-            return (
-              <box flexDirection="row" width="100%" height={1} backgroundColor={selected() ? props.resources.theme.selection : "transparent"}>
-                <text
-                  width="48%"
-                  height={1}
-                  wrapMode="none"
-                  fg={selected() ? props.resources.theme.selectionText : current() ? props.resources.theme.accent : props.resources.theme.text}
-                  truncate={true}
-                >
-                  {selected() ? "→" : " "} {current() ? "●" : " "} {model.providerId}/{model.modelId}
-                </text>
-                <text flexGrow={1} height={1} wrapMode="none" fg={selected() ? props.resources.theme.selectionText : props.resources.theme.muted} truncate={true}>
-                  {modelDetail(model)}
-                </text>
-              </box>
-            );
-          }}
-        </For>
-        <Show when={last() + 1 < props.screen().models.length}>
-          <text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.muted}>↓ {props.screen().models.length - last() - 1} later model(s)</text>
-        </Show>
-        <Show when={props.screen().busy}><text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.accent}>Switching model…</text></Show>
-        <Show when={props.screen().error}><text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.error}>{props.screen().error}</text></Show>
-      </box>
-      <ScreenFooter hint="↑/↓ select · enter switch · esc cancel" state={props.state} resources={props.resources} />
-    </>
-  );
 }
 
 function SectionTitle(props: { children: string; resources: ThreadViewResources }) {

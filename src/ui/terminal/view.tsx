@@ -16,7 +16,6 @@ import {
   DocumentScreen,
   HistoryScreen,
   MergeScreen,
-  ModelPicker,
 } from "./screens.js";
 import { estimatedWrappedLines, COMPOSER_MAX_LINES, COMPOSER_MIN_LINES, SessionScreen } from "./session-screen.js";
 import { createThreadSyntaxStyle, terminalTheme } from "./theme.js";
@@ -131,6 +130,19 @@ export function ThreadRoot(props: {
       }
       return;
     }
+    if (screen().type === "model_picker") {
+      // The picker floats over the session screen: selection keys go to the
+      // overlay, everything else still reaches the composer underneath.
+      if (props.controller.handleScreenKey(key)) {
+        key.preventDefault();
+        return;
+      }
+      if (key.name === "pageup" || key.name === "pagedown") {
+        key.preventDefault();
+        sessionScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
+      }
+      return;
+    }
     if (screen().type === "session") {
       const currentSuggestions = suggestions();
       if (currentSuggestions.length > 0 && (key.name === "up" || key.name === "down")) {
@@ -178,7 +190,9 @@ export function ThreadRoot(props: {
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={props.resources.theme.background}>
       <Switch>
-        <Match when={screen().type === "session"}>
+        {/* The model picker is an overlay on the session screen, not a
+            separate screen, so both route to SessionScreen. */}
+        <Match when={screen().type === "session" || screen().type === "model_picker"}>
           <SessionScreen
             controller={props.controller}
             state={state}
@@ -196,9 +210,6 @@ export function ThreadRoot(props: {
             terminalWidth={() => dimensions().width}
             setScroll={(value) => { sessionScroll = value; }}
           />
-        </Match>
-        <Match when={screen().type === "model_picker"}>
-          <ModelPicker screen={() => screen() as Extract<UiScreen, { type: "model_picker" }>} state={state} meta={meta} resources={props.resources} />
         </Match>
         <Match when={screen().type === "diff"}>
           <DiffScreen screen={() => screen() as Extract<UiScreen, { type: "diff" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />

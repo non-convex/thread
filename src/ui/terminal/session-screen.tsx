@@ -1,9 +1,10 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
-import { For, Show, type Accessor } from "solid-js";
-import type { LiveTurn, UiState } from "../state.js";
+import { createMemo, For, Show, type Accessor } from "solid-js";
+import type { LiveTurn, ModelPickerScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { short, type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
+import { modelDetail, selectedWindow } from "./screens.js";
 import { wheelScrollAcceleration } from "./scroll.js";
 import { SpinnerText } from "./spinner.js";
 import { LiveTurnView, TranscriptTurnsView, WelcomeView } from "./transcript.js";
@@ -56,8 +57,10 @@ function Footer(props: {
   const meterColor = () => meta().contextPercent >= CONTEXT_WARN_PERCENT ? theme().warning : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <text height={1} wrapMode="none" fg={theme().softText}>⎇ {state().branch}</text>
-      <text height={1} wrapMode="none" truncate={true} fg={theme().faint}> · {short(state().checkpointId)}</text>
+      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>⎇ {state().branch}</text>
+      <Show when={!narrow()}>
+        <text height={1} wrapMode="none" truncate={true} fg={theme().faint}> · {short(state().checkpointId)}</text>
+      </Show>
       <Show when={!narrow() && meta().uncommitted}>
         <text height={1} wrapMode="none" fg={theme().warning}> · dirty</text>
       </Show>
@@ -66,10 +69,11 @@ function Footer(props: {
         <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
         <text height={1} wrapMode="none" fg={theme().muted}> ctx {meta().contextPercent}%</text>
       </Show>
-      <box flexGrow={1} />
+      <box flexGrow={1} minWidth={1} />
       <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
-        <text height={1} wrapMode="none" fg={theme().faint}> · {meta().thinkingLevel}</text>
+        <text height={1} wrapMode="none" fg={theme().muted}> · {meta().thinkingLevel}</text>
+        <text height={1} wrapMode="none" fg={theme().faint}> · ⇧⇥ switch thinking level</text>
       </Show>
     </box>
   );
@@ -108,14 +112,16 @@ function ComposerSuggestions(props: {
   suggestions: readonly ComposerSuggestion[];
   selected: number;
   resources: ThreadViewResources;
+  /** Interior width of the floating panel (outer minus border and padding). */
+  contentWidth: Accessor<number>;
 }) {
   return (
-    <box flexDirection="column" width="100%" paddingX={1} backgroundColor={props.resources.theme.surface}>
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1} backgroundColor={props.resources.theme.surface}>
       <For each={props.suggestions}>
         {(suggestion, index) => (
           <box
             flexDirection="row"
-            width="100%"
+            width={props.contentWidth() - 2}
             height={1}
             backgroundColor={index() === props.selected ? props.resources.theme.surfaceHigh : "transparent"}
           >
@@ -130,7 +136,8 @@ function ComposerSuggestions(props: {
               {index() === props.selected ? "▸ " : ""}{suggestion.label}
             </text>
             <text
-              flexGrow={1}
+              width={Math.max(4, props.contentWidth() - 16)}
+              flexShrink={1}
               height={1}
               wrapMode="none"
               fg={index() === props.selected ? props.resources.theme.softText : props.resources.theme.muted}
@@ -141,6 +148,85 @@ function ComposerSuggestions(props: {
           </box>
         )}
       </For>
+    </box>
+  );
+}
+
+/* The /model list rides on the session screen exactly like the "/" suggestion
+ * popup: a small rounded panel floating above the composer instead of a
+ * separate full-screen takeover. */
+const MODEL_OVERLAY_MAX_ROWS = 8;
+
+function ModelPickerOverlay(props: {
+  screen: Accessor<ModelPickerScreen>;
+  resources: ThreadViewResources;
+  /** Interior width of the floating panel (outer minus border and padding). */
+  contentWidth: Accessor<number>;
+}) {
+  const theme = () => props.resources.theme;
+  const visible = createMemo(() =>
+    selectedWindow(props.screen().models, props.screen().selected, MODEL_OVERLAY_MAX_ROWS));
+  return (
+    // Inside a bordered box, OpenTUI 0.5.7 lets flexGrow/stretch children
+    // overshoot the right border by ~2 cells; explicit widths clip exactly.
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
+          {props.screen().scope === "all"
+            ? "all built-in and configured models"
+            : "configured models · /model all for the full catalog"}
+        </text>
+        <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ switch · esc</text>
+      </box>
+      <For each={visible()}>
+        {({ item: model, index }) => {
+          const selected = () => index === props.screen().selected;
+          const current = () =>
+            model.providerId === props.screen().currentProviderId && model.modelId === props.screen().currentModelId;
+          return (
+            <box
+              flexDirection="row"
+              width={props.contentWidth() - 2}
+              height={1}
+              backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
+            >
+              <text width={2} height={1} wrapMode="none" fg={theme().accent}>
+                {selected() ? "▸ " : current() ? "● " : "  "}
+              </text>
+              <text
+                width={30}
+                flexShrink={1}
+                height={1}
+                wrapMode="none"
+                truncate={true}
+                fg={selected() || current() ? theme().accent : theme().text}
+                attributes={selected() ? bold : 0}
+              >
+                {model.providerId}/{model.modelId}
+              </text>
+              <text
+                width={Math.max(4, props.contentWidth() - 34)}
+                flexShrink={1}
+                height={1}
+                wrapMode="none"
+                truncate={true}
+                fg={selected() ? theme().softText : theme().muted}
+              >
+                {modelDetail(model)}
+              </text>
+            </box>
+          );
+        }}
+      </For>
+      <Show when={props.screen().busy}>
+        <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+          <SpinnerText fg={theme().accent} />
+          <text height={1} wrapMode="none" fg={theme().accent}> switching model…</text>
+        </box>
+      </Show>
+      <Show when={props.screen().error}>
+        <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().error}>{props.screen().error}</text>
+      </Show>
     </box>
   );
 }
@@ -164,9 +250,22 @@ export function SessionScreen(props: {
 }) {
   const state = props.state;
   const theme = props.resources.theme;
-  // status line + composer (border + textarea) + hint row + footer
-  const controlsHeight = () => props.composerHeight() + 6;
+  // status line + composer (border + textarea + hint row) + footer
+  const controlsHeight = () => props.composerHeight() + 5;
   const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
+  const modelPicker = (): ModelPickerScreen | undefined =>
+    state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
+  /* Both floating panels sit at left/right 1 with a rounded border, so their
+   * interior width is the terminal width minus margins and the two border
+   * columns. */
+  const overlayContentWidth = () => Math.max(20, props.terminalWidth() - 4);
+  const modelOverlayHeight = () => {
+    const picker = modelPicker();
+    if (!picker) return 0;
+    // header + windowed rows + optional busy/error lines + border
+    return 1 + Math.min(MODEL_OVERLAY_MAX_ROWS, picker.models.length)
+      + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
+  };
   return (
     <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
       <Show
@@ -199,7 +298,7 @@ export function SessionScreen(props: {
           </Show>
         </scrollbox>
       </Show>
-      <Show when={props.suggestions().length > 0}>
+      <Show when={modelPicker() === undefined && props.suggestions().length > 0}>
         <box
           position="absolute"
           right={1}
@@ -216,8 +315,31 @@ export function SessionScreen(props: {
             suggestions={props.suggestions()}
             selected={props.suggestionIndex()}
             resources={props.resources}
+            contentWidth={overlayContentWidth}
           />
         </box>
+      </Show>
+      <Show when={modelPicker()}>
+        {(picker: Accessor<ModelPickerScreen>) => (
+          <box
+            position="absolute"
+            right={1}
+            bottom={controlsHeight()}
+            left={1}
+            height={modelOverlayHeight()}
+            zIndex={20}
+            border={true}
+            borderStyle="rounded"
+            borderColor={theme.borderStrong}
+            backgroundColor={theme.surface}
+          >
+            <ModelPickerOverlay
+              screen={picker}
+              resources={props.resources}
+              contentWidth={overlayContentWidth}
+            />
+          </box>
+        )}
       </Show>
       <box
         position="absolute"
@@ -232,62 +354,58 @@ export function SessionScreen(props: {
         <box flexShrink={0} width="100%"><Status state={props.state} resources={props.resources} /></box>
         <box
           flexShrink={0}
-          flexDirection="row"
+          flexDirection="column"
           marginX={1}
-          paddingLeft={1}
           border={true}
           borderStyle="rounded"
           borderColor={state().busy ? theme.accent : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
-          <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
-          <textarea
-            ref={props.setComposer}
-            flexGrow={1}
-            height={props.composerHeight()}
-            minHeight={COMPOSER_MIN_LINES}
-            maxHeight={COMPOSER_MAX_LINES}
-            wrapMode="word"
-            placeholder="ask thread, or / for commands…"
-            placeholderColor={theme.muted}
-            textColor={theme.text}
-            focusedTextColor={theme.text}
-            backgroundColor={theme.surfaceHigh}
-            focusedBackgroundColor={theme.surfaceHigh}
-            cursorColor={theme.accent}
-            selectionBg={theme.selection}
-            selectionFg={theme.selectionText}
-            keyBindings={COMPOSER_KEY_BINDINGS}
-            onContentChange={() => {
-              const editor = props.composer();
-              props.setComposerText(editor?.plainText ?? "");
-              props.setComposerCursor(editor?.cursorOffset ?? 0);
-              props.setForcePathCompletion(false);
-            }}
-            onCursorChange={() => {
-              const editor = props.composer();
-              props.setComposerCursor(editor?.cursorOffset ?? 0);
-              props.setForcePathCompletion(false);
-            }}
-            onSubmit={() => {
-              const editor = props.composer();
-              if (!editor || state().busy) return;
-              const input = editor.plainText;
-              editor.clear();
-              props.setComposerText("");
-              props.setComposerCursor(0);
-              props.setForcePathCompletion(false);
-              void props.controller.submit(input);
-            }}
-          />
-        </box>
-        <box flexShrink={0} flexDirection="row" width="100%" height={1} paddingX={2}>
-          <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.faint}>
-            ⏎ send · ⇧⏎ newline · / commands · @ paths
-          </text>
-          <Show when={props.meta().supportsThinking}>
-            <text height={1} wrapMode="none" fg={theme.faint}>⇧⇥ thinking</text>
-          </Show>
+          <box flexDirection="row" width="100%" paddingLeft={1}>
+            <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
+            <textarea
+              ref={props.setComposer}
+              flexGrow={1}
+              height={props.composerHeight()}
+              minHeight={COMPOSER_MIN_LINES}
+              maxHeight={COMPOSER_MAX_LINES}
+              wrapMode="word"
+              placeholder="ask thread, or / for commands…"
+              placeholderColor={theme.muted}
+              textColor={theme.text}
+              focusedTextColor={theme.text}
+              backgroundColor={theme.surfaceHigh}
+              focusedBackgroundColor={theme.surfaceHigh}
+              cursorColor={theme.accent}
+              selectionBg={theme.selection}
+              selectionFg={theme.selectionText}
+              keyBindings={COMPOSER_KEY_BINDINGS}
+              onContentChange={() => {
+                const editor = props.composer();
+                props.setComposerText(editor?.plainText ?? "");
+                props.setComposerCursor(editor?.cursorOffset ?? 0);
+                props.setForcePathCompletion(false);
+              }}
+              onCursorChange={() => {
+                const editor = props.composer();
+                props.setComposerCursor(editor?.cursorOffset ?? 0);
+                props.setForcePathCompletion(false);
+              }}
+              onSubmit={() => {
+                const editor = props.composer();
+                if (!editor || state().busy) return;
+                const input = editor.plainText;
+                editor.clear();
+                props.setComposerText("");
+                props.setComposerCursor(0);
+                props.setForcePathCompletion(false);
+                void props.controller.submit(input);
+              }}
+            />
+          </box>
+          <box flexDirection="row" width="100%" height={1} paddingX={1}>
+            <text height={1} wrapMode="none" fg={theme.faint}>@ paths</text>
+          </box>
         </box>
         <box flexShrink={0} width="100%">
           <Footer state={props.state} meta={props.meta} resources={props.resources} width={props.terminalWidth} />
