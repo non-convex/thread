@@ -16,6 +16,8 @@ pnpm-debug.log*
 .thread/
 
 # Local configuration and secrets
+plan.md
+PROGRESS.md
 .env
 .env.*
 !.env.example
