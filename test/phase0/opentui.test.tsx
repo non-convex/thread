@@ -282,6 +282,8 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     assert.match(frame, /✓ read {2}src\/app\.ts +2\.1s/, "tool row ends with its elapsed time");
     assert.match(frame, /◇ thinking/, "committed thinking folds into a single line");
     assert.match(frame, /✓ bash {2}bun test/, "committed tools render as compact rows");
+    assert.match(frame, /context main/, "footer labels the displayed version as context");
+    assert.doesNotMatch(frame, /dirty/, "footer omits workspace dirty status");
     assert.match(frame, /███░░░ ctx 42%/, "footer carries the context meter");
     assert.match(frame, /❯ ask thread, \/ for commands, @ to add files/, "composer placeholder carries the merged hints");
     assert.doesNotMatch(frame, /⏎ send/, "send/newline hints stay out of the composer");

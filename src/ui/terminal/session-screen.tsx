@@ -57,12 +57,9 @@ function Footer(props: {
   const meterColor = () => meta().contextPercent >= CONTEXT_WARN_PERCENT ? theme().warning : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>⎇ {state().branch}</text>
+      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>context {state().branch}</text>
       <Show when={!narrow()}>
         <text height={1} wrapMode="none" truncate={true} fg={theme().faint}> · {short(state().checkpointId)}</text>
-      </Show>
-      <Show when={!narrow() && meta().uncommitted}>
-        <text height={1} wrapMode="none" fg={theme().warning}> · dirty</text>
       </Show>
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
