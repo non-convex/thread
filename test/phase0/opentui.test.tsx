@@ -239,3 +239,109 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   }
 });
 
+test("the /model overlay moves its highlight view-side, without a controller round-trip", async () => {
+  const viewResources = resources();
+  const state = createUiState("main", "checkpoint-123456789", [
+    { id: "user-1", kind: "user", content: "hello" },
+  ]);
+  state.screen = {
+    type: "model_picker",
+    models: [
+      { providerId: "faux", modelId: "alpha", name: "Alpha", contextWindow: 100_000, maxOutputTokens: 8_000, reasoning: false },
+      { providerId: "faux", modelId: "beta", name: "Beta", contextWindow: 200_000, maxOutputTokens: 8_000, reasoning: true },
+    ],
+    currentProviderId: "faux",
+    currentModelId: "alpha",
+    scope: "configured",
+    selected: 0,
+    busy: false,
+    error: undefined,
+  };
+  const meta: TerminalMeta = {
+    rootPath: process.cwd(),
+    modelLabel: "faux/alpha",
+    modelName: "alpha",
+    thinkingLevel: "off",
+    supportsThinking: false,
+    contextPercent: 4,
+    uncommitted: false,
+  };
+  const viewModel = fakeViewModel(state, meta);
+  viewModel.controller.handleScreenKey = (key) => {
+    if (key.name === "up" || key.name === "down") {
+      throw new Error("overlay arrow keys must stay view-side; a controller round-trip per keystroke is what flickered");
+    }
+    return false;
+  };
+  const setup = await testRender(
+    () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
+    { width: 80, height: 24, screenMode: "alternate-screen", kittyKeyboard: true },
+  );
+  try {
+    await setup.flush();
+    assert.match(setup.captureCharFrame(), /▸ faux\/alpha/, "selection starts on the current model");
+    setup.mockInput.pressArrow("down");
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    assert.match(frame, /▸ faux\/beta/, "down arrow moves the highlight");
+    assert.doesNotMatch(frame, /▸ faux\/alpha/, "the previous row loses its marker");
+    setup.mockInput.pressArrow("up");
+    await setup.flush();
+    assert.match(setup.captureCharFrame(), /▸ faux\/alpha/, "up arrow moves back");
+  } finally {
+    setup.renderer.destroy();
+    viewResources.syntaxStyle.destroy();
+  }
+});
+
+test("the /rewind overlay lists user messages as rewind targets and navigates view-side", async () => {
+  const viewResources = resources();
+  const state = createUiState("main", "checkpoint-123456789", [
+    { id: "user-2", kind: "user", content: "second question" },
+  ]);
+  state.screen = {
+    type: "rewind",
+    items: [
+      { turnId: "turn_zzzzzzzzzzzzzz2", userEntryId: "entry-2", baseCheckpointId: "checkpoint-b", label: "second question", outcome: "completed", startedAt: 1_700_000_060_000 },
+      { turnId: "turn_aaaaaaaaaaaaaa1", userEntryId: "entry-1", baseCheckpointId: "checkpoint-a", label: "first question", outcome: "completed", startedAt: 1_700_000_000_000 },
+    ],
+    selected: 0,
+    confirm: false,
+    busy: false,
+    error: undefined,
+  };
+  const meta: TerminalMeta = {
+    rootPath: process.cwd(),
+    modelLabel: "faux/alpha",
+    modelName: "alpha",
+    thinkingLevel: "off",
+    supportsThinking: false,
+    contextPercent: 4,
+    uncommitted: false,
+  };
+  const viewModel = fakeViewModel(state, meta);
+  viewModel.controller.handleScreenKey = (key) => {
+    if (key.name === "up" || key.name === "down") throw new Error("overlay arrow keys must stay view-side");
+    return false;
+  };
+  const setup = await testRender(
+    () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
+    { width: 80, height: 24, screenMode: "alternate-screen", kittyKeyboard: true },
+  );
+  try {
+    await setup.flush();
+    let frame = setup.captureCharFrame();
+    assert.match(frame, /rewind to before a user message/, "header names the user-message entry points");
+    assert.match(frame, /▸ second question/, "the newest user message is selected first");
+    assert.match(frame, /first question/, "the older user message is listed below");
+    setup.mockInput.pressArrow("down");
+    await setup.flush();
+    frame = setup.captureCharFrame();
+    assert.match(frame, /▸ first question/, "down arrow moves the highlight to the older message");
+    assert.doesNotMatch(frame, /▸ second question/, "the previous row loses its marker");
+  } finally {
+    setup.renderer.destroy();
+    viewResources.syntaxStyle.destroy();
+  }
+});
+

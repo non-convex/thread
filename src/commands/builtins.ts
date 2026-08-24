@@ -1,6 +1,6 @@
 import { runGit } from "../workspace/git.js";
 import type { ThreadDiffFacts } from "../revisions/diff-service.js";
-import type { CommandRegistry, ThreadCommand, ThreadCommandContext } from "./types.js";
+import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
 
 function requireArgs(args: string[], count: number, usage: string): void {
@@ -179,26 +179,32 @@ const show: ThreadCommand = {
   },
 };
 
+/** User-message turns on the current branch, newest first — the rewind/history pick list. */
+export function buildHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
+  const branch = context.versions.currentBranch.name;
+  return [...context.versions.projection.turns.values()]
+    .filter((turn) => turn.branchName === branch)
+    .sort((left, right) => right.startedAt - left.startedAt)
+    .map((turn) => {
+      const entry = context.versions.projection.entries.get(turn.userEntryId);
+      const text = entry?.type === "message" ? messageText(entry.message.content) : "";
+      return {
+        turnId: turn.id,
+        userEntryId: turn.userEntryId,
+        baseCheckpointId: turn.baseCheckpointId,
+        label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
+        outcome: turn.outcome,
+        startedAt: turn.startedAt,
+      };
+    });
+}
+
 const history: ThreadCommand = {
   name: "history",
   description: "Choose a historical user message to restore from.",
   async execute(_args, context) {
     const branch = context.versions.currentBranch.name;
-    const items = [...context.versions.projection.turns.values()]
-      .filter((turn) => turn.branchName === branch)
-      .sort((left, right) => right.startedAt - left.startedAt)
-      .map((turn) => {
-        const entry = context.versions.projection.entries.get(turn.userEntryId);
-        const text = entry?.type === "message" ? messageText(entry.message.content) : "";
-        return {
-          turnId: turn.id,
-          userEntryId: turn.userEntryId,
-          baseCheckpointId: turn.baseCheckpointId,
-          label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
-          outcome: turn.outcome,
-          startedAt: turn.startedAt,
-        };
-      });
+    const items = buildHistoryItems(context);
     const content = items.length
       ? items.map((item) => `${short(item.turnId)} ${item.outcome.padEnd(9)} ${item.label}`).join("\n")
       : `(no turns on thread branch ${branch})`;

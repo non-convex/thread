@@ -7,7 +7,7 @@ import type {
 } from "@opentui/core";
 import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import type { UiScreen } from "../state.js";
+import { moveSelection, type UiScreen } from "../state.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -30,6 +30,16 @@ export function ThreadRoot(props: {
   const [composerCursor, setComposerCursor] = createSignal(0);
   const [forcePathCompletion, setForcePathCompletion] = createSignal(false);
   const [suggestionIndex, setSuggestionIndex] = createSignal(0);
+  /* Selection for the floating overlays (model picker, rewind). Kept in a
+   * local signal instead of the mutable screen object so arrow keys repaint
+   * only the overlay rows — routing every keystroke through the controller's
+   * notify() re-evaluated every state()/meta() binding in the tree and the
+   * whole session visibly flickered. The view writes each move back onto the
+   * screen object so the controller's enter path still reads it.
+   * `overlayNavigated` marks "the user moved since the last notify" so the
+   * overlays can drop stale confirm/error lines immediately. */
+  const [overlaySelected, setOverlaySelected] = createSignal(0);
+  const [overlayNavigated, setOverlayNavigated] = createSignal(false);
   let composer: TextareaRenderable | undefined;
   let sessionScroll: ScrollBoxRenderable | undefined;
   let screenScroll: ScrollBoxRenderable | undefined;
@@ -59,8 +69,18 @@ export function ThreadRoot(props: {
   createEffect(() => {
     const activeState = state();
     if (activeState.screen.type === "session" && composer) {
-      composer.traits = { suspend: activeState.busy, capture: ["escape", "submit", "tab"] };
       if (!activeState.busy) composer.focus();
+    }
+  });
+
+  /* Re-sync the view-side overlay selection whenever the controller (re)opens
+   * or updates one of the floating panels. Between notifies the same values
+   * are set, which Solid treats as no-ops. */
+  createEffect(() => {
+    const active = screen();
+    if (active.type === "model_picker" || active.type === "rewind") {
+      setOverlaySelected(active.selected);
+      setOverlayNavigated(false);
     }
   });
 
@@ -130,9 +150,24 @@ export function ThreadRoot(props: {
       }
       return;
     }
-    if (screen().type === "model_picker") {
-      // The picker floats over the session screen: selection keys go to the
-      // overlay, everything else still reaches the composer underneath.
+    const activeScreen = screen();
+    if (activeScreen.type === "model_picker" || activeScreen.type === "rewind") {
+      // The picker/rewind panels float over the session screen: selection
+      // keys move the view-side signal (no notify — that is what flickered),
+      // enter goes to the controller, everything else reaches the composer.
+      const count = activeScreen.type === "model_picker"
+        ? activeScreen.models.length
+        : activeScreen.items.length;
+      if ((key.name === "up" || key.name === "down") && count > 0 && !activeScreen.busy) {
+        key.preventDefault();
+        const delta = key.name === "up" ? -1 : 1;
+        activeScreen.selected = moveSelection(activeScreen.selected, delta, count);
+        activeScreen.error = undefined;
+        if (activeScreen.type === "rewind") activeScreen.confirm = false;
+        setOverlaySelected(activeScreen.selected);
+        setOverlayNavigated(true);
+        return;
+      }
       if (props.controller.handleScreenKey(key)) {
         key.preventDefault();
         return;
@@ -190,9 +225,9 @@ export function ThreadRoot(props: {
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={props.resources.theme.background}>
       <Switch>
-        {/* The model picker is an overlay on the session screen, not a
-            separate screen, so both route to SessionScreen. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker"}>
+        {/* The model picker and rewind panels are overlays on the session
+            screen, not separate screens, so all three route here. */}
+        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind"}>
           <SessionScreen
             controller={props.controller}
             state={state}
@@ -206,6 +241,8 @@ export function ThreadRoot(props: {
             setForcePathCompletion={setForcePathCompletion}
             suggestions={suggestions}
             suggestionIndex={suggestionIndex}
+            overlaySelected={overlaySelected}
+            overlayNavigated={overlayNavigated}
             composerHeight={composerHeight}
             terminalWidth={() => dimensions().width}
             setScroll={(value) => { sessionScroll = value; }}

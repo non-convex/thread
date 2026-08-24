@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import { clearDisplayResult, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
-import { registerBuiltinCommands, rewindCommand } from "./commands/builtins.js";
+import { buildHistoryItems, registerBuiltinCommands, rewindCommand } from "./commands/builtins.js";
 import { parseCommandLine } from "./commands/parser.js";
 import { THREAD_COMMAND_PREFIX, ThreadCommandRouter } from "./commands/registry.js";
 import { CommandRegistry } from "./commands/types.js";
@@ -396,7 +396,24 @@ export class ThreadApp {
     }
     if (input.startsWith("/rewind") && (input.length === 7 || /\s/.test(input[7]!))) {
       const args = parseCommandLine(input.slice(7).trim());
-      if (args.length !== 1) throw new Error("Usage: /rewind <turn-id-or-user-entry-id>");
+      if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
+      if (args.length === 0) {
+        // No id given: open the rewind picker over the session, one row per
+        // user message, and let the user choose how far back to go.
+        safeUiEvent(options.onUiEvent, { type: "command_started", name: "rewind" });
+        const items = buildHistoryItems(commandContext);
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "rewind", ok: true });
+        if (items.length === 0) {
+          return {
+            kind: "command",
+            result: ephemeral(`(no turns on thread branch ${this.versions.currentBranch.name})`),
+          };
+        }
+        return {
+          kind: "command",
+          result: viewResult("Choose a user message to rewind to.", { type: "rewind", items }),
+        };
+      }
       safeUiEvent(options.onUiEvent, { type: "command_started", name: "rewind" });
       try {
         const result = await rewindCommand(args[0]!, commandContext);

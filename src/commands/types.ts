@@ -26,7 +26,8 @@ export type EphemeralView =
     }
   | { type: "thread_diff"; result: ThreadDiffResult }
   | { type: "thread_merge"; preview: MergePreview; selectedContext: ContextMergeStrategy }
-  | { type: "history"; items: HistoryViewItem[] };
+  | { type: "history"; items: HistoryViewItem[] }
+  | { type: "rewind"; items: HistoryViewItem[] };
 
 export interface CommandResult {
   content: string;

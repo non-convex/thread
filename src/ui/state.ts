@@ -50,7 +50,19 @@ export interface ModelPickerScreen {
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
   scope: "configured" | "all";
+  /** Written by the view on every arrow key; the controller only reads it. */
   selected: number;
+  busy: boolean;
+  error: string | undefined;
+}
+
+/** The /rewind overlay: pick the user message whose turn should be undone. */
+export interface RewindScreen {
+  type: "rewind";
+  items: HistoryViewItem[];
+  /** Written by the view on every arrow key; the controller only reads it. */
+  selected: number;
+  confirm: boolean;
   busy: boolean;
   error: string | undefined;
 }
@@ -59,6 +71,7 @@ export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
+  | RewindScreen
   | { type: "diff"; result: ThreadDiffResult; tab: "summary" | "context" | "workspace" }
   | {
       type: "merge";
@@ -141,6 +154,16 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       error: undefined,
     };
   }
+  if (view.type === "rewind") {
+    state.screen = {
+      type: "rewind",
+      items: view.items,
+      selected: 0,
+      confirm: false,
+      busy: false,
+      error: undefined,
+    };
+  }
 }
 
 function endStreaming(live: LiveTurn): LiveTurn {
@@ -177,10 +200,10 @@ function appendLiveText(live: LiveTurn, kind: "thinking" | "assistant", delta: s
   };
 }
 
-export function moveModelSelection(screen: ModelPickerScreen, delta: number): void {
-  if (screen.models.length === 0 || delta === 0) return;
-  screen.selected = (screen.selected + delta + screen.models.length) % screen.models.length;
-  screen.error = undefined;
+/** Wrap-around list movement shared by the overlay panels; pure, no notify. */
+export function moveSelection(selected: number, delta: number, count: number): number {
+  if (count === 0 || delta === 0) return selected;
+  return (selected + delta + count) % count;
 }
 
 export function reduceUiEvent(state: UiState, event: UiEvent): void {

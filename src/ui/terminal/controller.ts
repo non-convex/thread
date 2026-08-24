@@ -5,10 +5,10 @@ import { estimateContextTokens } from "../../utils/estimate.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
-  moveModelSelection,
   openEphemeralView,
   reduceUiEvent,
   type TranscriptItem,
+  type UiScreen,
   type UiState,
 } from "../state.js";
 import { projectTranscript } from "./transcript-projection.js";
@@ -195,16 +195,18 @@ export class ThreadTuiController {
     const up = key.name === "up" || key.name === "k";
     const down = key.name === "down" || key.name === "j";
     const enter = key.name === "return" || key.name === "kpenter" || key.name === "linefeed";
-    if (screen.type === "model_picker") {
-      if (!screen.busy && screen.models.length > 0 && (up || down)) {
-        moveModelSelection(screen, up ? -1 : 1);
-        this.notify();
-        return true;
-      }
+    if (screen.type === "model_picker" || screen.type === "rewind") {
+      /* Arrow-key navigation for these two floating panels is handled by the
+       * view (a local Solid signal, written back onto screen.selected) so it
+       * never round-trips through notify() — a notify per keystroke
+       * re-evaluates every state()/meta() binding and the whole session
+       * visibly flickers. Only the enter key needs the controller. */
       if (enter) {
-        void this.advanceModelPicker();
+        if (screen.type === "model_picker") void this.advanceModelPicker();
+        else void this.advanceRewind();
         return true;
       }
+      return false;
     }
     if (screen.type === "diff") {
       const tabs = ["summary", "context", "workspace"] as const;
@@ -447,7 +449,19 @@ export class ThreadTuiController {
 
   private async advanceHistory(): Promise<void> {
     const screen = this.state.screen;
-    if (screen.type !== "history" || screen.busy || screen.items.length === 0) return;
+    if (screen.type !== "history") return;
+    await this.advanceRestore(screen);
+  }
+
+  private async advanceRewind(): Promise<void> {
+    const screen = this.state.screen;
+    if (screen.type !== "rewind") return;
+    await this.advanceRestore(screen);
+  }
+
+  /** Double-enter guarded restore shared by the history screen and the /rewind overlay. */
+  private async advanceRestore(screen: Extract<UiScreen, { type: "history" | "rewind" }>): Promise<void> {
+    if (screen.busy || screen.items.length === 0) return;
     if (!screen.confirm) {
       screen.confirm = true;
       this.notify();

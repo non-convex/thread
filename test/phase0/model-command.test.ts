@@ -7,7 +7,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { ThreadApp, type InputResult } from "../../src/app.js";
 import { createConfiguredModelCatalog, PiModelCatalog } from "../../src/agent/model-client.js";
 import { loadModelConfig } from "../../src/config/model-config.js";
-import { createUiState, moveModelSelection, openEphemeralView } from "../../src/ui/state.js";
+import { createUiState, moveSelection, openEphemeralView } from "../../src/ui/state.js";
 import { ThreadTuiController } from "../../src/ui/terminal/controller.js";
 import { commitAll, initRepository } from "../helpers/git-fixture.js";
 
@@ -135,9 +135,9 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     assert.equal(ui.screen.type, "model_picker");
     if (ui.screen.type !== "model_picker") assert.fail("Expected model picker screen");
     assert.equal(ui.screen.models[ui.screen.selected]?.modelId, "alpha-model");
-    moveModelSelection(ui.screen, 1);
+    ui.screen.selected = moveSelection(ui.screen.selected, 1, ui.screen.models.length);
     assert.equal(ui.screen.models[ui.screen.selected]?.modelId, "team/beta-model");
-    moveModelSelection(ui.screen, 1);
+    ui.screen.selected = moveSelection(ui.screen.selected, 1, ui.screen.models.length);
     assert.equal(ui.screen.models[ui.screen.selected]?.modelId, "alpha-model");
 
     const controller = new ThreadTuiController(app);

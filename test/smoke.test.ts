@@ -66,6 +66,12 @@ test("one project session can branch, restore, diff and merge workspace plus con
     assert.equal(app.tools.get("memory_search"), undefined);
     assert.equal(app.tools.get("memory_archive"), undefined);
     const featureTurnId = featureTurn.kind === "turn" ? featureTurn.result.turn.id : "";
+    const rewindPicker = await app.handleInput("/rewind", { signal });
+    assert.equal(rewindPicker.kind, "command");
+    const rewindView = rewindPicker.kind === "command" ? rewindPicker.result.view : undefined;
+    assert.equal(rewindView?.type, "rewind", "bare /rewind opens the message picker");
+    if (!rewindView || rewindView.type !== "rewind") assert.fail("Expected rewind picker view");
+    assert.deepEqual(rewindView.items.map((item) => item.label), ["build the feature"]);
     await app.handleInput(`/rewind ${featureTurnId}`, { signal });
     await assert.rejects(access(path.join(root, "feature.txt")));
     await app.handleInput(`/thread restore ${featureCommit.id}`, { signal });
