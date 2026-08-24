@@ -1,7 +1,8 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
-import { runProcess } from "../utils/process.js";
+import { ProcessError, runProcess } from "../utils/process.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import { ToolRegistry, type AgentTool, type ToolResult } from "./types.js";
 import { webFetchTool, webSearchTool } from "./web.js";
@@ -121,6 +122,66 @@ const editTool: AgentTool<{ path: string; oldText: string; newText: string }> = 
   },
 };
 
+interface ShellInvocation {
+  command: string;
+  args: readonly string[];
+}
+
+const GIT_BASH_RELATIVE_PATHS = [
+  "Git\\bin\\bash.exe",
+  "Git\\usr\\bin\\bash.exe",
+] as const;
+
+function powershellInvocation(executable: string, script: string): ShellInvocation {
+  return {
+    command: executable,
+    args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+  };
+}
+
+/**
+ * Builds a PowerShell command that exits with the last native command's code
+ * and emits UTF-8. PowerShell 7.3+ also promotes native non-zero exits to
+ * errors, while older versions still rely on the final `exit $LASTEXITCODE`.
+ */
+function powershellScript(command: string): string {
+  return [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$PSNativeCommandUseErrorActionPreference = $true",
+    command,
+    "exit $LASTEXITCODE",
+  ].join("; ");
+}
+
+function gitBashCandidates(): string[] {
+  const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(
+    (root): root is string => typeof root === "string" && root.length > 0,
+  );
+  const candidates = roots.flatMap((root) =>
+    GIT_BASH_RELATIVE_PATHS.map((relative) => path.join(root, relative)),
+  );
+  return [...new Set(candidates)].filter((candidate) => existsSync(candidate));
+}
+
+function windowsShellCandidates(command: string): ShellInvocation[] {
+  const candidates: ShellInvocation[] = [];
+  // PowerShell 7 is preferred when installed: UTF-8 and native exit-code
+  // handling are much closer to the POSIX shell behaviour thread expects.
+  candidates.push(powershellInvocation("pwsh", powershellScript(command)));
+  for (const bash of gitBashCandidates()) {
+    candidates.push({ command: bash, args: ["-lc", command] });
+  }
+  candidates.push(powershellInvocation("powershell.exe", powershellScript(command)));
+  return candidates;
+}
+
+function isShellLaunchFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "EACCES" || error.message.startsWith("spawn ");
+}
+
 const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
   name: "bash",
   description: "Run a foreground shell command in the workspace. Detached/background commands are unsupported.",
@@ -134,19 +195,42 @@ const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
     const signal = AbortSignal.any([context.signal, timeout]);
     try {
       const isWindows = process.platform === "win32";
-      const command = isWindows ? "powershell.exe" : "/bin/sh";
-      const commandArgs = isWindows
-        ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
-        : ["-lc", args.command];
-      const result = await runProcess(command, commandArgs, {
-        cwd: context.rootPath,
-        signal,
-        allowExitCodes: [0],
-        maxOutputBytes: DEFAULT_OUTPUT_LIMIT,
-      });
-      const output = [result.stdout.toString("utf8"), result.stderr.toString("utf8")].filter(Boolean).join("\n");
-      return ok(limited(output || "Command completed with no output"), { exitCode: result.code });
+      const shells = isWindows
+        ? windowsShellCandidates(args.command)
+        : [{ command: "/bin/sh", args: ["-lc", args.command] as const }];
+      let launchFailure: unknown;
+      for (const shell of shells) {
+        try {
+          const result = await runProcess(shell.command, shell.args, {
+            cwd: context.rootPath,
+            signal,
+            allowExitCodes: [0],
+            maxOutputBytes: DEFAULT_OUTPUT_LIMIT,
+          });
+          const stdout = result.stdout.toString("utf8").trim();
+          const stderr = result.stderr.toString("utf8").trim();
+          const content = [
+            stdout,
+            ...(stderr ? [`[stderr]\n${stderr}`] : []),
+          ].filter(Boolean).join("\n");
+          return ok(limited(content || "Command completed with no output"), { exitCode: result.code });
+        } catch (error) {
+          if (!isWindows || !isShellLaunchFailure(error)) throw error;
+          launchFailure = error;
+        }
+      }
+      throw launchFailure instanceof Error
+        ? launchFailure
+        : new Error("No usable shell was found on this Windows host");
     } catch (error) {
+      if (error instanceof ProcessError) {
+        const stdout = error.result.stdout.toString("utf8").trim();
+        const details = stdout ? `stdout:\n${stdout}` : "";
+        return {
+          content: `${error.message}${details ? `\n${details}` : ""}`,
+          isError: true,
+        };
+      }
       return fail(error);
     }
   },
