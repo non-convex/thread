@@ -64,7 +64,7 @@ TTY default: fullscreen TUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
-Inside the prompt use /model to inspect or switch models, /new, /clear, /compact,
+Inside the prompt use /model to inspect or switch models, /clear, /compact,
 /thread for version commands, /rewind <turn-id>, or /exit.`;
 }
 

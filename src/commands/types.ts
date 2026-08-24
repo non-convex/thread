@@ -22,6 +22,7 @@ export type EphemeralView =
       models: ModelDescriptor[];
       currentProviderId: string | undefined;
       currentModelId: string | undefined;
+      scope: "configured" | "all";
     }
   | { type: "thread_diff"; result: ThreadDiffResult }
   | { type: "thread_merge"; preview: MergePreview; selectedContext: ContextMergeStrategy }

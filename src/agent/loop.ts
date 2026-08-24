@@ -17,7 +17,7 @@ import { estimateContextTokens } from "../utils/estimate.js";
 import { ContextCompactor } from "./compaction.js";
 import type { ModelClient } from "./model-client.js";
 
-const DEFAULT_SYSTEM_PROMPT = `You are a coding agent working inside a long-lived project session. Use the provided tools to inspect and modify the workspace. Keep changes scoped to the user's request, verify important edits, and explain the outcome concisely. Thread-version commands are handled by the harness and never appear here.`;
+const DEFAULT_SYSTEM_PROMPT = `You are thread, a coding agent working in a long-lived project session. Use the provided tools to inspect and modify the workspace. Keep changes scoped to the user's request and verify important edits. When answering or reporting results, lower the information density without omitting useful information. Add context when helpful, use natural transitions, and explain complex ideas clearly and at a measured pace.`;
 
 export interface AgentLoopOptions {
   systemPrompt?: string;

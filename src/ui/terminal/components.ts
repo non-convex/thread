@@ -190,8 +190,13 @@ export class ScreenDocumentComponent implements Component {
   }
 
   private renderModelPicker(screen: Extract<UiScreen, { type: "model_picker" }>, width: number): string[] {
-    const lines: string[] = [dim("Choose the model used by the active conversation and semantic version services.")];
-    if (screen.models.length === 0) return [...lines, "", dim("No models are available.")];
+    const description = screen.scope === "all"
+      ? "All built-in and configured models."
+      : "Configured models plus the current model. Use /model all for the complete catalog.";
+    const lines: string[] = [dim(description)];
+    if (screen.models.length === 0) {
+      return [...lines, "", dim("No configured models are available. Use /model all to browse built-in models.")];
+    }
 
     const count = Math.min(MODEL_PICKER_VISIBLE, screen.models.length);
     const start = Math.max(0, Math.min(screen.selected - Math.floor(count / 2), screen.models.length - count));

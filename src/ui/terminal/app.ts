@@ -577,7 +577,6 @@ export class ThreadTerminalApp {
 
   private slashCommands(): SlashCommand[] {
     return [
-      { name: "new", description: "Start a new session with empty conversation context" },
       { name: "clear", description: "Clear the visible transcript without changing thread context" },
       { name: "compact", description: "Compact older context and retain as many recent interactions as fit" },
       { name: "model", description: "Open a list and choose the active model" },

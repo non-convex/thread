@@ -22,7 +22,7 @@ npm link
 
 ## 终端界面
 
-交互式 TTY 默认启动 fullscreen 模式。主界面将会话、活动工具以及固定的编辑器/footer 放在同一屏幕中；`/thread diff`、`/thread merge` 和 `/thread history` 会打开临时页面，这些页面不会追加到 Project Session 会话。`/model` 用于查看或切换运行时模型；`/new` 在保留当前 workspace 的同时创建空 conversation context；`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动 fullscreen 模式。主界面将会话、活动工具以及固定的编辑器/footer 放在同一屏幕中；`/thread diff`、`/thread merge` 和 `/thread history` 会打开临时页面，这些页面不会追加到 Project Session 会话。`/model` 用于查看或切换运行时模型；`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
 
 用户和助手消息由 `pi-tui` 的宽度感知 Markdown 组件渲染。标题、强调、行内代码、代码块、引用、列表、链接和表格都会获得终端原生布局与语义配色；长文本限制在适合阅读的宽度内，命令文档则保持纯文本。
 
@@ -110,7 +110,7 @@ thread
 thread
 ```
 
-普通文本会进入流式、多步骤 agent loop。`/model`、`/new`、`/clear`、`/compact`、`/thread ...` 和 `/rewind ...` 会在 LLM 之前被 harness 拦截，不会成为普通用户消息。
+普通文本会进入流式、多步骤 agent loop。`/model`、`/clear`、`/compact`、`/thread ...` 和 `/rewind ...` 会在 LLM 之前被 harness 拦截，不会成为普通用户消息。
 
 ## 模型切换
 
@@ -118,15 +118,16 @@ thread
 
 ```text
 /model
+/model all
 /model list
 /model list <provider>
 /model <provider>/<model>
 /model <provider> <model>
 ```
 
-在 fullscreen 或 regular TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会立即打开第二级模型列表。当前模型用 `●` 标记；使用 ↑/↓（或 `j`/`k`）移动，按 Enter 切换，按 Esc 取消。长模型目录会始终围绕选中行显示。Plain 模式中的 `/model` 仍用于查看状态，并支持上面的显式列表/切换形式。
+在 fullscreen 或 regular TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会立即打开第二级列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓（或 `j`/`k`）移动，按 Enter 切换，按 Esc 取消。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
 
-模型目录包含 pi-ai 的内置模型，以及从当前 thread 或 pi 配置加载的自定义 provider。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule、semantic diff 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
+Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置模型及当前模型，`/model list <provider>` 输出指定 provider 在完整目录中的全部模型。即使某个模型未显示在默认 picker 中，仍可用 `/model <provider>/<model>` 从完整目录直接切换。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule、semantic diff 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
 
 `/model` 只改变当前运行进程。它不会编辑全局配置，也不会追加 message/checkpoint；重启后仍会按照正常优先级使用 `--provider`/`--model`、`THREAD_PROVIDER`/`THREAD_MODEL` 或配置中的默认值。
 
@@ -141,10 +142,9 @@ thread
 ## 版本命令
 
 ```text
-/new
 /clear
 /compact
-/model [list [<provider>] | <provider>/<model> | <provider> <model>]
+/model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
 /thread status
 /thread branches
 /thread branch <name> [<from>]
@@ -160,7 +160,7 @@ thread
 /rewind <turn-id-or-user-entry-id>
 ```
 
-`/new` 创建一个 workspace 不变、conversation-context head 为空的 checkpoint。之前的 context（包括已经压缩的 project state）仍可通过 checkpoint history 到达。`/clear` 不改变任何持久状态：它隐藏当前 context head 之前的消息，之后的消息仍会使用完整后端上下文。重启终端或切换到其他 context 后，这些消息可能再次显示。
+`/clear` 不改变任何持久状态：它隐藏当前 context head 之前的消息，之后的消息仍会使用完整后端上下文。重启终端或切换到其他 context 后，这些消息可能再次显示。
 
 `/compact` 强制执行运行时 context compaction，但不会添加用户消息。压缩后 input context 的目标是模型 context window 的 7%，其中包括 system prompt、tools、extension context、生成的 project state 和保留的原始交互。摘要之前，消息会投影为带日期的纯文本语义证据：排除 provider metadata、usage、thinking、signature、图片二进制和 raw tool details，同时保留每条消息的 `YYYY-MM-DD` 来源日期、用户可见文本、tool call、模型可见 tool result 以及材料性的停止/错误状态。最终 project state 的上限为 4K tokens：一方面选择性携带未来可能有用的持久项目知识，另一方面保存最近被压缩会话的滚动摘要，包括用户最近讨论或要求的内容。时间敏感或会被覆盖的状态可以保留绝对日期；永恒事实不会机械添加日期。第一次压缩会从更早的交互前缀创建状态；之后的压缩会显式使用“上一版状态 + 本次新增交互”重新生成完整状态：保留仍然有用的项目知识，用较新的修正替换旧状态，删除过时或无关内容，并替换而不是累积上一段近期会话摘要。在尾部预算内，compactor 会尽可能保留更多近期完整 user-led interactions，至少两轮。如果两轮本身已超过目标，它们仍会完整保留，因此 7% 是目标而不是破坏性硬限制。压缩会创建一个可恢复的内部 checkpoint，但不会创建 `/thread commit`。如果没有可吸收的更早交互，则操作为空。
 

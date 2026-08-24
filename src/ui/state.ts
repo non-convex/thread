@@ -35,6 +35,7 @@ export interface ModelPickerScreen {
   models: ModelDescriptor[];
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
+  scope: "configured" | "all";
   selected: number;
   busy: boolean;
   error: string | undefined;
@@ -98,6 +99,7 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       models: view.models,
       currentProviderId: view.currentProviderId,
       currentModelId: view.currentModelId,
+      scope: view.scope,
       selected: current >= 0 ? current : 0,
       busy: false,
       error: undefined,

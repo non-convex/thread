@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { ThreadApp, type InputResult } from "../../src/app.js";
-import { PiModelCatalog } from "../../src/agent/model-client.js";
+import { createConfiguredModelCatalog, PiModelCatalog } from "../../src/agent/model-client.js";
 import { createUiState, moveModelSelection, openEphemeralView } from "../../src/ui/state.js";
 import { ScreenDocumentComponent } from "../../src/ui/terminal/components.js";
 import { commitAll, initRepository } from "../helpers/git-fixture.js";
@@ -14,6 +14,31 @@ function commandContent(result: InputResult): string {
   assert.equal(result.kind, "command");
   return result.kind === "command" ? result.result.content : "";
 }
+
+test("configured model catalogs hide built-ins from the default list", () => {
+  const catalog = createConfiguredModelCatalog({
+    configured: {
+      name: "Configured",
+      api: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      apiKeyEnv: "THREAD_TEST_API_KEY",
+      models: [{
+        id: "configured-model",
+        name: "Configured Model",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 8_000,
+        maxTokens: 2_000,
+      }],
+    },
+  });
+
+  assert.deepEqual(
+    catalog.list().map((model) => `${model.providerId}/${model.modelId}`),
+    ["configured/configured-model"],
+  );
+  assert.ok(catalog.listAll().length > catalog.list().length);
+});
 
 test("/model reports, lists, and switches every runtime model consumer", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-model-command-"));
@@ -31,10 +56,18 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     provider: "beta",
     models: [{ id: "team/beta-model", name: "Beta Model", reasoning: true, contextWindow: 16_000, maxTokens: 4_000 }],
   });
+  const gamma = fauxProvider({
+    provider: "gamma",
+    models: [{ id: "hidden-model", name: "Hidden Model", contextWindow: 32_000, maxTokens: 8_000 }],
+  });
   const models = createModels();
   models.setProvider(alpha.provider);
   models.setProvider(beta.provider);
-  const catalog = new PiModelCatalog(models);
+  models.setProvider(gamma.provider);
+  const catalog = new PiModelCatalog(models, [
+    { providerId: "alpha", modelId: "alpha-model" },
+    { providerId: "beta", modelId: "team/beta-model" },
+  ]);
   const app = await ThreadApp.open({
     rootPath: root,
     model: catalog.createClient("alpha", "alpha-model"),
@@ -49,6 +82,8 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     const pickerView = pickerResult.kind === "command" ? pickerResult.result.view : undefined;
     assert.equal(pickerView?.type, "model_picker");
     if (!pickerView || pickerView.type !== "model_picker") assert.fail("Expected model picker view");
+    assert.equal(pickerView.scope, "configured");
+    assert.deepEqual(pickerView.models.map((model) => model.providerId), ["alpha", "beta"]);
     const ui = createUiState("main", "checkpoint", []);
     openEphemeralView(ui, pickerView);
     assert.equal(ui.screen.type, "model_picker");
@@ -61,6 +96,19 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     const renderedPicker = new ScreenDocumentComponent(() => ui).render(120).join("\n");
     assert.match(renderedPicker, /alpha\/alpha-model/);
     assert.match(renderedPicker, /beta\/team\/beta-model/);
+    assert.doesNotMatch(renderedPicker, /gamma\/hidden-model/);
+
+    const allResult = await app.handleInput("/model all", { signal });
+    const allView = allResult.kind === "command" ? allResult.result.view : undefined;
+    assert.equal(allView?.type, "model_picker");
+    if (!allView || allView.type !== "model_picker") assert.fail("Expected complete model picker view");
+    assert.equal(allView.scope, "all");
+    assert.deepEqual(allView.models.map((model) => model.providerId), ["alpha", "beta", "gamma"]);
+
+    const configuredList = commandContent(await app.handleInput("/model list", { signal }));
+    assert.match(configuredList, /alpha\/alpha-model/);
+    assert.match(configuredList, /beta\/team\/beta-model/);
+    assert.doesNotMatch(configuredList, /gamma\/hidden-model/);
 
     const listed = commandContent(await app.handleInput("/model list beta", { signal }));
     assert.match(listed, /beta\/team\/beta-model/);
@@ -84,6 +132,14 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     );
     assert.equal(app.model?.providerId, "alpha");
     assert.equal(app.capsules.modelLabel, "alpha/alpha-model");
+    await app.handleInput("/model gamma/hidden-model", { signal });
+    const pickerWithCurrent = await app.handleInput("/model", { signal });
+    const currentView = pickerWithCurrent.kind === "command" ? pickerWithCurrent.result.view : undefined;
+    assert.equal(currentView?.type, "model_picker");
+    if (!currentView || currentView.type !== "model_picker") assert.fail("Expected configured model picker view");
+    assert.deepEqual(currentView.models.map((model) => model.providerId), ["alpha", "beta", "gamma"]);
+    assert.equal(currentView.models.find((model) => model.providerId === "gamma")?.modelId, "hidden-model");
+    await app.handleInput("/model alpha/alpha-model", { signal });
     await assert.rejects(app.handleInput("/model missing/nope", { signal }), /Unknown model missing\/nope/);
   } finally {
     await app.close();

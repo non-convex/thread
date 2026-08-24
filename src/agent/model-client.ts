@@ -43,6 +43,7 @@ export interface ModelDescriptor {
 
 export interface ModelCatalog {
   list(providerId?: string): ModelDescriptor[];
+  listAll?(providerId?: string): ModelDescriptor[];
   createClient(providerId: string, modelId: string): ModelClient;
 }
 
@@ -102,11 +103,30 @@ export class PiModelClient implements ModelClient {
 }
 
 export class PiModelCatalog implements ModelCatalog {
-  constructor(private readonly models: Models) {}
+  private readonly configuredModelKeys: ReadonlySet<string> | undefined;
+
+  constructor(
+    private readonly models: Models,
+    configuredModels?: readonly { providerId: string; modelId: string }[],
+  ) {
+    this.configuredModelKeys = configuredModels === undefined
+      ? undefined
+      : new Set(configuredModels.map((model) => modelKey(model.providerId, model.modelId)));
+  }
 
   list(providerId?: string): ModelDescriptor[] {
-    return this.models
-      .getModels(providerId)
+    const models = this.models.getModels(providerId).filter((model) =>
+      this.configuredModelKeys === undefined || this.configuredModelKeys.has(modelKey(model.provider, model.id)),
+    );
+    return this.describe(models);
+  }
+
+  listAll(providerId?: string): ModelDescriptor[] {
+    return this.describe(this.models.getModels(providerId));
+  }
+
+  private describe(models: readonly Model<Api>[]): ModelDescriptor[] {
+    return models
       .map((model) => ({
         providerId: model.provider,
         modelId: model.id,
@@ -198,10 +218,16 @@ export function createConfiguredModelCatalog(
   providers: Record<string, CustomProviderConfig>,
 ): PiModelCatalog {
   const models = builtinModels();
+  const configuredModels: Array<{ providerId: string; modelId: string }> = [];
   for (const [customProviderId, config] of Object.entries(providers)) {
     registerCustomProvider(models, customProviderId, config);
+    configuredModels.push(...config.models.map((model) => ({ providerId: customProviderId, modelId: model.id })));
   }
-  return new PiModelCatalog(models);
+  return new PiModelCatalog(models, configuredModels);
+}
+
+function modelKey(providerId: string, modelId: string): string {
+  return `${providerId}\0${modelId}`;
 }
 
 function selectModelClient(models: Models, providerId: string, modelId: string): PiModelClient {

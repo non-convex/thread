@@ -22,7 +22,7 @@ npm link
 
 ## Terminal interface
 
-An interactive TTY starts in fullscreen mode. The main screen keeps the conversation, active tools and a fixed editor/footer together; `/thread diff`, `/thread merge` and `/thread history` open temporary screens that are never appended to the Project Session conversation. `/model` inspects or switches the runtime model, `/new` starts with empty conversation context while retaining the current workspace, `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
+An interactive TTY starts in fullscreen mode. The main screen keeps the conversation, active tools and a fixed editor/footer together; `/thread diff`, `/thread merge` and `/thread history` open temporary screens that are never appended to the Project Session conversation. `/model` inspects or switches the runtime model, `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
 
 User and assistant messages are rendered with `pi-tui`'s width-aware Markdown component. Headings, emphasis, inline and fenced code, quotes, lists, links and tables receive terminal-native layout and semantic colors; long prose is capped to a readable width while command documents remain plain text.
 
@@ -110,7 +110,7 @@ The version commands remain usable without any configured model:
 thread
 ```
 
-Normal text enters the streaming multi-step agent loop. `/model`, `/new`, `/clear`, `/compact`, `/thread ...` and `/rewind ...` are intercepted before the LLM and never become ordinary user messages.
+Normal text enters the streaming multi-step agent loop. `/model`, `/clear`, `/compact`, `/thread ...` and `/rewind ...` are intercepted before the LLM and never become ordinary user messages.
 
 ## Model switching
 
@@ -118,15 +118,16 @@ The active model can be inspected or changed without restarting `thread`:
 
 ```text
 /model
+/model all
 /model list
 /model list <provider>
 /model <provider>/<model>
 /model <provider> <model>
 ```
 
-In the fullscreen or regular TUI, selecting `model` from slash-command completion and pressing Enter immediately opens a second model list. The current model is marked with `●`; use ↑/↓ (or `j`/`k`) to move, Enter to switch, and Esc to cancel. Long catalogs stay centered around the selected row. Plain mode keeps `/model` as a status command and supports the explicit list/switch forms above.
+In the fullscreen or regular TUI, selecting `model` from slash-command completion and pressing Enter immediately opens a second list containing models explicitly declared in the active thread/pi configuration. The current model is always included and marked with `●`, even when it came from the built-in catalog or a direct switch. Use ↑/↓ (or `j`/`k`) to move, Enter to switch, and Esc to cancel. `/model all` opens the complete built-in and configured catalog; long catalogs stay centered around the selected row.
 
-The catalog contains pi-ai's built-in models plus custom providers loaded from the active thread or pi configuration. A switch retains the current conversation and workspace, while rebuilding the main agent loop, compactor, Context Capsule, semantic diff and context-merge services around the selected model. The TUI model label and context-window percentage update immediately.
+Plain mode keeps `/model` as a status command. `/model list` prints the configured/current choices, while `/model list <provider>` prints every catalog model registered under one provider. Direct `/model <provider>/<model>` switching can still select a model from the complete catalog even when it is hidden from the default picker. A switch retains the current conversation and workspace, while rebuilding the main agent loop, compactor, Context Capsule, semantic diff and context-merge services around the selected model. The TUI model label and context-window percentage update immediately.
 
 `/model` changes only the running process. It does not edit the global configuration or append a message/checkpoint, so a restart again uses `--provider`/`--model`, `THREAD_PROVIDER`/`THREAD_MODEL`, or the configured default in normal precedence order.
 
@@ -141,10 +142,9 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 ## Version commands
 
 ```text
-/new
 /clear
 /compact
-/model [list [<provider>] | <provider>/<model> | <provider> <model>]
+/model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
 /thread status
 /thread branches
 /thread branch <name> [<from>]
@@ -160,7 +160,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 /rewind <turn-id-or-user-entry-id>
 ```
 
-`/new` creates a checkpoint whose workspace is unchanged and whose conversation-context head is empty. The previous context, including any compacted project state, remains reachable through the checkpoint history. `/clear` changes no durable state: it hides messages through the current context head, while later messages continue to use the complete backend context. Restarting the terminal or navigating to another context may show those messages again.
+`/clear` changes no durable state: it hides messages through the current context head, while later messages continue to use the complete backend context. Restarting the terminal or navigating to another context may show those messages again.
 
 `/compact` forces runtime context compaction without adding a user message. The post-compaction input target is 7% of the model context window, including the system prompt, tools, extension context, generated project state and retained raw interactions. Before summarization, messages are projected to dated, text-only semantic evidence: provider metadata, usage, thinking, signatures, binary image data and raw tool details are excluded while each message's `YYYY-MM-DD` source date, user-visible text, tool calls, model-visible tool results and material stop/error state remain. The final project state has a 4K-token ceiling and serves two purposes: it selectively carries only durable project knowledge likely to help future work, and it keeps a rolling digest of the most recently compressed conversation, including what the user discussed or requested. Time-sensitive or superseding state may retain its absolute date; timeless facts are not mechanically dated. On the first compaction the state is created from the older interaction prefix. Later compactions explicitly reconcile the previous state with only the newly compacted interactions: useful valid project knowledge is retained, later corrections replace older state, stale or irrelevant state is removed, and the previous recent-conversation digest is replaced rather than accumulated indefinitely. Within the remaining tail budget the compactor retains as many recent complete user-led interactions as fit, with a minimum of two. If those two interactions already exceed the target they remain intact, so 7% is a target rather than a destructive hard limit. It creates an internal checkpoint so the branch context head remains recoverable and is not an `/thread commit`. If there is no older interaction to absorb, it is a no-op.
 

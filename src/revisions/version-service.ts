@@ -284,24 +284,6 @@ export class VersionService {
     });
   }
 
-  async startNewConversation(): Promise<InternalCheckpoint> {
-    this.requireIdle();
-    const previous = await this.syncCurrentWorkspace("command");
-    return this.persistCheckpoint(
-      {
-        treeOid: previous.workspaceTreeOid,
-        retentionCommitOid: previous.retentionCommitOid,
-        pathCount: 0,
-        elapsedMs: 0,
-      },
-      {
-        reason: "command",
-        parentCheckpointIds: [previous.id],
-        sessionHeadId: null,
-      },
-    );
-  }
-
   async persistCheckpoint(snapshot: WorkspaceSnapshot, options: CreateCheckpointOptions): Promise<InternalCheckpoint> {
     const branchName = options.branchName ?? this.currentBranch.name;
     const branch = this.projection.branches.get(branchName);

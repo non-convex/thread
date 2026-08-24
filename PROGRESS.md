@@ -28,7 +28,7 @@ workspace snapshot + conversation context head
 - 不再设置独立的外部 memory 服务或内置 memory 工具；长期项目知识由版本化 conversation context 中的 compaction 项目状态承载。
 - 从启动目录发现并关联 Git workspace。
 - 全局 thread 模型配置；未配置 thread 时可回退读取本机 pi 模型配置。
-- `/model` 在 TUI 中打开二级模型选择列表，支持 ↑/↓ 或 j/k 循环选择、Enter 切换、Esc 取消及长目录窗口化显示；plain/direct 模式仍可查看当前模型、列出全部或指定 provider 的模型，并用显式参数切换。切换会保留现有 workspace/context，同时统一更新主 agent loop、compaction、Capsule、semantic diff/merge 和 TUI 状态。
+- `/model` 在 TUI 中打开二级模型选择列表，默认只显示活动配置中明确声明的模型并始终补入当前模型；`/model all` 可显式浏览 pi-ai 完整内置及配置目录。支持 ↑/↓ 或 j/k 循环选择、Enter 切换、Esc 取消及长目录窗口化显示；plain/direct 模式可查看当前模型、列出默认选项或指定 provider 的完整模型集合，并用显式参数从完整目录切换。切换会保留现有 workspace/context，同时统一更新主 agent loop、compaction、Capsule、semantic diff/merge 和 TUI 状态。
 - GitHub 仓库公开发布并采用 MIT License；英文/简体中文 README 在顶部双向跳转，并在 README 内集中记录 pi、OpenCode、DeepSeek Harness、htmlparser2、Turndown 的依赖/参考关系和 pi 派生代码的 MIT 归属声明。
 
 ### Session 与持久化
@@ -36,7 +36,6 @@ workspace snapshot + conversation context head
 - 使用 append-only `events.jsonl` 作为 canonical session log，启动时 replay 为内存投影。
 - 每个普通 turn 持久化 user entry、assistant/tool entries、turn 状态和内部 checkpoint。
 - 普通 turn 有执行前 `turn_base` 和完成后的结果 checkpoint，可恢复到某条历史用户消息执行前。
-- `/new`：在保留 workspace 的情况下创建空对话上下文。
 - `/clear`：只清空当前终端显示，不改变后端上下文或持久化状态。
 - `/rewind` 和 `/thread history`：查看并恢复历史消息位置。
 - v1 不使用 SQLite；SQLite 留待后续确有索引或并发需求时再评估。
@@ -95,7 +94,7 @@ workspace snapshot + conversation context head
 - 支持 Markdown、代码块、表格和语义配色；流式显示 agent 回复和工具状态。
 - 固定 header、editor、status/footer，以及 conversation viewport。
 - diff、merge、history 使用不污染主 session 的临时 view。
-- 支持 `/model`、`/new`、`/clear`、`/compact` 和 `/thread` 命令补全/路由。
+- 支持 `/model`、`/clear`、`/compact` 和 `/thread` 命令补全/路由。
 
 ## 当前已知限制
 
@@ -112,6 +111,9 @@ workspace snapshot + conversation context head
 
 ## 最近完成
 
+- 收紧 `/model` picker：默认从 1,000 余项 pi-ai 全量目录缩减为配置模型及当前模型，完整目录改由显式 `/model all` 打开；provider 定向列出和直接切换仍可访问完整目录。
+- 调整主 Agent 默认 system prompt：明确其名称为 `thread`，移除无实际作用的命令路由说明，并要求总结或汇报时在不删减有效信息的前提下降低表达密度，通过必要铺垫、自然过渡和循序展开做到深入浅出。
+- 移除 `/new` 及其空上下文 checkpoint 路径，Project Session 不再提供主动失忆入口，长期上下文统一由 compaction 管理。
 - 将仓库改为公开 MIT 项目，补充完整简体中文 README、双向语言入口和带超链接的外部项目/第三方许可说明；不额外拆分 attribution 文档。
 - 增加 `/model` 运行时模型切换和 TUI 二级模型 picker：从斜杠补全回车后直接进入可上下选择的模型列表；切换时原子替换对话、压缩及版本语义服务所用模型，并动态刷新 TUI 模型标签和上下文占比。
 - 参考 OpenCode 增加 `websearch` / `webfetch`：复用 Exa/Parallel MCP 搜索协议，实现可取消、限时、限长的 HTTP 抓取、HTML→Markdown/纯文本转换，并将网络请求标记为不可自动重放。
@@ -123,7 +125,7 @@ workspace snapshot + conversation context head
 - 将 `@earendil-works/pi-ai` / `@earendil-works/pi-tui` 依赖从本机 pi 源码树切换为 npm 公开发行的 0.84.2，删除 `.npmrc` 和 `scripts/check-pi-ai.mjs`。
 - 由于发布版 0.84.2 的根入口尚未导出 `estimateContextTokens`（本地 pi 源码领先发布版约 44 个提交），将其实现 vendor 到 `src/utils/estimate.ts`，与本地 pi 源码保持逐行一致；待上游发布后应改回从 pi-ai 导入并删除 vendor 文件。
 - 改进终端 Markdown 渲染和对话布局。
-- 增加 `/new`、`/clear` 与 `/compact`。
+- 增加 `/clear` 与 `/compact`。
 - 将 compaction 改为 7% 目标下的自适应完整交互保留，并支持超长前缀分块归并。
 - 收紧 compaction prompt：工具结果只保留材料性结论，不记录命令清单或原始长输出。
 - 将 Context Capsule 改为直接读取 checkpoint 的动态活跃上下文，移除固定 `120,000` 字符尾部截断。
@@ -132,7 +134,9 @@ workspace snapshot + conversation context head
 
 ## 验证状态
 
-- `npm run check`、`npm run build` 通过，全部 13 个测试（phase0 + smoke）通过；`/model` 回归测试覆盖 picker 视图、当前模型定位、循环选择、目录、两种直接切换语法、含 `/` 的模型 ID、主循环和语义服务同步替换及无目录的注入模型边界；网络工具测试覆盖注册、provider 选择、JSON/SSE MCP 结果、Exa 请求、HTML 转换和响应上限；compaction 回归测试只验证语义投影和增量状态更新机制，不评价模型摘要质量；session log 恢复测试同时确认旧版 `memory_changed` 事件可读取但不会恢复记忆投影。
+- `/new` 的运行时路由、空上下文 checkpoint API、TUI 补全、CLI help 及中英文 README 已移除；源码和用户文档仅在本进度记录的移除说明中保留该名称。
+- `npm run check`、`npm run build` 通过，全部 14 个测试（phase0 + smoke）通过；`/model` 回归测试覆盖配置目录过滤、完整目录入口、当前模型补入、picker 视图、当前模型定位、循环选择、provider 定向目录、两种直接切换语法、含 `/` 的模型 ID、主循环和语义服务同步替换及无目录的注入模型边界；网络工具测试覆盖注册、provider 选择、JSON/SSE MCP 结果、Exa 请求、HTML 转换和响应上限；compaction 回归测试只验证语义投影和增量状态更新机制，不评价模型摘要质量；session log 恢复测试同时确认旧版 `memory_changed` 事件可读取但不会恢复记忆投影。
+- 使用当前本机 pi 配置进行目录 smoke：默认 picker 精确列出 6 个配置模型，`/model all` 仍可访问包含这些配置项在内的 1,273 项完整目录；验证过程只输出模型标识和数量，不读取或打印凭据。
 - 无密钥真实网络 smoke 通过：Exa MCP `web_search_exa` 能返回 Node.js 官方站点结果，`webfetch` 能获取并提取 `https://example.com` 的文本。
 - `thread` 更名通过全仓旧名称零匹配扫描；`thread --help` 文案和 `ThreadApp` / `ThreadTerminalApp` / `THREAD_VERSION` 等构建产物公开导出已验证。
 - `/thread` 命令空间通过旧命令字符串零匹配扫描和构建产物路由检查；`/thread` 可列出并执行命令，旧前缀不再被命令路由器接收。

@@ -117,21 +117,54 @@ export class ThreadApp {
       : undefined;
   }
 
-  private modelStatus(): CommandResult {
+  private modelPickerModels(scope: "configured" | "all"): ModelDescriptor[] {
+    if (!this.modelCatalog) return [];
+    const models = scope === "all"
+      ? (this.modelCatalog.listAll?.() ?? this.modelCatalog.list())
+      : this.modelCatalog.list();
+    const current = this.currentModel;
+    if (!current || models.some((model) =>
+      model.providerId === current.providerId && model.modelId === current.modelId
+    )) return models;
+    const descriptor = (this.modelCatalog.listAll?.(current.providerId) ?? this.modelCatalog.list(current.providerId))
+      .find((model) => model.providerId === current.providerId && model.modelId === current.modelId) ?? {
+        providerId: current.providerId,
+        modelId: current.modelId,
+        name: current.modelId,
+        contextWindow: current.contextWindow,
+        maxOutputTokens: current.maxOutputTokens,
+        reasoning: false,
+      };
+    return [...models, descriptor].sort((left, right) =>
+      left.providerId.localeCompare(right.providerId) || left.modelId.localeCompare(right.modelId),
+    );
+  }
+
+  private modelStatus(scope: "configured" | "all" = "configured"): CommandResult {
+    const models = this.modelPickerModels(scope);
+    const scopeLine = scope === "all"
+      ? `Complete catalog: ${models.length.toLocaleString("en-US")} model(s).`
+      : `Configured/current choices: ${models.length.toLocaleString("en-US")} model(s). Use /model all for the complete catalog.`;
     const content = this.currentModel
       ? [
         `Current model: ${this.currentModel.providerId}/${this.currentModel.modelId}`,
         `Context window: ${this.currentModel.contextWindow.toLocaleString("en-US")} tokens`,
         `Maximum output: ${this.currentModel.maxOutputTokens.toLocaleString("en-US")} tokens`,
+        scopeLine,
         "Use /model list [provider] or /model <provider>/<model> to switch.",
       ].join("\n")
-      : "No model selected. Use /model list [provider] and /model <provider>/<model> to select one.";
+      : [
+        "No model selected.",
+        scopeLine,
+        "Use /model list [provider] and /model <provider>/<model> to select one.",
+      ].join("\n");
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
       type: "model_picker",
-      models: this.modelCatalog.list(),
+      models,
       currentProviderId: this.currentModel?.providerId,
       currentModelId: this.currentModel?.modelId,
+      scope,
     });
   }
 
@@ -139,12 +172,18 @@ export class ThreadApp {
     if (!this.modelCatalog) {
       throw new Error("Model listing is unavailable because this application was opened without a model catalog");
     }
-    const models = this.modelCatalog.list(providerId);
+    const models = providerId
+      ? (this.modelCatalog.listAll?.(providerId) ?? this.modelCatalog.list(providerId))
+      : this.modelPickerModels("configured");
     if (models.length === 0) {
-      throw new Error(providerId ? `No models found for provider ${providerId}` : "No models are available");
+      throw new Error(
+        providerId
+          ? `No models found for provider ${providerId}`
+          : "No configured models are available. Use /model all to browse the complete catalog.",
+      );
     }
     return ephemeral([
-      `Available models${providerId ? ` for ${providerId}` : ""} (${models.length}):`,
+      `${providerId ? `Available models for ${providerId}` : "Configured/current models"} (${models.length}):`,
       ...models.map((model) => this.formatModel(model)),
     ].join("\n"));
   }
@@ -161,6 +200,13 @@ export class ThreadApp {
 
   private handleModelCommand(args: string[]): CommandResult {
     if (args.length === 0) return this.modelStatus();
+    if (args[0] === "all") {
+      if (args.length !== 1) throw new Error("Usage: /model all");
+      if (!this.modelCatalog) {
+        throw new Error("Full model listing is unavailable because this application was opened without a model catalog");
+      }
+      return this.modelStatus("all");
+    }
     if (args[0] === "list") {
       if (args.length > 2) throw new Error("Usage: /model list [provider]");
       return this.modelList(args[1]);
@@ -205,31 +251,6 @@ export class ThreadApp {
       capsules: this.capsules,
       signal: options.signal,
     };
-    const isNewCommand = input === "/new" || (input.startsWith("/new") && /\s/.test(input[4] ?? ""));
-    if (isNewCommand) {
-      if (input.trim() !== "/new") throw new Error("Usage: /new");
-      safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
-      try {
-        const checkpoint = await this.versions.startNewConversation();
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
-        safeUiEvent(options.onUiEvent, {
-          type: "head_changed",
-          branch: this.versions.currentBranch.name,
-          checkpointId: checkpoint.id,
-          reason: "command",
-        });
-        return {
-          kind: "command",
-          result: ephemeral(
-            `Started a new session at ${checkpoint.id}; workspace retained and previous context remains at ${checkpoint.parentCheckpointIds[0]}`,
-            true,
-          ),
-        };
-      } catch (error) {
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
-        throw error;
-      }
-    }
     const isClearCommand = input === "/clear" || (input.startsWith("/clear") && /\s/.test(input[6] ?? ""));
     if (isClearCommand) {
       if (input.trim() !== "/clear") throw new Error("Usage: /clear");
