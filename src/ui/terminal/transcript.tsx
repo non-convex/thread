@@ -1,3 +1,4 @@
+import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, For, Index, Show, type Accessor, type JSX } from "solid-js";
 import type { LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, dimItalic, italic } from "./theme.js";
@@ -197,34 +198,50 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
 
 /* ── Thinking preview ─────────────────────────────────────────────────────
  * Completed thinking is no longer fully hidden: a collapsed block keeps up
- * to five clipped source lines visible, and clicking anywhere in the block
- * toggles the full wrapped text.
+ * to five terminal rows visible, and clicking anywhere in the block toggles
+ * the full wrapped text.
  */
 const COLLAPSED_THINKING_LINES = 5;
+// There is no terminal width in the shared transcript resource. Use a
+// conservative estimate so narrow terminals still get an expand affordance;
+// an unnecessary affordance is safer than clipped text with no way to reveal it.
+const THINKING_ESTIMATE_COLUMNS = 40;
 
-function thinkingLines(content: string): string[] {
-  const trimmed = content.trim();
-  return trimmed ? trimmed.split("\n") : [];
+type StringSource = string | Accessor<string>;
+
+function sourceValue(source: StringSource | undefined, fallback: string): string {
+  return (typeof source === "function" ? source() : source ?? fallback).trim();
+}
+
+function estimatedThinkingLines(content: string): number {
+  if (!content) return 0;
+  return content.split("\n").reduce(
+    (total, line) => total + Math.max(1, Math.ceil([...line].length / THINKING_ESTIMATE_COLUMNS)),
+    0,
+  );
 }
 
 function ThinkingView(props: {
-  content: string;
-  heading?: string;
+  content: StringSource;
+  heading?: StringSource;
   resources: ThreadViewResources;
 }) {
   const theme = props.resources.theme;
   const [expanded, setExpanded] = createSignal(false);
-  const lines = createMemo(() => thinkingLines(props.content));
-  const collapsible = () => lines().length > COLLAPSED_THINKING_LINES;
-  const visible = () =>
-    expanded() || !collapsible() ? lines() : lines().slice(0, COLLAPSED_THINKING_LINES);
-  const heading = () => `◇ ${props.heading ?? "thinking"}`;
+  const content = createMemo(() => sourceValue(props.content, ""));
+  const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
+  const collapsible = () => estimatedLines() > COLLAPSED_THINKING_LINES;
+  const heading = () => `◇ ${sourceValue(props.heading, "thinking")}`;
   return (
     <box
       flexDirection="column"
       width="100%"
       marginBottom={1}
-      onMouseDown={() => setExpanded((value) => !value)}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT && collapsible()) {
+          setExpanded((value) => !value);
+        }
+      }}
     >
       <box flexDirection="row" width="100%" height={1}>
         <text
@@ -236,24 +253,45 @@ function ThinkingView(props: {
           selectable={false}
         >
           {collapsible()
-            ? `${heading()} ${expanded() ? "▾" : "▸"} ${lines().length} lines · click to ${expanded() ? "collapse" : "expand"}`
+            ? `${heading()} ${expanded() ? "▾" : "▸"} ${estimatedLines()} lines · click to ${expanded() ? "collapse" : "expand"}`
             : heading()}
         </text>
       </box>
-      <For each={visible()}>
-        {(line) => (
-          <text
-            fg={theme.thinkingDim}
-            attributes={italic}
-            wrapMode={expanded() ? "word" : "none"}
-            truncate={!expanded()}
-            marginLeft={2}
-            selectable={false}
-          >
-            {line}
-          </text>
-        )}
-      </For>
+      <Show when={content()}>
+        <Show
+          when={expanded()}
+          fallback={
+            <box
+              flexDirection="column"
+              width="100%"
+              maxHeight={COLLAPSED_THINKING_LINES}
+              overflow="hidden"
+            >
+              <text
+                fg={theme.thinkingDim}
+                attributes={italic}
+                wrapMode="word"
+                marginLeft={2}
+                selectable={false}
+              >
+                {content()}
+              </text>
+            </box>
+          }
+        >
+          <box flexDirection="column" width="100%">
+            <text
+              fg={theme.thinkingDim}
+              attributes={italic}
+              wrapMode="word"
+              marginLeft={2}
+              selectable={false}
+            >
+              {content()}
+            </text>
+          </box>
+        </Show>
+      </Show>
     </box>
   );
 }
@@ -311,7 +349,7 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
             </box>
           }
         >
-          <ThinkingView content={item().content} resources={props.resources} />
+          <ThinkingView content={() => item().content} resources={props.resources} />
         </Show>
       }
     >
@@ -331,8 +369,8 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
       when={block().streaming}
       fallback={
         <ThinkingView
-          content={block().content}
-          heading={duration() ? `thought ${duration()}` : "thinking"}
+          content={() => block().content}
+          heading={() => (duration() ? `thought ${duration()}` : "thinking")}
           resources={props.resources}
         />
       }

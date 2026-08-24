@@ -295,6 +295,60 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   }
 });
 
+test("completed thinking clips to five rows and expands on mouse click", async () => {
+  const viewResources = resources();
+  const state = createUiState("main", "checkpoint-123456789", [
+    {
+      id: "think-long",
+      kind: "thinking",
+      content: "first-preview ".repeat(40) + "tail-marker",
+    },
+  ]);
+  const meta: TerminalMeta = {
+    rootPath: process.cwd(),
+    modelLabel: "faux/reasoner",
+    modelName: "reasoner",
+    thinkingLevel: "high",
+    supportsThinking: true,
+    contextPercent: 0,
+    uncommitted: false,
+  };
+  const viewModel = fakeViewModel(state, meta);
+  const setup = await testRender(
+    () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
+    { width: 80, height: 24, screenMode: "alternate-screen", kittyKeyboard: true },
+  );
+  try {
+    await setup.flush();
+    let frame = setup.captureCharFrame();
+    assert.match(frame, /click to expand/, "long thinking exposes the expand affordance");
+    assert.match(frame, /first-preview/, "the collapsed preview keeps its beginning visible");
+    assert.doesNotMatch(frame, /tail-marker/, "the collapsed preview clips the long tail");
+
+    await setup.mockMouse.click(4, 4);
+    await setup.flush();
+    frame = setup.captureCharFrame();
+    assert.match(frame, /click to collapse/, "clicking the block expands it");
+    assert.match(frame, /tail-marker/, "the expanded block renders the full content");
+
+    await setup.mockMouse.click(4, 4);
+    await setup.flush();
+    frame = setup.captureCharFrame();
+    assert.match(frame, /click to expand/, "clicking the block again collapses it");
+    assert.doesNotMatch(frame, /tail-marker/, "the collapsed block hides the long tail again");
+
+    state.transcript = [{ id: "think-short", kind: "thinking", content: "short thought" }];
+    viewModel.notify();
+    await setup.flush();
+    frame = setup.captureCharFrame();
+    assert.doesNotMatch(frame, /click to (?:expand|collapse)/, "short thinking has no collapse affordance");
+    assert.match(frame, /short thought/);
+  } finally {
+    setup.renderer.destroy();
+    viewResources.syntaxStyle.destroy();
+  }
+});
+
 test("the /model overlay moves its highlight view-side, without a controller round-trip", async () => {
   const viewResources = resources();
   const state = createUiState("main", "checkpoint-123456789", [
