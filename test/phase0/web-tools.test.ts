@@ -10,6 +10,7 @@ import {
   extractTextFromHtml,
   parseMcpSearchResponse,
   selectWebSearchProvider,
+  type WebToolFetch,
 } from "../../src/tools/web.js";
 
 const context = {
@@ -41,7 +42,7 @@ test("websearch selects its provider and parses JSON or SSE MCP results", () => 
 test("websearch sends an Exa MCP tool call and returns its model-visible text", async () => {
   let requestedUrl = "";
   let requestedBody = "";
-  const fetchImpl: typeof fetch = async (input, init) => {
+  const fetchImpl: WebToolFetch = async (input, init) => {
     requestedUrl = String(input);
     requestedBody = typeof init?.body === "string" ? init.body : "";
     return new Response(
@@ -82,7 +83,7 @@ test("webfetch converts HTML to Markdown or text and rejects oversized responses
   assert.doesNotMatch(convertHtmlToMarkdown(html), /secret/);
   assert.equal(extractTextFromHtml(html), "TitleHello web.");
 
-  const fetchImpl: typeof fetch = async () =>
+  const fetchImpl: WebToolFetch = async () =>
     new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
   const tool = createWebFetchTool({ fetch: fetchImpl });
   const markdown = await tool.execute({ url: "https://example.com/page" }, context);

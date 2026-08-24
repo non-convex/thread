@@ -6,8 +6,9 @@ import test from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { ThreadApp, type InputResult } from "../../src/app.js";
 import { createConfiguredModelCatalog, PiModelCatalog } from "../../src/agent/model-client.js";
+import { loadModelConfig } from "../../src/config/model-config.js";
 import { createUiState, moveModelSelection, openEphemeralView } from "../../src/ui/state.js";
-import { ScreenDocumentComponent } from "../../src/ui/terminal/components.js";
+import { ThreadTuiController } from "../../src/ui/terminal/controller.js";
 import { commitAll, initRepository } from "../helpers/git-fixture.js";
 
 function commandContent(result: InputResult): string {
@@ -40,6 +41,43 @@ test("configured model catalogs hide built-ins from the default list", () => {
   assert.ok(catalog.listAll().length > catalog.list().length);
 });
 
+test("thread model config preserves the default and per-model thinking levels", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "thread-thinking-config-"));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const configPath = path.join(fixture, "config.json");
+  await writeFile(configPath, JSON.stringify({
+    model: { provider: "relay", id: "reasoner" },
+    defaultThinkingLevel: "high",
+    providers: {
+      relay: {
+        name: "Relay",
+        api: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        apiKeyEnv: "THREAD_TEST_API_KEY",
+        models: [{
+          id: "reasoner",
+          reasoning: true,
+          contextWindow: 16_000,
+          maxTokens: 4_000,
+          thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high" },
+        }],
+      },
+    },
+  }));
+
+  const loaded = await loadModelConfig(configPath);
+  assert.equal(loaded?.config.defaultThinkingLevel, "high");
+  assert.deepEqual(loaded?.config.providers.relay?.models[0]?.thinkingLevelMap, {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+  });
+  const client = createConfiguredModelCatalog(loaded!.config.providers).createClient("relay", "reasoner");
+  assert.deepEqual(client.supportedThinkingLevels, ["low", "medium", "high"]);
+});
+
 test("/model reports, lists, and switches every runtime model consumer", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-model-command-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
@@ -56,6 +94,13 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     provider: "beta",
     models: [{ id: "team/beta-model", name: "Beta Model", reasoning: true, contextWindow: 16_000, maxTokens: 4_000 }],
   });
+  beta.getModel()!.thinkingLevelMap = {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+  };
   const gamma = fauxProvider({
     provider: "gamma",
     models: [{ id: "hidden-model", name: "Hidden Model", contextWindow: 32_000, maxTokens: 8_000 }],
@@ -72,6 +117,7 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     rootPath: root,
     model: catalog.createClient("alpha", "alpha-model"),
     modelCatalog: catalog,
+    thinkingLevel: "high",
   });
   const signal = new AbortController().signal;
 
@@ -93,10 +139,13 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     assert.equal(ui.screen.models[ui.screen.selected]?.modelId, "team/beta-model");
     moveModelSelection(ui.screen, 1);
     assert.equal(ui.screen.models[ui.screen.selected]?.modelId, "alpha-model");
-    const renderedPicker = new ScreenDocumentComponent(() => ui).render(120).join("\n");
-    assert.match(renderedPicker, /alpha\/alpha-model/);
-    assert.match(renderedPicker, /beta\/team\/beta-model/);
-    assert.doesNotMatch(renderedPicker, /gamma\/hidden-model/);
+
+    const controller = new ThreadTuiController(app);
+    await controller.submit("/model");
+    assert.equal(controller.state.screen.type, "model_picker");
+    controller.closeView();
+    assert.equal(controller.state.screen.type, "session");
+    controller.dispose();
 
     const allResult = await app.handleInput("/model all", { signal });
     const allView = allResult.kind === "command" ? allResult.result.view : undefined;
@@ -118,20 +167,40 @@ test("/model reports, lists, and switches every runtime model consumer", async (
     assert.equal(switched.kind === "command" ? switched.result.changedState : false, true);
     assert.equal(app.model?.providerId, "beta");
     assert.equal(app.model?.modelId, "team/beta-model");
-    assert.equal(app.capsules.modelLabel, "beta/team/beta-model");
+    assert.equal(app.thinkingLevel, "high");
+    assert.deepEqual(app.availableThinkingLevels, ["low", "medium", "high"]);
+    assert.equal(app.capsules.modelLabel, "beta/team/beta-model:high");
 
-    beta.setResponses([fauxAssistantMessage("answered by beta")]);
+    beta.setResponses([
+      (_context, options) => {
+        assert.equal(options?.reasoning, "high");
+        return fauxAssistantMessage("answered by beta");
+      },
+    ]);
     const turn = await app.handleInput("which model handles this?", { signal });
     assert.equal(turn.kind, "turn");
     assert.equal(beta.state.callCount, 1);
     assert.equal(alpha.state.callCount, 0);
+
+    assert.equal(app.cycleThinkingLevel(), "low");
+    assert.equal(app.thinkingLevel, "low");
+    assert.equal(app.capsules.modelLabel, "beta/team/beta-model:low");
+    beta.setResponses([
+      (_context, options) => {
+        assert.equal(options?.reasoning, "low");
+        return fauxAssistantMessage("answered with low reasoning");
+      },
+    ]);
+    await app.handleInput("use the next thinking level", { signal });
 
     assert.match(
       commandContent(await app.handleInput("/model alpha alpha-model", { signal })),
       /Switched model from beta\/team\/beta-model to alpha\/alpha-model/,
     );
     assert.equal(app.model?.providerId, "alpha");
-    assert.equal(app.capsules.modelLabel, "alpha/alpha-model");
+    assert.equal(app.thinkingLevel, "off");
+    assert.equal(app.cycleThinkingLevel(), undefined);
+    assert.equal(app.capsules.modelLabel, "alpha/alpha-model:off");
     await app.handleInput("/model gamma/hidden-model", { signal });
     const pickerWithCurrent = await app.handleInput("/model", { signal });
     const currentView = pickerWithCurrent.kind === "command" ? pickerWithCurrent.result.view : undefined;

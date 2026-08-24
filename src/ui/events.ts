@@ -9,9 +9,10 @@ export type UiEvent =
       checkpointId: string;
       reason: "turn" | "command" | "switch" | "restore" | "merge" | "recovery";
     }
-  | { type: "turn_started"; turnId: string; input: string; branch: string }
+  | { type: "turn_started"; turnId: string; userEntryId?: string; input: string; branch: string }
   | { type: "assistant_started"; step: number }
   | { type: "assistant_text_delta"; step: number; delta: string }
+  | { type: "assistant_thinking_delta"; step: number; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_finished"; id: string; name: string; result: ToolResult; isError: boolean }
   | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }
@@ -28,6 +29,7 @@ export type UiEventSink = (event: UiEvent) => void;
 /** Keeps model token cadence independent from terminal frame cadence. */
 export class UiEventBatcher {
   private pendingText = "";
+  private pendingThinking = "";
   private pendingStep = 0;
   private timer: NodeJS.Timeout | undefined;
 
@@ -37,32 +39,53 @@ export class UiEventBatcher {
   ) {}
 
   push(event: UiEvent): void {
-    if (event.type === "assistant_text_delta") {
-      if (this.pendingText && event.step !== this.pendingStep) this.flush();
+    if (event.type === "assistant_text_delta" || event.type === "assistant_thinking_delta") {
+      if (event.step !== this.pendingStep) this.flush();
+      if (event.type === "assistant_text_delta" && this.pendingThinking) this.flush();
+      if (event.type === "assistant_thinking_delta" && this.pendingText) this.flush();
       this.pendingStep = event.step;
-      this.pendingText += event.delta;
+      if (event.type === "assistant_text_delta") this.pendingText += event.delta;
+      else this.pendingThinking += event.delta;
       this.timer ??= setTimeout(() => this.flush(), this.intervalMs);
       return;
     }
     this.flush();
-    this.target(event);
+    this.emit(event);
   }
 
   flush(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    if (!this.pendingText) return;
-    const event: UiEvent = {
-      type: "assistant_text_delta",
-      step: this.pendingStep,
-      delta: this.pendingText,
-    };
-    this.pendingText = "";
-    this.target(event);
+    if (this.pendingThinking) {
+      const event: UiEvent = {
+        type: "assistant_thinking_delta",
+        step: this.pendingStep,
+        delta: this.pendingThinking,
+      };
+      this.pendingThinking = "";
+      this.emit(event);
+    }
+    if (this.pendingText) {
+      const event: UiEvent = {
+        type: "assistant_text_delta",
+        step: this.pendingStep,
+        delta: this.pendingText,
+      };
+      this.pendingText = "";
+      this.emit(event);
+    }
   }
 
   dispose(): void {
     this.flush();
+  }
+
+  private emit(event: UiEvent): void {
+    try {
+      this.target(event);
+    } catch {
+      // A renderer failure must not alter the durable agent operation.
+    }
   }
 }
 

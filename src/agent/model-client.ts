@@ -3,9 +3,11 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
+  type ModelThinkingLevel,
   type Models,
   type MutableModels,
   createProvider,
+  getSupportedThinkingLevels,
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -21,6 +23,7 @@ export interface ModelRequestOptions {
   reasoning?: ThinkingLevel;
   sessionId?: string;
   onTextDelta?: (delta: string) => void;
+  onThinkingDelta?: (delta: string) => void;
 }
 
 export interface ModelClient {
@@ -28,6 +31,8 @@ export interface ModelClient {
   readonly providerId: string;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
+  readonly reasoning?: boolean;
+  readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
   completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string>;
 }
@@ -52,6 +57,8 @@ export class PiModelClient implements ModelClient {
   readonly providerId: string;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
+  readonly reasoning: boolean;
+  readonly supportedThinkingLevels: readonly ModelThinkingLevel[];
 
   constructor(
     private readonly models: Models,
@@ -61,6 +68,8 @@ export class PiModelClient implements ModelClient {
     this.providerId = model.provider;
     this.contextWindow = model.contextWindow;
     this.maxOutputTokens = model.maxTokens;
+    this.reasoning = model.reasoning;
+    this.supportedThinkingLevels = getSupportedThinkingLevels(model);
   }
 
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
@@ -70,10 +79,9 @@ export class PiModelClient implements ModelClient {
       ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
       sessionId: options.sessionId ?? `thread:${this.providerId}:${this.modelId}`,
     });
-    if (options.onTextDelta) {
-      for await (const event of stream) {
-        if (event.type === "text_delta") options.onTextDelta(event.delta);
-      }
+    for await (const event of stream) {
+      if (event.type === "text_delta") options.onTextDelta?.(event.delta);
+      if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
     }
     return stream.result();
   }
@@ -171,6 +179,7 @@ function registerCustomProvider(models: MutableModels, providerId: string, confi
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
+      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
       ...(model.samplingParams ? { samplingParams: model.samplingParams } : {}),
       ...(compat ? { compat: compat as NonNullable<Model<Api>["compat"]> } : {}),
     };

@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "./model-client.js";
 
 export interface SemanticRequest {
@@ -15,14 +16,18 @@ export interface SemanticRunner {
 export class ModelSemanticRunner implements SemanticRunner {
   readonly modelLabel: string;
 
-  constructor(private readonly client: ModelClient) {
-    this.modelLabel = `${client.providerId}/${client.modelId}`;
+  constructor(
+    private readonly client: ModelClient,
+    private readonly reasoning?: ThinkingLevel,
+  ) {
+    this.modelLabel = `${client.providerId}/${client.modelId}${reasoning ? `:${reasoning}` : ":off"}`;
   }
 
   run(request: SemanticRequest): Promise<string> {
     return this.client.completeText(request.systemPrompt, request.prompt, {
       signal: request.signal,
       maxTokens: request.maxTokens,
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
   }
 }

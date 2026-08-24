@@ -3,6 +3,7 @@
     "provider": "my-relay",
     "id": "claude-sonnet-4-6"
   },
+  "defaultThinkingLevel": "medium",
   "providers": {
     "my-relay": {
       "name": "My Anthropic-compatible relay",

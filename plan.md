@@ -32,7 +32,7 @@ Project Session
 8. `/thread merge` 分开处理 workspace 和 context；context 第一版只提供“保留当前分支”和“总结并引入另一分支信息”两种策略。
 9. 提供小而稳定的工具、命令和事件扩展接口。
 10. 提供一个真正可用的终端界面：正常对话、流式运行、工具状态、历史恢复，以及不写入主会话的 diff/merge 临时视图。
-11. v1 只增加两个直接运行时依赖：`@earendil-works/pi-ai` 和 `@earendil-works/pi-tui`；继续使用 Node 文件系统和子进程能力，不引入数据库、React、Solid、Bun 或原生渲染框架。
+11. 模型/provider 层使用 `@earendil-works/pi-ai`；终端层使用 Bun + SolidJS + OpenTUI 原生 core。仍不引入数据库、React 或自研 cell renderer；源码使用者不需要 Zig，发布版提供带运行时和原生库的独立可执行程序。
 
 ### 0.2 明确的取舍
 
@@ -50,9 +50,9 @@ Project Session
 | diff 是否需要 LLM | 确定性 facts 不需要；默认自然语言结果需要隔离的语义调用 |
 | merge 是否合并 context transcript | 不拼接 transcript；保留当前 context，或生成一条有来源的 merge note |
 | 是否记录 model/prompt/tool manifest | 不作为版本内容；只为派生缓存记录必要的 model 与 prompt version |
-| v1 UI | `pi-tui` 组件式 TUI；TTY 默认 fullscreen，保留 regular 模式和非 TTY plain fallback |
-| TUI 长历史 | 主界面只挂载最近的工作窗口；旧记录分页进入 history view，不把整个项目 transcript 常驻渲染树 |
-| TUI 依赖边界 | core 不 import `pi-tui`；结构化运行事件和命令结果先进入 UI projection，再由 terminal/plain adapter 渲染 |
+| v1 UI | OpenTUI + SolidJS；TTY 默认使用常驻 alternate-screen 全屏应用，session 与二级 screen 在同一个 Solid root 内切换，非 TTY 自动 plain fallback |
+| TUI 长历史 | session scrollbox 只投影当前 branch 最近 8 次用户主导交互；完整 session/context/tool records 仍在持久化层 |
+| TUI 依赖边界 | core 不 import OpenTUI/Solid；结构化运行事件和命令结果先进入 renderer-neutral controller/UI projection，再由 terminal/plain adapter 渲染 |
 | v1 持久化 | pi 风格 append-only JSONL 事件日志；启动时重放为内存投影 |
 | SQLite | v1 不实现；Project Session 规模证明文件日志成为瓶颈后再作为 v2 索引/存储方案评估 |
 | 测试策略 | 只测试数据安全、崩溃后禁止重复副作用和最小版本闭环；不建设全面单元/性质/性能测试矩阵 |
@@ -336,55 +336,55 @@ type EphemeralView =
 
 命令的具体参数和输出文案可以在对应 phase 再调整；数据模型不能依赖某一种 CLI 拼写。
 
-### 2.5 TUI 调研结论（2026-08-19）
+### 2.5 TUI 调研结论（2026-08-19，2026-08-24 修订决策）
 
 本节只记录会影响 thread 选型的事实，不照搬三个产品的整体前端架构。
 
 | 项目 | 当前实现 | 值得采用的语义 | 不适合直接采用的部分 |
 |---|---|---|---|
-| pi `0.84.2` | `@earendil-works/pi-tui`；同一 `Component` 树可由 `TuiMainScreen` 或 `TuiAltScreen` 渲染；行级差分 + CSI 2026 synchronized output | main-screen/alt-screen 双模式、Editor、Markdown、ScrollView、overlay、raw input、Bracketed Paste、Kitty 键盘协议、IME 光标、Windows VT 输入和退出恢复 | pi coding-agent 的巨大 `InteractiveMode`、完整 settings/theme/tool renderer 面；其 coding-agent 目前仍把 fullscreen 标为 experimental |
+| pi `0.84.2` | `@earendil-works/pi-tui`；同一 `Component` 树可由 main/alternate renderer 渲染 | Editor、补全、终端输入和退出恢复语义成熟 | 长历史仍需在 JS 侧渲染完整组件文档；布局、美化和复杂页面的长期上限较低 |
 | Claude Code `2.1.88` | 自研 React/Ink 栈：React reconciler + TS Yoga + front/back cell buffer + 16ms 合批 + alternate screen + virtual scroll | UI 是 agent 事件的投影；流式组件与完成组件分离；长 transcript 必须窗口化；modal/diff 不应污染主消息 | 自建 Fiber host、Yoga、cell renderer、selection/search/virtualization；这已经是独立 UI 平台，不符合 mini harness |
-| OpenCode `dev`（调研时 TUI package `1.18.18`） | OpenTUI `0.4.5`：Zig native core + TS binding + SolidJS，alternate screen，60 FPS，route/provider/dialog 体系 | 独立 route 表达临时页面；renderer 独占 stdout；终端能力与业务状态分层 | Bun、Solid、native ABI、平台预编译、Tree-sitter worker 和打包资产会显著扩大开发/分发面 |
-| 当前 thread | `readline.question()` + `stdout.write()` | 只适合作为 plain fallback | 无法可靠局部刷新、固定 footer、全屏临时 view、历史选择、复杂输入和 resize |
+| OpenCode / OpenTUI | OpenTUI `0.5.7`：Zig native core + TS binding + SolidJS，split-footer / alternate-screen、增量 Markdown、Yoga 布局和 route/dialog 体系 | native diff rendering、高性能布局；终端能力与业务状态分层；语义 theme token 易于继续美化 | Bun、Solid、native ABI、平台预编译和 parser assets 扩大发布体积，需要建立真正的平台产物链路 |
+| 当前 Thread | OpenTUI alternate-screen 全屏应用；session transcript、live turn、composer 与二级 screen 共用一个 Solid root | 状态投影和 renderer 分层；transcript 有界、viewport culling、输入区固定，screen 切换不污染 conversation | 单文件发布约百 MiB；原生 ABI 要固定版本并按平台构建 |
 
 源码锚点：
 
-- pi：`D:\WORK\codex-projects\pi\packages\tui\src\tui-main-screen.ts`、`tui-alt-screen.ts`、`terminal.ts`、`components/editor.ts`，以及 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`。
-- Claude Code：`D:\WORK\projects\claude-code-complete-guide_v2\src\ink/`、`src/screens/REPL.tsx`、`src/ink/components/ScrollBox.tsx`。
+- pi：[TUI 源码](https://github.com/earendil-works/pi/tree/main/packages/tui/src)以及 coding-agent 的 interactive mode。
+- Claude Code 逆向参考仓库：`src/ink/`、`src/screens/REPL.tsx`、`src/ink/components/ScrollBox.tsx`。
 - OpenCode：[TUI app](https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/app.tsx)、[TUI package](https://github.com/anomalyco/opencode/blob/dev/packages/tui/package.json)、[OpenTUI](https://github.com/anomalyco/opentui)、[renderer modes](https://opentui.com/docs/core-concepts/renderer/)。
 
-结论不是“pi-tui 功能最多”，而是它已经解决本项目最容易踩坑且最不具产品差异的终端底层问题，同时保持 Node + TypeScript + 小型组件 API。OpenTUI 更适合完整 IDE 级 TUI；Claude Code 的方案只适合已有数百组件并愿意维护渲染器团队的产品。
+最初在把工作量作为主要约束时倾向 pi-tui；当决策明确为“不考虑迁移工作量，优先流畅性能和未来美观化”后，结论改为 OpenTUI + SolidJS。关键理由不是追求 IDE 规模，而是 OpenTUI 已直接提供 native layout/rendering、alternate-screen、增量 Markdown、scrollbox 和可组合 theme primitives，Thread 不必自己维护 renderer。
 
 ### 2.6 技术选型与依赖边界
 
-采用本机 pi monorepo 中的 `@earendil-works/pi-tui`，版本与 `pi-ai` 对齐并固定：
+固定兼容的 Bun、OpenTUI 和 SolidJS 版本；模型层继续使用公开发行的 pi-ai：
 
 ```json
 {
   "dependencies": {
-    "@earendil-works/pi-ai": "file:../../codex-projects/pi/packages/ai",
-    "@earendil-works/pi-tui": "file:../../codex-projects/pi/packages/tui"
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@opentui/core": "0.5.7",
+    "@opentui/solid": "0.5.7",
+    "solid-js": "1.9.12"
   }
 }
 ```
 
-这条决策明确取代“唯一运行时依赖是 pi-ai”的旧约束。仍然不依赖 `pi-agent-core` 或 `pi-coding-agent`，也不复制其 `InteractiveMode`。不 vendor/fork `pi-tui`：vendor 会把终端兼容代码的维护责任转移到本仓库，比增加一个固定依赖更重。
+运行与构建统一使用 Bun 1.3.14；`bunfig.toml` preload 和 `@opentui/solid/bun-plugin` 负责编译 Solid JSX。仍然不依赖 `pi-agent-core` 或 `pi-coding-agent`，也不 vendor/fork OpenTUI。源码安装由 OpenTUI optional package 自动选择当前平台的预编译 native core，不要求用户安装 Zig。
 
-依赖只允许出现在 `src/ui/terminal/`。agent loop、session、versions、commands、tools 和 extensions 都不能 import `pi-tui` 类型。这样未来替换 renderer 不影响持久化格式、命令语义和版本模型。
+OpenTUI/Solid 依赖只允许出现在 `src/ui/terminal/` 和构建脚本。agent loop、session、versions、commands、tools 和 extensions 不能 import renderer 类型；`ThreadTuiController` 维护 renderer-neutral 的 `UiState`，Solid view 只订阅 revision 并投影该状态。这样未来替换 renderer 不影响持久化格式、命令语义和版本模型。
 
-`pi-tui@0.84.2` 要求 Node `>=22.19.0`，包内还携带 Windows/macOS 的 terminal native helper/prebuild；它不是 native renderer，但安装和发布时不能漏掉这些资产。使用本机 `file:` 依赖时必须确保 `dist/` 已构建，打包 smoke 只检查一次 Windows 启动/退出和 native helper fallback，不建立平台矩阵。
+发布不能让最终用户手工拼装 Bun/Solid/native library。普通源码构建保留 npm dependencies；tag release 使用 Bun compile 在 Windows、Linux、macOS 的 x64/Arm64 原生 runner 上生成独立程序并打包上传。每个平台都从自己的 optional OpenTUI package 嵌入 native core 和 parser assets；`--help` 与 TTY lifecycle 都从最终产物验证。
 
 运行模式：
 
 ```text
-TTY（默认）     → TuiAltScreen / fullscreen
---tui regular  → TuiMainScreen / 原生 terminal scrollback
-非 TTY         → PlainPresenter / 无 ANSI、无 raw mode
+TTY session              → alternate-screen / transcript scrollbox + 固定底部输入区
+model/diff/merge/history → 同一 Solid root 内的全屏二级 screen
+非 TTY 或 --tui plain   → PlainPresenter / 无 ANSI、无 raw mode
 ```
 
-fullscreen 是主体验，因为 diff、merge、history 都需要固定 viewport 和可返回的临时 route。regular 使用同一组消息、editor、status、footer 组件，只改变 layout 与临时 view 的呈现方式；plain 不维护第二套业务状态，只消费相同事件和 `CommandResult`。
-
-选择 fullscreen 默认值是 thread 自己的产品决策，不是照搬 pi 默认值。鉴于 pi coding-agent 当前把它标为 experimental，Phase 1 必须先通过本项目唯一一次真实 Windows TTY lifecycle smoke；若发现阻断问题，发布版临时把 regular 设为默认，不改变 UI state、component 或 command view 架构。
+renderer 在交互进程生命周期内保持 `alternate-screen + passthrough`；session、model、diff、merge、history 和 document 只切换 `UiState.screen`，不切换终端 screen mode。`--tui fullscreen` 是首选名称，`hybrid`/`regular` 仅保留为 CLI 兼容别名。plain 不维护另一套业务状态，只消费相同事件和 `CommandResult`。
 
 ### 2.7 UI 事件管线
 
@@ -398,6 +398,7 @@ type UiEvent =
   | { type: "turn_started"; turnId: string; input: string; branch: string }
   | { type: "assistant_started"; step: number }
   | { type: "assistant_text_delta"; step: number; delta: string }
+  | { type: "assistant_thinking_delta"; step: number; delta: string }
   | { type: "tool_started"; id: string; name: string; args: unknown }
   | { type: "tool_finished"; id: string; name: string; result: ToolResult; isError: boolean }
   | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }
@@ -431,50 +432,52 @@ type ScreenState =
   | { type: "merge"; preview: ThreadMergePreview; selectedContext: "keep-current" | "summarize" };
 ```
 
-主 fullscreen layout 固定为：
+主 session 与二级页面由同一个全屏渲染树管理：
 
 ```text
-VStack
-├── ScrollView(TranscriptWindow, follow=end)  # 唯一主滚动区
-├── Pending/Running status                    # 有内容时才占行
-├── Editor                                    # 多行输入、slash/path autocomplete
-└── Footer                                    # thread branch、version、context、model
+OpenTUI alternate-screen root
+└── Switch(UiState.screen)
+    ├── SessionScreen
+    │   ├── transcript + LiveTurn scrollbox   # 最近 8 次交互 + thinking → tool → reply
+    │   ├── slash/path suggestions            # 有内容时覆盖在输入区上方
+    │   ├── Pending/Running status
+    │   ├── Textarea                          # 多行输入、slash/path autocomplete
+    │   └── Footer                            # thread branch、version、context、model/thinking
+    └── model/diff/merge/history/document screen
 ```
 
 交互规则：
 
-1. `/new`、`/clear`、`/compact`、`/thread ...` 与 `/rewind ...` 均由 harness 在 LLM 前拦截；command input 不进入 transcript。
+1. `/clear`、`/compact`、`/model`、`/thread ...` 与 `/rewind ...` 均由 harness 在 LLM 前拦截；command input 不进入 transcript。
 2. 普通 command 可以显示一条短 inline notice；`diff`、`merge`、`history` 打开独立 screen，`Esc` 返回原 session，结果不追加成消息。
 3. `/thread diff` view 先显示 semantic summary，再显示可独立核验的 context facts 和 workspace facts；semantic 缺失时 view 仍完整可用。
 4. `/thread merge <ref>` 先计算 preview，用户在 view 中选择 `keep-current` 或 `summarize`，确认后才 apply。workspace conflict 只显示确定性报告并阻止 apply；v1 不在 TUI 中实现 conflict editor/continue/abort。
    plain/automation 场景可显式传入 `--context=keep-current|summarize` 直接执行，省略该参数才返回交互 preview。
 5. merge note 预览必须标记 `generated` 和来源 ref；v1 只读展示，不增加文本编辑器。只有确认 merge 后才 append `context_merge` entry。
 6. history view 用 turn/user-message 列表选择恢复点，默认恢复到该用户消息之前；确认页明确显示将恢复的 workspace checkpoint 与 context head。
-7. 键盘是一等输入：`Esc` 关闭 view/中断活动操作，`Ctrl+C` 清空当前输入或二次退出，`j/k`/方向键滚动，`Enter` 选择。鼠标滚动可用但任何动作都不能只靠鼠标完成。
+7. 键盘是一等输入：`Esc` 关闭 view/中断活动操作，`Ctrl+C` 清空当前输入或二次退出，方向键/Page Up/Page Down 滚动，`Enter` 选择；模型/历史列表额外接受 `j/k`。session scrollbox 使用 sticky-bottom 跟随流式输出，用户手动上滚后停止抢回位置。任何动作都不能只靠鼠标完成。
 8. footer 不显示虚假的百分比进度；运行态只显示 elapsed time、当前 step/tool 和可中断提示。
-9. `/new` 在当前 Thread Branch 上创建“workspace 不变、context head 为空”的 checkpoint；用户获得空会话，旧上下文及其中的 compaction 项目状态仍可经 checkpoint 历史恢复。
+9. Project Session 不提供主动清空 context 的命令。用户需要隔离实验时创建 branch；长期上下文体积统一由自动或手动 compaction 管理。
 10. `/clear` 只在 terminal adapter 中记录当前 context entry 作为显示隐藏锚点；不写 session log、不移动 lane、不改变后续 LLM 上下文。
-11. user/assistant 正文使用 `pi-tui` 的 `Markdown` 组件和 thread 自有的语义主题；不得把 Markdown 降级为带标记的原始字符串换行。会话正文设可读宽度上限，表格、中文宽字符和流式未闭合 fence 交给 `pi-tui` 处理。
+11. user/assistant 正文使用 OpenTUI `MarkdownRenderable` 和 Thread 自有的语义主题；流式 leaf 开启 incremental streaming，并以稳定 block 位置保留同一个 renderable，只更新 `content`，不能按 token batch 销毁重建。正文设置可读宽度上限，表格、中文宽字符和未闭合 fence 交给 OpenTUI native core。
 12. `/compact` 强制执行一次 runtime compaction，但不作为用户消息进入 transcript；成功后创建内部 command checkpoint 保持 branch head 与 lane 一致，它不是 `/thread commit`。
 
 ### 2.9 长 Project Session 的渲染策略
 
-`pi-tui` 的 `ScrollView` 会渲染其 child 的完整文档再裁剪 viewport；它不是 Claude Code/OpenCode 式 message virtualization。因为本产品的 session 可能贯穿整个项目，不能把所有历史 entry 永久挂到一个 `Container`。
+session screen 使用常驻 OpenTUI scrollbox，但只投影有界的 transcript，因此实时组件数不随 Project Session 总长度增长。
 
-v1 采用逻辑窗口而不是自研 variable-height virtual list：
-
-1. session screen 初始只装载当前 branch 最近 40 个 turns，并设置约 2,000 个 rendered lines 的硬上限；先到任一上限即停止。
-2. tool 默认只显示一行 call summary 和一行 result summary；用户展开时才创建 Markdown/code body。
-3. 窗口顶部显示“更早历史”哨兵；触发后进入分页 history view，而不是向主 transcript 无限 prepend。
-4. compaction 前后的原始消息仍可从 session log 查询；UI window 不参与上下文装配，也不改变 restore/diff 的事实源。
-5. resize 只重排当前 window；宽度变化不触发全历史读取。
-6. v1 不做平滑的任意位置虚拟滚动。只有真实使用证明 history view 不够，才评估 message height cache + viewport virtualization。
+1. 新进程、restore/switch 和每个完成 turn 都从当前 branch path 投影最近 8 个 user-led interactions；更早条目不挂载到渲染树。
+2. 活动 turn 作为 `LiveTurn.blocks` 追加在稳定 transcript 后面，并按到达顺序显示 thinking、tool 与 reply；完成后由 durable session entry 替换 live state。
+3. tool 历史默认只显示一行 call/result summary；thinking 用弱化文本保留；原始 durable entry 不受 UI 摘要影响。
+4. `/clear` 记录当前进程内的隐藏锚点；restore、switch 和 merge 重新计算 transcript projection。
+5. diff/merge/history/document 使用同一 alternate-screen root 和 viewport culling；离开时销毁对应 screen subtree并返回 session。
+6. compaction 前后的原始消息仍可从 session log 查询；可见 transcript 不参与上下文装配，也不改变 restore/diff 的事实源。
 
 终端兼容底线：
 
-- renderer 负责 raw mode、Bracketed Paste、键盘协议、宽字符、IME hardware cursor、resize 和 synchronized output；业务组件只能使用 `visibleWidth`、wrap/truncate helpers，不能手写列宽算法。
-- 所有 start 都必须有 `try/finally stop()`；同时处理正常退出、SIGINT/SIGTERM、未捕获异常，确保恢复 cursor、raw mode 和 terminal protocol。
-- 颜色优先使用 terminal default background 和有限 ANSI token，不在 v1 建主题市场、图片协议或 24-bit 背景设计系统。
+- renderer 负责 raw mode、Bracketed Paste、Kitty 键盘协议、宽字符、hardware cursor、resize 和 synchronized output；业务层不手写 cell width 或 ANSI diff。
+- 所有 start 都必须有 `try/finally destroy()`；同时处理正常退出、SIGINT/SIGTERM/SIGHUP 和 renderer destroy，确保恢复 cursor、raw mode 和 terminal protocol。
+- 颜色通过少量 dark/light semantic token 集中定义，为未来美化保留稳定入口；v1 不建主题市场、图片协议或任意插件 theme API。
 - 小于 60 columns 时隐藏次要 footer 字段并使用纵向 facts；diff/merge 永不要求并排 pane。
 
 ---
@@ -761,7 +764,7 @@ v1 不宣称 filesystem atomic。目标是：恢复前有安全点、操作有�
 
 ### 5.1 pi-ai 接口边界
 
-使用本机 `D:\WORK\codex-projects\pi\packages\ai` 的 `@earendil-works/pi-ai`。Phase 0 以实际源码与小型 spike 锁定以下接口：
+使用 npm 发布的 `@earendil-works/pi-ai`。Phase 0 以实际源码与小型 spike 锁定以下接口：
 
 - `createModels()` 与 provider 注册；
 - `models.stream()` / `completeSimple()`；
@@ -781,12 +784,12 @@ CLI 默认以 `process.cwd()` 作为启动位置并解析其所属 Git worktree�
 
 ```text
 1. InputRouter 判定为普通消息并锁定当前 BranchRef
-2. 捕获 turn_base checkpoint（parent 是当前 branch head；session head 尚未包含本条用户消息），以一个 batch event 前进 BranchRef
+2. 锁定 turn_base 的 parent、session head 和 checkpoint id，并异步开始捕获 workspace；快照完成后以一个 batch event 前进 BranchRef，但不倒退正在运行的 lane
 3. 预分配 entry/result ids，写 operation_started
-4. append user message entry，创建 Turn 记录
+4. append user message entry，创建 Turn 记录；UI 可以立即显示该 turn
 5. buildSessionContext；必要时执行独立 compaction operation
-6. 预分配 assistant entry id，写 step_attempt
-7. 调用 pi-ai stream，append assistant entry 与 usage
+6. 预分配 assistant entry id 并 enqueue step_attempt；该非 flush 记录与模型请求并行写入
+7. 调用 pi-ai stream；首次模型请求与 turn_base workspace 捕获并行，但 append assistant entry、工具执行和 settle 必须等待 turn_base durable，随后 append assistant entry 与 usage
 8. 对每个 tool call：
    a. 运行 before_tool_call hook
    b. 预分配 result entry id，写 tool_started
@@ -1012,7 +1015,7 @@ src/
 ├── ui/
 │   ├── state.ts           UiState、screen reducer、session projection
 │   ├── events.ts          UiEvent 与 delta accumulator
-│   ├── terminal/          pi-tui adapter、components、key bindings、lifecycle
+│   ├── terminal/          renderer-neutral controller、OpenTUI/Solid view、theme、completion、lifecycle
 │   └── plain/             非 TTY/pipe 的纯文本 presenter
 ├── agent/                 loop、model runtime、context assembler、compaction
 ├── session/               entries、records、JSONL log、tree、reducer
@@ -1108,7 +1111,7 @@ type SessionLogRecord =
 
 - 从本机 package 确认 exports 与 provider 初始化方式。
 - 用一个 faux provider smoke 跑通 stream、tool call、abort、usage 和 one-shot semantic call。
-- 确认 Node 版本和 TypeScript 运行方式。
+- 确认 Bun 版本、Solid JSX preload/plugin 和 TypeScript 类型检查方式。
 
 #### 0B. workspace sidecar
 
@@ -1128,8 +1131,8 @@ type SessionLogRecord =
 ### Phase 1：session 与最小 agent loop
 
 - 建立单 package、CLI 和 append-only session log。
-- 增加固定版本的 `@earendil-works/pi-tui`，确认 Node `>=22.19.0`、本地 `dist` 和 native helper/prebuild 可用；只允许 `src/ui/terminal/` import，并建立 fullscreen、regular、plain 三种 adapter。
-- 把 `onTextDelta` 扩展为结构化 `UiEvent`，让输入路由器补充 command/head 事件；实现 session screen、transcript window、Editor、运行状态和 Footer，text delta 以 16–33ms 合批。
+- 增加固定版本的 Bun、`@opentui/core`、`@opentui/solid` 与 `solid-js`；只允许 terminal adapter/build scripts import renderer，并建立 full-screen TUI 与 plain fallback。
+- 把 `onTextDelta` 扩展为结构化 `UiEvent`，让输入路由器补充 command/head 事件；实现有界 transcript scrollbox、Textarea、运行状态、Footer 和应用内二级 screen，text delta 以 16–33ms 合批。
 - TUI 激活时独占 stdout；实现 raw mode/terminal protocol 的 `try/finally`、signal 和 crash cleanup，工具输出与 debug log 不得绕过 renderer。
 - 实现 Project Session 自动创建/恢复、append-only entries/records、命名 lanes 与 branch traversal。
 - 实现 `buildSessionContext()` 和 compaction entry 语义。
@@ -1138,7 +1141,7 @@ type SessionLogRecord =
 - 实现工具 registry 与 `read/list/grep/write/edit/bash`。
 - 实现 pi 语义的 operation recovery 子集。
 
-退出条件：faux provider 可以在 fullscreen TUI 中完成多 step tool turn，regular/plain fallback 可用；正常退出和中断后终端状态恢复；重启后自动回到同一个 Project Session，session tree 和 open-operation 判定一致，`replay=never` 工具不盲目重放。
+退出条件：faux provider 可以在 full-screen TUI 中完成多 step tool turn，稳定 transcript 与 live turn 正确交接，应用内二级 screen/plain fallback 可用；正常退出和中断后终端状态恢复；重启后自动回到同一个 Project Session，session tree 和 open-operation 判定一致，`replay=never` 工具不盲目重放。
 
 ### Phase 2：Checkpoint DAG、BranchRef 与历史消息恢复
 
@@ -1149,7 +1152,7 @@ type SessionLogRecord =
 - 启动时检测当前工作区 drift；无 open operation 时把人工变化接到当前 branch，有 open operation 时交给 recovery reducer。
 - 维护 `Turn.userEntryId → baseCheckpointId` 映射。
 - 实现分页 history screen 和 plain 模式的 `/rewind <turn-id>` 入口；选择消息后显示恢复前确认信息。
-- 实现 `/new` 的空 context checkpoint，以及 `/clear` 的纯显示隐藏锚点。
+- 实现 `/clear` 的纯显示隐藏锚点；不提供主动遗忘整个 context 的命令。
 - 实现 workspace/context/both restore、safety checkpoint、BranchRef 移动和分支继续。
 - 覆盖 completed/aborted/failed/crashed turn。
 
@@ -1203,13 +1206,13 @@ type SessionLogRecord =
 
 ## 12. 最小验证原则
 
-v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局、格式化输出、CLI 文案或简单数据映射编写测试。默认验证方式是 TypeScript 类型检查、少量数据安全集成检查和一次真实 TTY smoke；只有失败会造成版本丢失、重复副作用、破坏用户工作区或让终端停留在损坏状态时，才增加自动化检查。
+v1 不追求覆盖率数字，也不为普通 getter 或纯格式化输出建立穷举矩阵。默认验证方式是 TypeScript 类型检查、数据安全集成检查、OpenTUI 定点字符快照、构建 smoke 和真实 TTY lifecycle；渲染所有权、screen-mode 转换或终端恢复出现过真实风险时，应保留对应回归检查。
 
 ### 12.1 发布前仅保留的必要检查
 
 1. **sidecar 数据安全**：一个综合 fixture 完成 snapshot → mutate → restore → resnapshot，并在主仓库 rewrite/GC 后证明受保护 tree 仍可读取。
 2. **durable recovery**：事件日志尾行中断可恢复；已 flush 的 `tool_started(replay=never)` 在重启后不会重复执行工具。
-3. **最小版本与 TUI 闭环 smoke**：用 faux provider 在 fullscreen 中完成一个含流式文本和工具调用的 turn，打开 history/diff/merge view、resize、返回并中断一次，确认 cursor/raw mode 被恢复；然后创建 thread branch、切换、commit、diff facts、restore 和一次 clean merge，确认重启后仍能继续当前 branch。regular/plain 只各启动并退出一次。
+3. **最小版本与 TUI 闭环 smoke**：用 faux provider 在 full-screen TUI 中完成一个含 thinking、流式 Markdown 和工具调用的 turn，确认 live block 组件身份稳定且完成后由 durable transcript 接管；打开 model/history/diff/merge screen、resize、返回并中断一次，确认 cursor/raw mode 被恢复；然后创建 thread branch、切换、commit、diff facts、restore 和一次 clean merge，确认重启后仍能继续当前 branch。plain 启动并退出一次。
 4. **破坏性操作安全**：restore 前产生 safety checkpoint；workspace merge conflict 不修改当前工作区。
 
 这些检查优先写成少量端到端或集成脚本，不把同一行为拆成大量单元测试。某个真实 bug 若可能再次造成数据丢失、重复副作用或工作区破坏，再为它补一个定点回归检查。
@@ -1220,8 +1223,8 @@ v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局�
 - 不对每一种 completed/aborted/failed 组合建立测试矩阵。
 - 不穷举 provider、模型、操作系统和文件类型组合。
 - 不为 semantic 文案、capsule 内容或 prompt 输出写脆弱断言。
-- 不做 terminal/颜色/宽度/键位的组合矩阵，不保存 TUI screenshot/golden snapshot。
-- 不建立 benchmark suite、覆盖率门槛或 CI 矩阵。
+- 不做 terminal/颜色/宽度/键位的组合矩阵；只保留 renderer ownership 与关键 screen transition 的小型字符快照，不保存大幅 screenshot golden。
+- 不建立 benchmark suite 或覆盖率门槛；CI 只覆盖 Bun check/test/build，release 才使用按平台原生编译矩阵。
 - 不预先做故障注入框架；只保留 12.1 中两个直接关系数据安全的 crash case。
 
 ### 12.3 性能边界
@@ -1230,7 +1233,7 @@ v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局�
 - Git 路径操作必须 batch，避免为每个文件启动一个子进程。
 - capsule 只在显式 commit 或 semantic diff/merge 需要时生成。
 - semantic prompt 有硬 token budget，并明确报告省略材料。
-- session screen 最多挂载最近 40 turns 或约 2,000 rendered lines；旧历史分页读取，不能随 Project Session 总长度增加常驻组件数。
+- session transcript 只挂载最近 8 次 user-led interactions，live tree 只额外挂载当前 turn；常驻组件数不能随 Project Session 总长度增加。
 - text delta 每 16–33ms 最多触发一次 UI flush；tool body 默认折叠，resize 只重排当前 transcript window。
 - 不为 v1 建专门性能测试；只有真实项目中出现可感知延迟，再测量并优化具体热点。
 
@@ -1245,14 +1248,13 @@ v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局�
 | session log 已记录 checkpoint 但 keep ref 落后 | 固定写序、sidecar GC 锁、启动 reconciliation |
 | BranchRef 与 lane leaf/checkpoint 不一致 | 相关变化写入单条 batch record、branch reflog、启动 reducer 修复或拒绝继续 |
 | Project Session 日志长期增长导致启动变慢 | v1 先保持单文件和内存投影；出现真实瓶颈后在 v2 引入分段、projection snapshot 或 SQLite 索引 |
-| pi-tui 升级改变 API 或终端行为 | 与 pi-ai 一起固定精确版本；依赖局限在 terminal adapter；只使用公开 Component/TUI/Editor/ScrollView API |
-| pi fullscreen renderer 仍标为 experimental | 默认 fullscreen 只在真实 Windows TTY lifecycle smoke 通过后发布；regular 使用同一组件树，是可立即切换的发布 fallback |
-| 本地 file dependency 构建/打包漏掉 dist 或 native helper | 固定 Node 版本和 build 顺序；发布 smoke 从最终安装产物启动一次，不对源码目录的偶然构建状态作假设 |
-| 项目级 transcript 让 ScrollView 重绘越来越慢 | session screen 设置 40 turns/约 2,000 lines 双上限；旧历史进入分页 view；tool body 默认折叠 |
-| 流式 token 造成 render storm | delta accumulator 以 16–33ms 合批；只有 streaming leaf、status 和 footer 可变 |
+| OpenTUI/Solid API 或 native ABI 变化 | 精确固定 OpenTUI 0.5.7 与 Solid 1.9.12；依赖局限在 terminal adapter；升级必须经过字符快照、build 和真实 TTY smoke |
+| 单文件构建漏掉 native core/parser assets | Bun compile 从各平台原生 runner 构建；最终产物在独立目录执行 `--help` 和 TTY lifecycle，不依赖源码 `node_modules` |
+| 项目级 transcript 让实时树越来越慢 | transcript projection 固定为最近 8 次用户主导交互并启用 viewport culling；tool 历史默认摘要 |
+| 流式 token 造成 render storm或 Markdown 闪烁 | delta accumulator 以 16–33ms 合批；append-only live blocks 用稳定索引保留 renderable，只更新当前 leaf 的 content |
 | 工具或扩展直写 stdout 破坏全屏画面 | TUI 激活时 renderer 独占 stdout；shell 输出 capture；debug 写 sidecar log；退出后再显示 fatal error |
 | 异常退出遗留 raw mode、隐藏 cursor 或键盘协议 | 所有 start/stop 成对放入 `try/finally`，并覆盖 SIGINT/SIGTERM 与 uncaught exception；发布 smoke 必查 terminal restoration |
-| 旧终端、SSH 或自动化环境不支持 fullscreen | 提供 `--tui regular` 与自动 plain fallback；键盘路径完整，鼠标和高级 keyboard protocol 只是增强 |
+| 旧终端、SSH 或自动化环境不支持交互 TUI | 非 TTY 自动 plain fallback，并提供 `--tui plain`；键盘路径完整，鼠标和高级 keyboard protocol 只是增强 |
 | restore 覆盖用户未保存或 ignored 文件 | restore 前 safety checkpoint、collision plan、scope 外路径拒绝覆盖 |
 | compaction/capsule 丢失语义细节 | raw entries 永久保留；capsule 标记为有损；事实 diff 可分页查看原文 |
 | Project Session 长期反复 compaction 导致目标逐渐模糊 | compaction 项目状态选择性传递稳定事实，用较新证据和日期覆盖过时内容；raw entries 永久保留，并允许用户查看/修正摘要 |
@@ -1281,9 +1283,9 @@ v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局�
 - filesystem-level atomic restore/merge 承诺。
 - ignored 文件、空目录和子模块内部状态快照。
 - 多 agent、并行执行多个 branch/lane、subagent、MCP 和插件 sandbox。
-- 自研 React reconciler/Yoga/cell renderer，或引入 OpenTUI、Solid、Bun、Zig/native renderer 栈。
+- 自研 React reconciler/Yoga/cell renderer，或 vendor/fork OpenTUI native core；终端底层由固定上游版本负责。
 - Claude Code/OpenCode 级的全历史平滑 virtual scroll、文本选择引擎、diff conflict editor、command palette、主题市场、图片协议和 IDE 式鼠标交互。
-- 为 regular/plain 模式维护另一套业务状态；它们只渲染同一个 UiState/CommandResult。
+- 为 terminal/plain 模式维护另一套业务状态；它们只投影同一个 UiState/CommandResult。
 - `blame-step`、`trace`、`bisect` 或逐工具回归定位。
 
 ---
@@ -1304,4 +1306,4 @@ v1 不追求测试覆盖率，也不为普通 getter、registry、组件布局�
 10. sidecar 在主仓库 rewrite/GC 后仍可独立读取所有受保护 checkpoint。
 11. 长期项目知识通过版本化 compaction 项目状态传递，不依赖外部 memory 系统；扩展可以注册工具、命令和最小事件钩子。
 12. 所有 LLM 参与点都明确区分：主会话、compaction、临时 semantic call，以及唯一会写回上下文的 merge note。
-13. TTY 默认提供可持续使用的 fullscreen TUI；history/diff/merge 是可返回且不污染 session 的临时 screen，长 session 不会把全部 transcript 常驻渲染树，所有退出路径会恢复终端。
+13. TTY 默认提供 full-screen TUI：可见 transcript 有界且 live Markdown 增量更新；model/history/diff/merge 是可返回且不污染 session 的应用内 screen，所有退出路径会恢复 cursor、raw mode 与键盘协议。

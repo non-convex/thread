@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const DEFAULT_THREAD_HOME_NAME = ".thread";
 export const DEFAULT_MODEL_CONFIG_FILE = "config.json";
@@ -19,6 +20,7 @@ export interface CustomModelConfig {
   input: ("text" | "image")[];
   contextWindow: number;
   maxTokens: number;
+  thinkingLevelMap?: ThinkingLevelMap;
   samplingParams?: Record<string, unknown>;
   compat?: Record<string, unknown>;
 }
@@ -36,6 +38,7 @@ export interface CustomProviderConfig {
 
 export interface ThreadModelConfig {
   model?: ModelSelectionConfig;
+  defaultThinkingLevel?: ModelThinkingLevel;
   providers: Record<string, CustomProviderConfig>;
 }
 
@@ -74,6 +77,29 @@ function optionalUnknownRecord(value: unknown, label: string): Record<string, un
   return value === undefined ? undefined : object(value, label);
 }
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function thinkingLevel(value: unknown, label: string): ModelThinkingLevel {
+  if (typeof value !== "string" || !THINKING_LEVELS.includes(value as ModelThinkingLevel)) {
+    throw new Error(`${label} must be off, minimal, low, medium, high, xhigh, or max`);
+  }
+  return value as ModelThinkingLevel;
+}
+
+function optionalThinkingLevelMap(value: unknown, label: string): ThinkingLevelMap | undefined {
+  if (value === undefined) return undefined;
+  const input = object(value, label);
+  const result: ThinkingLevelMap = {};
+  for (const [key, mapped] of Object.entries(input)) {
+    const level = thinkingLevel(key, `${label} key`);
+    if (mapped !== null && typeof mapped !== "string") {
+      throw new Error(`${label}.${key} must be a string or null`);
+    }
+    result[level] = mapped;
+  }
+  return result;
+}
+
 function parseModel(value: unknown, label: string): CustomModelConfig {
   const input = object(value, label);
   const contextWindow = positiveInteger(input.contextWindow, `${label}.contextWindow`);
@@ -91,6 +117,7 @@ function parseModel(value: unknown, label: string): CustomModelConfig {
     throw new Error(`${label}.reasoning must be a boolean`);
   }
   const id = string(input.id, `${label}.id`);
+  const thinkingLevelMap = optionalThinkingLevelMap(input.thinkingLevelMap, `${label}.thinkingLevelMap`);
   const samplingParams = optionalUnknownRecord(input.samplingParams, `${label}.samplingParams`);
   const compat = optionalUnknownRecord(input.compat, `${label}.compat`);
   return {
@@ -100,6 +127,7 @@ function parseModel(value: unknown, label: string): CustomModelConfig {
     input: modelInput,
     contextWindow,
     maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(samplingParams ? { samplingParams } : {}),
     ...(compat ? { compat } : {}),
   };
@@ -196,7 +224,10 @@ function parseConfig(value: unknown): ThreadModelConfig {
       providers[providerId] = parseProvider(providerId, provider);
     }
   }
-  return { ...(model ? { model } : {}), providers };
+  const defaultThinkingLevel = input.defaultThinkingLevel === undefined
+    ? undefined
+    : thinkingLevel(input.defaultThinkingLevel, "defaultThinkingLevel");
+  return { ...(model ? { model } : {}), ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}), providers };
 }
 
 export function getThreadHome(): string {
@@ -250,16 +281,28 @@ async function loadPiModelConfig(): Promise<LoadedModelConfig | undefined> {
       providers[providerId] = parsePiProvider(providerId, provider);
     }
     let model: ModelSelectionConfig | undefined;
+    let defaultThinkingLevel: ModelThinkingLevel | undefined;
     const settingsPath = path.join(piDir, "settings.json");
     try {
       const settings = object(await readJson(settingsPath, "pi settings"), "pi settings");
       if (typeof settings.defaultProvider === "string" && typeof settings.defaultModel === "string") {
         model = { provider: settings.defaultProvider, id: settings.defaultModel };
       }
+      if (settings.defaultThinkingLevel !== undefined) {
+        defaultThinkingLevel = thinkingLevel(settings.defaultThinkingLevel, "settings.defaultThinkingLevel");
+      }
     } catch (error) {
       if (!isMissingFileError(error)) throw error;
     }
-    return { path: modelsPath, source: "pi", config: { ...(model ? { model } : {}), providers } };
+    return {
+      path: modelsPath,
+      source: "pi",
+      config: {
+        ...(model ? { model } : {}),
+        ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
+        providers,
+      },
+    };
   } catch (error) {
     throw new Error(`Invalid pi model config ${modelsPath}: ${error instanceof Error ? error.message : String(error)}`);
   }

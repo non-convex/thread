@@ -1,4 +1,4 @@
-import { type Message } from "@earendil-works/pi-ai";
+import { type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "../domain.js";
 import type { SessionService } from "../session/service.js";
 import { estimateContextTokens } from "../utils/estimate.js";
@@ -101,6 +101,7 @@ export interface CompactionOptions {
   minRetainTurns?: number;
   maxSummaryTokens?: number;
   safetyTokens?: number;
+  reasoning?: ThinkingLevel;
 }
 
 export interface CompactionObserver {
@@ -130,6 +131,7 @@ export class ContextCompactor {
   private readonly minRetainTurns: number;
   private readonly maxSummaryTokens: number;
   private readonly safetyTokens: number;
+  private readonly reasoning: ThinkingLevel | undefined;
 
   constructor(
     private readonly session: SessionService,
@@ -139,6 +141,7 @@ export class ContextCompactor {
     this.minRetainTurns = options.minRetainTurns ?? 2;
     this.maxSummaryTokens = Math.min(options.maxSummaryTokens ?? 4_000, model.maxOutputTokens);
     this.safetyTokens = options.safetyTokens ?? CONTEXT_SAFETY_TOKENS;
+    this.reasoning = options.reasoning;
     if (this.minRetainTurns < 1) throw new Error("minRetainTurns must be at least 1");
     if (this.maxSummaryTokens < 1) throw new Error("maxSummaryTokens must be at least 1");
   }
@@ -410,7 +413,11 @@ export class ContextCompactor {
     maxTokens: number,
     signal: AbortSignal,
   ): Promise<string> {
-    const result = await this.model.completeText(systemPrompt, prompt, { signal, maxTokens });
+    const result = await this.model.completeText(systemPrompt, prompt, {
+      signal,
+      maxTokens,
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+    });
     if (!result.trim()) throw new Error("Compaction model returned an empty summary");
     return result.trim();
   }

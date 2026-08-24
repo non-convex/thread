@@ -2,6 +2,7 @@ import {
   type AssistantMessage,
   type Context,
   type Message,
+  type ThinkingLevel,
   type ToolCall,
   isContextOverflow,
   validateToolArguments,
@@ -23,6 +24,7 @@ export interface AgentLoopOptions {
   systemPrompt?: string;
   maxSteps?: number;
   maxOutputTokens?: number;
+  reasoning?: ThinkingLevel;
 }
 
 export interface RunTurnOptions {
@@ -50,6 +52,7 @@ export class AgentLoop {
   private readonly systemPrompt: string;
   private readonly maxSteps: number;
   private readonly maxOutputTokens: number;
+  private readonly reasoning: ThinkingLevel | undefined;
   private readonly compactor: ContextCompactor;
 
   constructor(
@@ -66,7 +69,10 @@ export class AgentLoop {
     this.maxOutputTokens =
       options.maxOutputTokens ??
       Math.min(model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(model.contextWindow * 0.2)));
-    this.compactor = new ContextCompactor(session, model);
+    this.reasoning = options.reasoning;
+    this.compactor = new ContextCompactor(session, model, {
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+    });
   }
 
   async compactCurrent(options: RunTurnOptions): Promise<ManualCompactionResult> {
@@ -146,8 +152,12 @@ export class AgentLoop {
 
   async run(input: string, options: RunTurnOptions): Promise<TurnResult> {
     if (!input.trim()) throw new Error("User message cannot be empty");
-    const branchName = this.versions.currentBranch.name;
-    const base = await this.versions.captureTurnBase();
+    const base = this.versions.startTurnBaseCapture();
+    // The capture can fail before the two required durable appends below have
+    // completed. Observe it immediately; turnReady handles and reports the same
+    // rejection once the prepared operation exists.
+    void base.completion.catch(() => undefined);
+    const branchName = base.branchName;
     const operationId = createId("operation");
     const userEntryId = createId("entry");
     const turnId = createId("turn");
@@ -178,8 +188,25 @@ export class AgentLoop {
       outcome: "running",
       startedAt,
     };
-    await this.session.store.append(() => ({ type: "turn_started", turn }), { flush: true });
-    safeUiEvent(options.onUiEvent, { type: "turn_started", turnId, input, branch: branchName });
+    const preparationAbort = new AbortController();
+    let preparationFailure: Error | undefined;
+    const turnReady = base.completion.then(async (checkpoint) => {
+      if (checkpoint.id !== turn.baseCheckpointId) throw new Error("Turn base checkpoint changed during capture");
+      await this.session.store.append(() => ({ type: "turn_started", turn }), { flush: true });
+      return turn;
+    });
+    void turnReady.catch((error) => {
+      preparationFailure = error instanceof Error ? error : new Error(String(error));
+      preparationAbort.abort(preparationFailure);
+    });
+    const runSignal = AbortSignal.any([options.signal, preparationAbort.signal]);
+    safeUiEvent(options.onUiEvent, {
+      type: "turn_started",
+      turnId,
+      userEntryId: userEntry.id,
+      input,
+      branch: branchName,
+    });
 
     const assistantMessages: AssistantMessage[] = [];
     let outcome: TurnResult["outcome"] = "completed";
@@ -188,7 +215,7 @@ export class AgentLoop {
     try {
       await this.extensions.emit("turn_start", { turnId, branch: branchName, input });
       for (let step = 0; step < this.maxSteps; step++) {
-        options.signal.throwIfAborted();
+        runSignal.throwIfAborted();
         const compactionObserver = {
           started: (reason: "manual" | "threshold" | "overflow") =>
             safeUiEvent(options.onUiEvent, { type: "compaction_started", reason }),
@@ -200,7 +227,7 @@ export class AgentLoop {
           branchName,
           assembled.sessionMessages,
           budget,
-          options.signal,
+          runSignal,
           { runId: operationId },
           compactionObserver,
         );
@@ -210,7 +237,7 @@ export class AgentLoop {
         }
         const context = assembled.context;
         const assistantEntryId = createId("entry");
-        await this.session.appendRecord({
+        const stepAttempt = this.session.appendRecord({
           id: createId("record"),
           type: "step_attempt",
           lane: branchName,
@@ -220,15 +247,19 @@ export class AgentLoop {
           resultEntryId: assistantEntryId,
         });
         safeUiEvent(options.onUiEvent, { type: "assistant_started", step: step + 1 });
-        const response = await this.model.stream(context, {
-          signal: options.signal,
+        const [response] = await Promise.all([this.model.stream(context, {
+          signal: runSignal,
           maxTokens: this.maxOutputTokens,
+          ...(this.reasoning ? { reasoning: this.reasoning } : {}),
           sessionId: this.session.store.sessionId,
           onTextDelta: (delta) => {
             options.onTextDelta?.(delta);
             safeUiEvent(options.onUiEvent, { type: "assistant_text_delta", step: step + 1, delta });
           },
-        });
+          onThinkingDelta: (delta) => {
+            safeUiEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: step + 1, delta });
+          },
+        }), turnReady, stepAttempt]);
         assistantMessages.push(response);
         await this.session.appendEntry(
           branchName,
@@ -247,7 +278,7 @@ export class AgentLoop {
             current,
             budget.requestTokens,
             this.compactor.retainedTailBudget(budget.overheadTokens),
-            options.signal,
+            runSignal,
             { runId: operationId },
             "overflow",
             compactionObserver,
@@ -268,15 +299,22 @@ export class AgentLoop {
             assistantEntryId,
             toolIndex,
             calls[toolIndex]!,
-            options.signal,
+            runSignal,
             options.onUiEvent,
           );
         }
       }
       if (!completed) throw new Error(`Agent exceeded maximum step count (${this.maxSteps})`);
     } catch (error) {
-      failure = error instanceof Error ? error : new Error(String(error));
+      failure = preparationFailure ?? (error instanceof Error ? error : new Error(String(error)));
       outcome = options.signal.aborted || failure.name === "AbortError" ? "aborted" : "failed";
+    }
+    try {
+      await turnReady;
+    } catch (error) {
+      const cause = preparationFailure ?? (error instanceof Error ? error : new Error(String(error)));
+      await this.abandonUnstartedTurn(branchName, operationId, base.sessionHeadId, cause, options.signal.aborted);
+      throw cause;
     }
     const result = await this.settle(turn, operationId, outcome, assistantMessages, failure);
     safeUiEvent(options.onUiEvent, {
@@ -294,6 +332,35 @@ export class AgentLoop {
       });
     }
     return result;
+  }
+
+  private async abandonUnstartedTurn(
+    lane: string,
+    operationId: string,
+    sourceLeafId: string | null,
+    error: Error,
+    aborted: boolean,
+  ): Promise<void> {
+    await this.session.store.appendBatch(
+      (seq, timestamp) => [{
+        type: "lane_moved",
+        lane,
+        leafId: sourceLeafId,
+      }, {
+        type: "record_appended",
+        record: {
+          id: createId("record"),
+          seq,
+          timestamp,
+          type: "operation_finished",
+          lane,
+          runId: operationId,
+          outcome: aborted ? "aborted" : "failed",
+          error: { code: error.name || "error", message: error.message },
+        },
+      }],
+      { flush: true },
+    );
   }
 
   private async assembleContext(

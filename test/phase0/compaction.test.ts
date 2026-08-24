@@ -12,7 +12,7 @@ import {
   type Message,
 } from "@earendil-works/pi-ai";
 import { ContextCompactor } from "../../src/agent/compaction.js";
-import type { ModelClient } from "../../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../../src/agent/model-client.js";
 import { SessionLogStore } from "../../src/session/log-store.js";
 import { SessionService } from "../../src/session/service.js";
 
@@ -21,14 +21,14 @@ class RecordingModel implements ModelClient {
   readonly providerId = "test";
   readonly contextWindow = 200_000;
   readonly maxOutputTokens = 4_000;
-  readonly calls: Array<{ systemPrompt: string; prompt: string }> = [];
+  readonly calls: Array<{ systemPrompt: string; prompt: string; reasoning: ModelRequestOptions["reasoning"] }> = [];
 
   async stream(_context: Context): Promise<AssistantMessage> {
     throw new Error("stream is not used by this test");
   }
 
-  async completeText(systemPrompt: string, prompt: string): Promise<string> {
-    this.calls.push({ systemPrompt, prompt });
+  async completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string> {
+    this.calls.push({ systemPrompt, prompt, reasoning: options.reasoning });
     return `project state v${this.calls.length}`;
   }
 }
@@ -49,7 +49,7 @@ test("compaction projects semantic evidence and updates the previous project sta
   });
   const session = new SessionService(store);
   const model = new RecordingModel();
-  const compactor = new ContextCompactor(session, model);
+  const compactor = new ContextCompactor(session, model, { reasoning: "high" });
   const day = new Date(2026, 7, 23, 12).getTime();
   const messages: Message[] = [
     {
@@ -93,6 +93,7 @@ test("compaction projects semantic evidence and updates the previous project sta
     new AbortController().signal,
   );
   assert.ok(first);
+  assert.equal(model.calls[0]!.reasoning, "high");
   assert.match(model.calls[0]!.prompt, /first durable requirement/);
   assert.match(model.calls[0]!.prompt, /visible tool evidence/);
   assert.match(model.calls[0]!.prompt, /"date":"2026-08-23"/);

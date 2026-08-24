@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import { clearDisplayResult, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { registerBuiltinCommands, rewindCommand } from "./commands/builtins.js";
 import { parseCommandLine } from "./commands/parser.js";
@@ -27,12 +28,16 @@ export interface ThreadAppOptions {
   rootPath: string;
   model?: ModelClient;
   modelCatalog?: ModelCatalog;
+  thinkingLevel?: ModelThinkingLevel;
   systemPrompt?: string;
 }
 
 export type InputResult =
   | { kind: "command"; result: CommandResult }
   | { kind: "turn"; result: TurnResult };
+
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
 
 export class ThreadApp {
   readonly extensionApi: ExtensionAPI;
@@ -52,6 +57,8 @@ export class ThreadApp {
   private readonly systemPrompt: string | undefined;
   private readonly commandRouter: ThreadCommandRouter;
   private currentModel: ModelClient | undefined;
+  private preferredThinkingLevel: ModelThinkingLevel;
+  private currentThinkingLevel: ModelThinkingLevel = "off";
   private loop: AgentLoop | undefined;
 
   private constructor(
@@ -76,6 +83,7 @@ export class ThreadApp {
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);
     this.extensionApi = createExtensionAPI(this.tools, this.commands, this.events);
+    this.preferredThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
     this.configureRuntime(options.model);
   }
 
@@ -98,12 +106,60 @@ export class ThreadApp {
     return this.currentModel;
   }
 
+  get thinkingLevel(): ModelThinkingLevel {
+    return this.currentThinkingLevel;
+  }
+
+  get supportsThinking(): boolean {
+    return this.currentModel?.reasoning === true;
+  }
+
+  get availableThinkingLevels(): readonly ModelThinkingLevel[] {
+    return this.thinkingLevelsFor(this.currentModel);
+  }
+
+  cycleThinkingLevel(): ModelThinkingLevel | undefined {
+    if (!this.currentModel?.reasoning) return undefined;
+    const levels = this.thinkingLevelsFor(this.currentModel);
+    const currentIndex = levels.indexOf(this.currentThinkingLevel);
+    this.preferredThinkingLevel = levels[(currentIndex + 1) % levels.length]!;
+    this.configureRuntime(this.currentModel);
+    return this.currentThinkingLevel;
+  }
+
+  private thinkingLevelsFor(model: ModelClient | undefined): readonly ModelThinkingLevel[] {
+    if (!model?.reasoning) return ["off"];
+    const levels = model.supportedThinkingLevels?.filter((level, index, values) => values.indexOf(level) === index);
+    return levels && levels.length > 0 ? levels : ["off", "minimal", "low", "medium", "high"];
+  }
+
+  private clampThinkingLevel(model: ModelClient | undefined, requested: ModelThinkingLevel): ModelThinkingLevel {
+    const available = this.thinkingLevelsFor(model);
+    if (available.includes(requested)) return requested;
+    const requestedIndex = THINKING_LEVELS.indexOf(requested);
+    for (let index = requestedIndex; index < THINKING_LEVELS.length; index++) {
+      const candidate = THINKING_LEVELS[index]!;
+      if (available.includes(candidate)) return candidate;
+    }
+    for (let index = requestedIndex - 1; index >= 0; index--) {
+      const candidate = THINKING_LEVELS[index]!;
+      if (available.includes(candidate)) return candidate;
+    }
+    return available[0] ?? "off";
+  }
+
+  private requestReasoning(): ThinkingLevel | undefined {
+    return this.currentThinkingLevel === "off" ? undefined : this.currentThinkingLevel;
+  }
+
   private configureRuntime(model: ModelClient | undefined): void {
-    const semantic = model ? new ModelSemanticRunner(model) : undefined;
+    this.currentModel = model;
+    this.currentThinkingLevel = this.clampThinkingLevel(model, this.preferredThinkingLevel);
+    const reasoning = this.requestReasoning();
+    const semantic = model ? new ModelSemanticRunner(model, reasoning) : undefined;
     this.capsules = new CapsuleService(this.session, this.cache, semantic);
     this.diff = new DiffService(this.versions, this.session, this.capsules, this.cache, semantic);
     this.merge = new MergeService(this.versions, this.session, this.capsules, semantic);
-    this.currentModel = model;
     this.loop = model
       ? new AgentLoop(
           this.rootPath,
@@ -112,7 +168,10 @@ export class ThreadApp {
           this.versions,
           this.tools,
           this.events,
-          this.systemPrompt ? { systemPrompt: this.systemPrompt } : {},
+          {
+            ...(this.systemPrompt ? { systemPrompt: this.systemPrompt } : {}),
+            ...(reasoning ? { reasoning } : {}),
+          },
         )
       : undefined;
   }
@@ -133,7 +192,7 @@ export class ThreadApp {
         name: current.modelId,
         contextWindow: current.contextWindow,
         maxOutputTokens: current.maxOutputTokens,
-        reasoning: false,
+        reasoning: current.reasoning ?? false,
       };
     return [...models, descriptor].sort((left, right) =>
       left.providerId.localeCompare(right.providerId) || left.modelId.localeCompare(right.modelId),
@@ -150,6 +209,9 @@ export class ThreadApp {
         `Current model: ${this.currentModel.providerId}/${this.currentModel.modelId}`,
         `Context window: ${this.currentModel.contextWindow.toLocaleString("en-US")} tokens`,
         `Maximum output: ${this.currentModel.maxOutputTokens.toLocaleString("en-US")} tokens`,
+        ...(this.supportsThinking
+          ? [`Thinking level: ${this.currentThinkingLevel} (Shift+Tab to cycle)`]
+          : []),
         scopeLine,
         "Use /model list [provider] or /model <provider>/<model> to switch.",
       ].join("\n")

@@ -17,10 +17,21 @@ export interface CreateCheckpointOptions {
   reason: InternalCheckpoint["reason"];
   parentCheckpointIds: string[];
   sessionHeadId: string | null;
+  checkpointId?: string;
   branchName?: string;
+  expectedHeadCheckpointId?: string;
+  moveLane?: boolean;
   outcome?: InternalCheckpoint["outcome"];
   details?: InternalCheckpoint["details"];
   extraEvents?: (seq: number, timestamp: number, checkpoint: InternalCheckpoint) => SessionLogEvent[];
+}
+
+export interface PendingTurnBase {
+  id: string;
+  branchName: string;
+  parentCheckpointId: string;
+  sessionHeadId: string | null;
+  completion: Promise<InternalCheckpoint>;
 }
 
 export interface VersionStatus {
@@ -205,6 +216,33 @@ export class VersionService {
     });
   }
 
+  /**
+   * Starts the workspace-only portion of a turn base without blocking model
+   * preparation. The branch and context parent are locked synchronously, while
+   * the lane is deliberately left alone when the checkpoint is persisted: by
+   * then the running operation may already have appended its user entry.
+   */
+  startTurnBaseCapture(): PendingTurnBase {
+    this.requireIdle();
+    const branchName = this.currentBranch.name;
+    const parentCheckpointId = this.head.id;
+    const sessionHeadId = this.projection.lanes.get(branchName) ?? null;
+    const id = createId("checkpoint");
+    const retentionParent = this.lastRetentionCommitOid;
+    const completion = this.workspace.capture(retentionParent).then((snapshot) =>
+      this.persistCheckpoint(snapshot, {
+        checkpointId: id,
+        reason: "turn_base",
+        parentCheckpointIds: [parentCheckpointId],
+        sessionHeadId,
+        branchName,
+        expectedHeadCheckpointId: parentCheckpointId,
+        moveLane: false,
+      })
+    );
+    return { id, branchName, parentCheckpointId, sessionHeadId, completion };
+  }
+
   async finishTurn(
     turn: Turn,
     operationId: string,
@@ -288,9 +326,15 @@ export class VersionService {
     const branchName = options.branchName ?? this.currentBranch.name;
     const branch = this.projection.branches.get(branchName);
     if (!branch) throw new Error(`Unknown thread branch: ${branchName}`);
+    const expectedHeadCheckpointId = options.expectedHeadCheckpointId ?? branch.headCheckpointId;
+    if (branch.headCheckpointId !== expectedHeadCheckpointId) {
+      throw new Error(
+        `Thread branch ${branchName} moved while capturing a checkpoint: expected ${expectedHeadCheckpointId}, has ${branch.headCheckpointId}`,
+      );
+    }
     const now = Date.now();
     const checkpoint: InternalCheckpoint = {
-      id: createId("checkpoint"),
+      id: options.checkpointId ?? createId("checkpoint"),
       sessionId: this.session.store.sessionId,
       parentCheckpointIds: [...options.parentCheckpointIds],
       sessionHeadId: options.sessionHeadId,
@@ -309,13 +353,15 @@ export class VersionService {
           move: {
             sessionId: this.session.store.sessionId,
             branchName,
-            oldCheckpointId: branch.headCheckpointId,
+            oldCheckpointId: expectedHeadCheckpointId,
             newCheckpointId: checkpoint.id,
             reason: options.reason,
             timestamp,
           },
         },
-        { type: "lane_moved", lane: branchName, leafId: options.sessionHeadId },
+        ...(options.moveLane === false
+          ? []
+          : [{ type: "lane_moved" as const, lane: branchName, leafId: options.sessionHeadId }]),
         ...(options.extraEvents?.(seq, timestamp, checkpoint) ?? []),
       ],
       { flush: true },

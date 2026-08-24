@@ -8,38 +8,41 @@
 
 ## 环境要求
 
-- Node.js 22.19 或更高版本
+- 从源码运行时需要 Bun 1.3.14 或更高版本
 - Git 2.54，或其他支持 `merge-tree --write-tree` 的兼容版本
 - 一个 Git worktree
 
-Harness 依赖 npm 发布的 `@earendil-works/pi-ai` 和 `@earendil-works/pi-tui`，不依赖 pi-agent-core 或 pi-coding-agent。
+源码构建使用 npm 发布的 `@earendil-works/pi-ai`、OpenTUI 和 SolidJS，不依赖 pi-agent-core、pi-coding-agent、本地 Zig 工具链或本地 OpenTUI 源码树。
 
 ```powershell
-npm install
-npm run build
-npm link
+bun install
+bun run build
+bun link
 ```
+
+带 tag 的版本还会在 [GitHub Releases](https://github.com/non-convex/thread/releases) 生成 Windows、Linux、macOS 的 x64/Arm64 独立压缩包。独立可执行程序已经包含 Bun、Solid renderer 和对应平台的 OpenTUI 原生库，使用者无需再安装这些依赖；参与开发时仍建议直接使用体积更小、调试更方便的源码构建。
 
 ## 终端界面
 
-交互式 TTY 默认启动 fullscreen 模式。主界面将会话、活动工具以及固定的编辑器/footer 放在同一屏幕中；`/thread diff`、`/thread merge` 和 `/thread history` 会打开临时页面，这些页面不会追加到 Project Session 会话。`/model` 用于查看或切换运行时模型；`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。`/model`、`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
 
-用户和助手消息由 `pi-tui` 的宽度感知 Markdown 组件渲染。标题、强调、行内代码、代码块、引用、列表、链接和表格都会获得终端原生布局与语义配色；长文本限制在适合阅读的宽度内，命令文档则保持纯文本。
+进程启动、context restore 及后续 turn 完成时，可见 transcript 都限制为最近 8 次完整的用户主导交互。窗口内的 thinking 与紧凑工具轨迹会保留，并维持到达顺序。该限制只影响应用内 transcript；持久化 session、模型上下文和工具记录都不会删减。
+
+思维链、工具调用和助手回复按到达顺序分层显示：思维链更弱、工具行更紧凑、回复使用 Markdown。用户和助手消息使用 OpenTUI 的宽度感知 Markdown renderer。标题、强调、行内代码、代码块、引用、列表、链接和表格都会获得终端原生布局与语义配色。流式正文会保持同一个 Markdown renderable，只增量更新内容，不再随每批 token 重建组件。
 
 ```powershell
-thread --tui fullscreen   # 交互式终端默认模式
-thread --tui regular      # 保留终端原生 scrollback
+thread --tui fullscreen   # 默认：全屏 OpenTUI
 thread --tui plain        # readline/文本输出
 ```
 
-非 TTY 输入或输出会自动选择 plain 模式。在 fullscreen 临时页面中，使用方向键或 `j/k` 滚动，按 `Esc` 返回。`Ctrl+C` 会中断正在执行的工作；空闲时连续按两次可退出。编辑器通过 pi-tui 支持多行输入、bracketed paste、路径补全和 IME 定位。
+`--tui hybrid` 与 `--tui regular` 仍作为 `fullscreen` 的兼容别名接受。非 TTY 输入或输出会自动选择 plain 模式。在二级 screen 中，使用方向键或 Page Up/Page Down 滚动，按 `Esc` 返回。`Ctrl+C` 会中断正在执行的工作；空闲时连续按两次可退出。使用推理模型时，`Shift+Tab` 会循环切换该模型支持的推理档位。OpenTUI 编辑器支持多行输入（`Shift+Enter`）、bracketed paste、项目路径补全和终端感知的光标定位。
 
 ## 运行
 
-完成一次 `npm link` 后，在你希望处理的项目目录中启动 harness。当前目录会被解析为包含它的 Git worktree 根目录：
+完成一次 `bun link` 后（或将独立可执行程序放入 `PATH`），在你希望处理的项目目录中启动 harness。当前目录会被解析为包含它的 Git worktree 根目录：
 
 ```powershell
-Set-Location D:\path\to\a\git-worktree
+Set-Location .\your-git-worktree
 thread
 ```
 
@@ -47,7 +50,8 @@ thread
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.thread"
-Copy-Item D:\WORK\projects\thread\thread.config.example.json "$HOME\.thread\config.json"
+Invoke-WebRequest "https://raw.githubusercontent.com/non-convex/thread/main/thread.config.example.json" `
+  -OutFile "$HOME\.thread\config.json"
 $env:MY_RELAY_API_KEY = "<secret>"
 thread
 ```
@@ -58,7 +62,7 @@ thread
 
 ```text
 ~/.pi/agent/models.json       provider 和模型定义
-~/.pi/agent/settings.json     defaultProvider 和 defaultModel
+~/.pi/agent/settings.json     defaultProvider、defaultModel 和 defaultThinkingLevel
 ```
 
 当 pi 使用非默认目录时，`PI_CODING_AGENT_DIR` 仍然有效。这是 fallback，而不是配置合并：一旦 `~/.thread/config.json` 存在，或显式传入了 `--config`，就不会再加载 pi 配置。显式指定但不存在的配置文件会报错。pi 中的 `apiKey` 字面值、`$KEY`/`${KEY}` 等环境变量模板以及 `!command` 值会在不把密钥复制到 Project Session 的前提下解析。
@@ -66,6 +70,7 @@ thread
 ```json
 {
   "model": { "provider": "my-relay", "id": "claude-sonnet-4-6" },
+  "defaultThinkingLevel": "medium",
   "providers": {
     "my-relay": {
       "name": "My relay",
@@ -86,7 +91,7 @@ thread
 }
 ```
 
-v1 支持的自定义 API 为 `anthropic-messages`、`openai-completions` 和 `openai-responses`。`contextWindow` 是必填项，因为 harness 会据此决定何时压缩；请填写 relay 模型真实的窗口大小。还可以配置 provider `headers`、模型 `samplingParams` 和 pi-ai `compat` 覆盖项。
+v1 支持的自定义 API 为 `anthropic-messages`、`openai-completions` 和 `openai-responses`。`contextWindow` 是必填项，因为 harness 会据此决定何时压缩；请填写 relay 模型真实的窗口大小。`defaultThinkingLevel` 可以是 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`，缺省为 `medium`。还可以配置 provider `headers`、模型 `samplingParams`、逐模型 `thinkingLevelMap` 和 pi-ai `compat` 覆盖项；`thinkingLevelMap` 中的 `null` 表示该档位不受支持。
 
 对于 pi-ai 内置 provider，配置只需包含模型选择，并设置该 provider 常规使用的凭据环境变量：
 
@@ -125,11 +130,13 @@ thread
 /model <provider> <model>
 ```
 
-在 fullscreen 或 regular TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会立即打开第二级列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓（或 `j`/`k`）移动，按 Enter 切换，按 Esc 取消。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
+在全屏 TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会打开第二级列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓（或 `j`/`k`）移动，按 Enter 切换，按 Esc 返回 session screen。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
+
+使用推理模型时，在 session 主界面按 `Shift+Tab` 可以循环切换该模型声明支持的档位，当前档位会显示在 footer 的模型名旁边。这个档位会统一用于主 agent loop、自动与手动 compaction、Context Capsule、semantic diff 和 context merge。切换模型后，当前偏好会自动校准到新模型支持的范围。thread 回退使用 pi 配置时会继承 pi 的 `defaultThinkingLevel`；其他情况下缺省为 `medium`。
 
 Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置模型及当前模型，`/model list <provider>` 输出指定 provider 在完整目录中的全部模型。即使某个模型未显示在默认 picker 中，仍可用 `/model <provider>/<model>` 从完整目录直接切换。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule、semantic diff 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
 
-`/model` 只改变当前运行进程。它不会编辑全局配置，也不会追加 message/checkpoint；重启后仍会按照正常优先级使用 `--provider`/`--model`、`THREAD_PROVIDER`/`THREAD_MODEL` 或配置中的默认值。
+模型和推理档位都只改变当前运行进程，不会编辑全局配置，也不会追加 message/checkpoint；重启后仍会按照正常优先级使用 `--provider`/`--model`、`THREAD_PROVIDER`/`THREAD_MODEL` 以及配置中的默认值。
 
 ## Web 工具
 
@@ -216,7 +223,7 @@ Workspace objects 完全由独立 sidecar 拥有。按时间排列的 retention 
 受信任的本地扩展可以注册 tools、`/thread` commands 和五个事件：`turn_start`、`before_context`、`before_tool_call`、`tool_result` 与 `turn_end`。
 
 ```powershell
-npm start -- --root D:\path\to\repo --extension .\examples\extension.mjs
+bun start -- --root . --extension .\examples\extension.mjs
 ```
 
 参见 [examples/extension.mjs](examples/extension.mjs)。核心 tool 和 command 名称是保留名称，重复注册会失败。
@@ -227,14 +234,15 @@ npm start -- --root D:\path\to\repo --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本项目刻意不维护庞大的测试矩阵。当前保留的检查只覆盖 sidecar 自包含/恢复、中断后不可重放的工具、clean/conflicting merge 安全性，以及一条端到端 Project Session 版本循环。
+本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 
 `thread` 使用或参考了以下外部开源项目：
 
-- [earendil-works/pi](https://github.com/earendil-works/pi)：npm 发布的 [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi/tree/main/packages/ai) 和 [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui) 分别提供模型/provider API 和终端 UI primitives。`src/utils/estimate.ts` 的 context-estimation 逻辑派生自 pi，并保留下方的上游 MIT 归属声明。
-- [OpenCode](https://github.com/anomalyco/opencode)：其 [`websearch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts) 和 [`webfetch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/webfetch.ts) 工具为 thread Web 工具的 provider contract 和用户行为提供了参考；thread 的实现已经适配自身的 tool/runtime 边界。
+- [earendil-works/pi](https://github.com/earendil-works/pi)：npm 发布的 [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi/tree/main/packages/ai) 提供模型/provider API。`src/utils/estimate.ts` 的 context-estimation 逻辑派生自 pi，并保留下方的上游 MIT 归属声明。
+- [OpenTUI](https://github.com/anomalyco/opentui)、[SolidJS](https://github.com/solidjs/solid) 和 [Bun](https://github.com/oven-sh/bun)：OpenTUI 的 Zig-backed core 与 Solid renderer 提供终端布局和渲染运行时，SolidJS 负责响应式 UI 状态传播，Bun 负责运行、构建和单文件编译。Thread 固定兼容的 OpenTUI/Solid 版本，并把原生库一并放入独立可执行程序。
+- [OpenCode](https://github.com/anomalyco/opencode)：其 route-oriented OpenTUI 架构，以及 [`websearch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts) / [`webfetch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/webfetch.ts) 工具，为 Thread 的临时 screen 边界和 Web 工具行为提供了参考；Thread 的实现已经适配自身的状态和 tool runtime。
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：比较 Web 搜索、抓取和 SSRF 权衡时参考了其 [`tool-web`](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/web/tool-web) package。
 - [htmlparser2](https://github.com/fb55/htmlparser2) 和 [Turndown](https://github.com/mixmark-io/turndown)：`webfetch` 用于 HTML 解析和 HTML→Markdown 转换的直接运行时依赖。
 

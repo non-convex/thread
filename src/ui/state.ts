@@ -7,7 +7,7 @@ import type { UiEvent } from "./events.js";
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "tool" | "compaction" | "context_merge";
+  kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "context_merge";
   content: string;
   label?: string;
   isError?: boolean;
@@ -21,12 +21,19 @@ export interface LiveTool {
   result?: ToolResult;
 }
 
+export interface LiveBlock {
+  id: string;
+  kind: "thinking" | "assistant" | "tool";
+  content: string;
+  streaming?: boolean;
+  tool?: LiveTool;
+}
+
 export interface LiveTurn {
   id: string;
   input: string;
   branch: string;
-  assistantText: string;
-  tools: LiveTool[];
+  blocks: LiveBlock[];
   startedAt: number;
 }
 
@@ -129,6 +136,39 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
   }
 }
 
+function endStreaming(live: LiveTurn): LiveTurn {
+  const last = live.blocks.at(-1);
+  if (!last?.streaming) return live;
+  return {
+    ...live,
+    blocks: [...live.blocks.slice(0, -1), { ...last, streaming: false }],
+  };
+}
+
+function appendLiveText(live: LiveTurn, kind: "thinking" | "assistant", delta: string): LiveTurn {
+  if (!delta) return live;
+  const last = live.blocks.at(-1);
+  if (last?.kind === kind && last.streaming) {
+    return {
+      ...live,
+      blocks: [...live.blocks.slice(0, -1), { ...last, content: last.content + delta }],
+    };
+  }
+  const closed = endStreaming(live);
+  return {
+    ...closed,
+    blocks: [
+      ...closed.blocks,
+      {
+        id: `${kind}:${closed.blocks.length + 1}`,
+        kind,
+        content: delta,
+        streaming: true,
+      },
+    ],
+  };
+}
+
 export function moveModelSelection(screen: ModelPickerScreen, delta: number): void {
   if (screen.models.length === 0 || delta === 0) return;
   screen.selected = (screen.selected + delta + screen.models.length) % screen.models.length;
@@ -139,7 +179,9 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
     case "command_started":
       state.busy = true;
-      state.activity = `running /thread ${event.name}`;
+      state.activity = ["clear", "compact", "model", "rewind"].includes(event.name)
+        ? `running /${event.name}`
+        : `running /thread ${event.name}`;
       state.notice = undefined;
       return;
     case "command_finished":
@@ -158,32 +200,61 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
         id: event.turnId,
         input: event.input,
         branch: event.branch,
-        assistantText: "",
-        tools: [],
+        blocks: [],
         startedAt: Date.now(),
       };
       return;
     case "assistant_started":
+      if (state.liveTurn) state.liveTurn = endStreaming(state.liveTurn);
+      state.activity = `thinking · step ${event.step}`;
+      return;
+    case "assistant_thinking_delta":
+      if (state.liveTurn) state.liveTurn = appendLiveText(state.liveTurn, "thinking", event.delta);
       state.activity = `thinking · step ${event.step}`;
       return;
     case "assistant_text_delta":
-      if (state.liveTurn) state.liveTurn.assistantText += event.delta;
+      if (state.liveTurn) state.liveTurn = appendLiveText(state.liveTurn, "assistant", event.delta);
       state.activity = `responding · step ${event.step}`;
       return;
-    case "tool_started":
-      state.liveTurn?.tools.push({
-        id: event.id,
-        name: event.name,
-        args: event.args,
-        status: "running",
-      });
+    case "tool_started": {
+      if (!state.liveTurn) return;
+      const closed = endStreaming(state.liveTurn);
+      state.liveTurn = {
+        ...closed,
+        blocks: [
+          ...closed.blocks,
+          {
+            id: `tool:${event.id}`,
+            kind: "tool",
+            content: "",
+            tool: {
+              id: event.id,
+              name: event.name,
+              args: event.args,
+              status: "running",
+            },
+          },
+        ],
+      };
       state.activity = event.name;
       return;
+    }
     case "tool_finished": {
-      const tool = state.liveTurn?.tools.find((candidate) => candidate.id === event.id);
-      if (tool) {
-        tool.status = event.isError ? "failed" : "completed";
-        tool.result = event.result;
+      if (state.liveTurn) {
+        state.liveTurn = {
+          ...state.liveTurn,
+          blocks: state.liveTurn.blocks.map((block) => {
+            if (block.tool?.id !== event.id) return block;
+            return {
+              ...block,
+              tool: {
+                ...block.tool,
+                status: event.isError ? "failed" : "completed",
+                result: event.result,
+              },
+            };
+          }),
+        };
       }
       state.activity = event.isError ? `${event.name} failed` : event.name;
       return;

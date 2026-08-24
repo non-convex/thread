@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
 import { loadModelConfig } from "../config/model-config.js";
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
-import { ThreadTerminalApp, type TerminalMode } from "../ui/terminal/app.js";
+import type { TerminalMode } from "../ui/terminal/app.js";
 import { discoverGitWorkspace } from "../workspace/discovery.js";
 
 interface CliOptions {
@@ -40,10 +40,9 @@ function parseArgs(argv: string[]): CliOptions {
       if (arg === "--config") options.configPath = value;
       if (arg === "--extension") options.extensions.push(value);
       if (arg === "--tui") {
-        if (value !== "fullscreen" && value !== "regular" && value !== "plain") {
-          throw new Error("--tui requires fullscreen, regular, or plain");
-        }
-        options.tui = value;
+        if (value === "plain") options.tui = "plain";
+        else if (value === "fullscreen" || value === "hybrid" || value === "regular") options.tui = "fullscreen";
+        else throw new Error("--tui requires fullscreen or plain");
       }
     } else throw new Error(`Unknown option: ${arg}`);
   }
@@ -58,14 +57,15 @@ function help(): string {
 
 Usage: thread [--root <git-worktree>] [--config <file>]
                  [--provider <id> --model <id>] [--extension <module>]
-                 [--tui fullscreen|regular|plain]
+                 [--tui fullscreen|plain]
 
-TTY default: fullscreen TUI. Non-TTY input/output automatically uses plain mode.
+TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /model to inspect or switch models, /clear, /compact,
-/thread for version commands, /rewind <turn-id>, or /exit.`;
+/thread for version commands, /rewind <turn-id>, or /exit.
+In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 
 async function main(): Promise<void> {
@@ -74,6 +74,11 @@ async function main(): Promise<void> {
     output.write(`${help()}\n`);
     return;
   }
+  const usePlain = options.tui === "plain" || !process.stdin.isTTY || !process.stdout.isTTY;
+  // On Bun/Windows the Solid source transform can receive a corrupted virtual
+  // filename when its first TSX import happens after replaying a large JSONL
+  // session. Load the TUI module before opening the durable session instead.
+  const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
   const workspace = await discoverGitWorkspace(options.rootPath);
   const loadedConfig = await loadModelConfig(options.configPath);
   const providerId = options.provider ?? loadedConfig?.config.model?.provider;
@@ -86,25 +91,35 @@ async function main(): Promise<void> {
     rootPath: workspace.rootPath,
     ...(model ? { model } : {}),
     modelCatalog,
+    ...(loadedConfig?.config.defaultThinkingLevel
+      ? { thinkingLevel: loadedConfig.config.defaultThinkingLevel }
+      : {}),
   });
   try {
     for (const extension of options.extensions) await loadExtension(extension, app.extensionApi, process.cwd());
-    const usePlain = options.tui === "plain" || !process.stdin.isTTY || !process.stdout.isTTY;
     if (usePlain) {
       await runPlainCli(app, {
         ...(loadedConfig ? { configDescription: `${loadedConfig.source} ${loadedConfig.path}` } : {}),
       });
     } else {
-      await new ThreadTerminalApp(app, {
-        mode: options.tui === "regular" ? "regular" : "fullscreen",
-      }).run();
+      if (!terminalModule) throw new Error("Interactive terminal module was not loaded");
+      await new terminalModule.ThreadTerminalApp(app, { mode: "fullscreen" }).run();
     }
   } finally {
     await app.close();
   }
 }
 
+function formatCliError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const headline = `${error.name}: ${error.message}`;
+  if (!error.stack) return headline;
+  return error.message && !error.stack.includes(error.message)
+    ? `${headline}\n${error.stack}`
+    : error.stack;
+}
+
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.stderr.write(`${formatCliError(error)}\n`);
   process.exitCode = 1;
 });

@@ -8,38 +8,41 @@ It deliberately does not reproduce all of Git. There is no staging area, rebase,
 
 ## Requirements
 
-- Node.js 22.19 or newer
+- Bun 1.3.14 or newer when running from source
 - Git 2.54 or a compatible build with `merge-tree --write-tree`
 - A Git worktree
 
-The harness depends on the published `@earendil-works/pi-ai` and `@earendil-works/pi-tui` packages from npm and does not depend on pi-agent-core or pi-coding-agent.
+The source build uses the published `@earendil-works/pi-ai`, OpenTUI and SolidJS packages. It does not depend on pi-agent-core, pi-coding-agent, a local Zig toolchain or a local OpenTUI checkout.
 
 ```powershell
-npm install
-npm run build
-npm link
+bun install
+bun run build
+bun link
 ```
+
+Tagged releases also produce standalone Windows, Linux and macOS archives for x64 and Arm64 on the [GitHub Releases page](https://github.com/non-convex/thread/releases). A standalone binary already contains Bun, the Solid renderer and the matching OpenTUI native library; its user does not install those dependencies separately. The source checkout remains the smaller and easier option for development.
 
 ## Terminal interface
 
-An interactive TTY starts in fullscreen mode. The main screen keeps the conversation, active tools and a fixed editor/footer together; `/thread diff`, `/thread merge` and `/thread history` open temporary screens that are never appended to the Project Session conversation. `/model` inspects or switches the runtime model, `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
+An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. `/model`, `/thread diff`, `/thread merge`, `/thread history` and long command results open in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
 
-User and assistant messages are rendered with `pi-tui`'s width-aware Markdown component. Headings, emphasis, inline and fenced code, quotes, lists, links and tables receive terminal-native layout and semantic colors; long prose is capped to a readable width while command documents remain plain text.
+On process startup, context restoration and subsequent turns, the visible transcript is bounded to the eight most recent complete user-led interactions. Thinking and compact tool traces inside that window remain visible and preserve arrival order. This bound affects only the in-app transcript; the durable session, model context and tool records remain intact.
+
+Thinking, tool calls and assistant replies appear in arrival order, with quieter thinking text, compact tool rows and Markdown replies. User and assistant messages use OpenTUI's width-aware Markdown renderer. Headings, emphasis, inline and fenced code, quotes, lists, links and tables receive terminal-native layout and semantic colors. Streaming reply blocks retain one Markdown renderable and update it incrementally instead of rebuilding it for every token batch.
 
 ```powershell
-thread --tui fullscreen   # default for an interactive terminal
-thread --tui regular      # preserve native terminal scrollback
+thread --tui fullscreen   # default: full-screen OpenTUI
 thread --tui plain        # readline/text output
 ```
 
-Non-TTY input or output automatically selects plain mode. In fullscreen views, use arrow keys or `j/k` to scroll and `Esc` to return. `Ctrl+C` interrupts active work; press it twice while idle to exit. The editor supports multiline input, bracketed paste, path completion and IME positioning through pi-tui.
+`--tui hybrid` and `--tui regular` remain accepted as compatibility aliases for `fullscreen`. Non-TTY input or output automatically selects plain mode. In secondary screens, use arrow/Page Up/Page Down keys to scroll and `Esc` to return. `Ctrl+C` interrupts active work; press it twice while idle to exit. For reasoning models, `Shift+Tab` cycles the model's supported thinking levels. The OpenTUI editor supports multiline input (`Shift+Enter`), bracketed paste, project-path completion and terminal-aware cursor positioning.
 
 ## Run
 
-After the one-time `npm link`, launch the harness from the project you want to work on. The current directory is resolved to its containing Git worktree root:
+After the one-time `bun link` (or after placing a standalone binary on `PATH`), launch the harness from the project you want to work on. The current directory is resolved to its containing Git worktree root:
 
 ```powershell
-Set-Location D:\path\to\a\git-worktree
+Set-Location .\your-git-worktree
 thread
 ```
 
@@ -47,7 +50,8 @@ User model configuration is global and is never read from or written to the proj
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.thread"
-Copy-Item D:\WORK\projects\thread\thread.config.example.json "$HOME\.thread\config.json"
+Invoke-WebRequest "https://raw.githubusercontent.com/non-convex/thread/main/thread.config.example.json" `
+  -OutFile "$HOME\.thread\config.json"
 $env:MY_RELAY_API_KEY = "<secret>"
 thread
 ```
@@ -58,7 +62,7 @@ If the thread config file does not exist, the harness falls back to pi's existin
 
 ```text
 ~/.pi/agent/models.json       provider and model definitions
-~/.pi/agent/settings.json     defaultProvider and defaultModel
+~/.pi/agent/settings.json     defaultProvider, defaultModel and defaultThinkingLevel
 ```
 
 `PI_CODING_AGENT_DIR` is honored when pi uses a non-default directory. This is a fallback, not a merge: once `~/.thread/config.json` exists (or an explicit `--config` is supplied), pi configuration is not loaded. A missing explicit config is an error. Pi `apiKey` literals, environment templates such as `$KEY`/`${KEY}`, and `!command` values are resolved without copying secrets into the Project Session.
@@ -66,6 +70,7 @@ If the thread config file does not exist, the harness falls back to pi's existin
 ```json
 {
   "model": { "provider": "my-relay", "id": "claude-sonnet-4-6" },
+  "defaultThinkingLevel": "medium",
   "providers": {
     "my-relay": {
       "name": "My relay",
@@ -86,7 +91,7 @@ If the thread config file does not exist, the harness falls back to pi's existin
 }
 ```
 
-Supported custom APIs in v1 are `anthropic-messages`, `openai-completions`, and `openai-responses`. `contextWindow` is required because the harness uses it to decide when to compact; set it to the relay model's real limit. Optional provider `headers`, model `samplingParams`, and pi-ai `compat` overrides are also accepted.
+Supported custom APIs in v1 are `anthropic-messages`, `openai-completions`, and `openai-responses`. `contextWindow` is required because the harness uses it to decide when to compact; set it to the relay model's real limit. `defaultThinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` and defaults to `medium`. Optional provider `headers`, model `samplingParams`, per-model `thinkingLevelMap`, and pi-ai `compat` overrides are also accepted. A `thinkingLevelMap` value of `null` marks that level as unsupported.
 
 For a built-in pi-ai provider, the config only needs the model selection and the provider's normal credential environment variable:
 
@@ -125,11 +130,13 @@ The active model can be inspected or changed without restarting `thread`:
 /model <provider> <model>
 ```
 
-In the fullscreen or regular TUI, selecting `model` from slash-command completion and pressing Enter immediately opens a second list containing models explicitly declared in the active thread/pi configuration. The current model is always included and marked with `●`, even when it came from the built-in catalog or a direct switch. Use ↑/↓ (or `j`/`k`) to move, Enter to switch, and Esc to cancel. `/model all` opens the complete built-in and configured catalog; long catalogs stay centered around the selected row.
+In the full-screen TUI, selecting `model` from slash-command completion and pressing Enter opens a list containing models explicitly declared in the active thread/pi configuration. The current model is always included and marked with `●`, even when it came from the built-in catalog or a direct switch. Use ↑/↓ (or `j`/`k`) to move, Enter to switch, and Esc to return to the session screen. `/model all` opens the complete built-in and configured catalog; long catalogs stay centered around the selected row.
+
+For a reasoning model, press `Shift+Tab` on the session screen to cycle through the levels that model declares as supported. The active level appears beside the model in the footer. It is applied consistently to the main agent loop, automatic and manual compaction, Context Capsules, semantic diffs, and context merges. Switching models clamps the current preference to the new model's capabilities. When thread falls back to pi configuration, it inherits pi's `defaultThinkingLevel`; otherwise the default is `medium`.
 
 Plain mode keeps `/model` as a status command. `/model list` prints the configured/current choices, while `/model list <provider>` prints every catalog model registered under one provider. Direct `/model <provider>/<model>` switching can still select a model from the complete catalog even when it is hidden from the default picker. A switch retains the current conversation and workspace, while rebuilding the main agent loop, compactor, Context Capsule, semantic diff and context-merge services around the selected model. The TUI model label and context-window percentage update immediately.
 
-`/model` changes only the running process. It does not edit the global configuration or append a message/checkpoint, so a restart again uses `--provider`/`--model`, `THREAD_PROVIDER`/`THREAD_MODEL`, or the configured default in normal precedence order.
+Model and thinking-level changes affect only the running process. They do not edit global configuration or append a message/checkpoint, so a restart again uses `--provider`/`--model`, `THREAD_PROVIDER`/`THREAD_MODEL`, and the configured defaults in normal precedence order.
 
 ## Web tools
 
@@ -216,7 +223,7 @@ There is no separate project-memory service, retrieval projection or built-in me
 Trusted local extensions can register tools, `/thread` commands and five events: `turn_start`, `before_context`, `before_tool_call`, `tool_result` and `turn_end`.
 
 ```powershell
-npm start -- --root D:\path\to\repo --extension .\examples\extension.mjs
+bun start -- --root . --extension .\examples\extension.mjs
 ```
 
 See [examples/extension.mjs](examples/extension.mjs). Core tool and command names are reserved; duplicate registration fails.
@@ -227,14 +234,15 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-This project intentionally avoids a broad test matrix. The retained checks cover only sidecar self-containment/restore, interrupted non-replayable tools, clean/conflicting merge safety and one end-to-end Project Session version loop.
+`bun run check`, `bun test` and `bun run build` are the local verification entry points. The intentionally compact suite covers the Project Session version loop, sidecar and replay safety, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen session updates, stable streaming Markdown identity, controller screen routing and composer submission. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 
 `thread` uses or was informed by the following external open-source projects:
 
-- [earendil-works/pi](https://github.com/earendil-works/pi): the published [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi/tree/main/packages/ai) and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui) packages provide model/provider APIs and terminal UI primitives. `src/utils/estimate.ts` derives its context-estimation logic from pi and retains the upstream MIT attribution below.
-- [OpenCode](https://github.com/anomalyco/opencode): its [`websearch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts) and [`webfetch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/webfetch.ts) tools informed the provider contract and user-facing behavior of thread's web tools. Thread's implementation is adapted to its own tool/runtime boundaries.
+- [earendil-works/pi](https://github.com/earendil-works/pi): the published [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi/tree/main/packages/ai) package provides model/provider APIs. `src/utils/estimate.ts` derives its context-estimation logic from pi and retains the upstream MIT attribution below.
+- [OpenTUI](https://github.com/anomalyco/opentui), [SolidJS](https://github.com/solidjs/solid) and [Bun](https://github.com/oven-sh/bun): OpenTUI's Zig-backed core and Solid renderer provide the terminal layout/rendering runtime; SolidJS provides reactive UI state propagation; Bun runs, builds and compiles the application. Thread pins compatible OpenTUI/Solid versions and ships the native library inside standalone binaries.
+- [OpenCode](https://github.com/anomalyco/opencode): its route-oriented OpenTUI architecture and its [`websearch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts) / [`webfetch`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/webfetch.ts) tools informed Thread's temporary-screen boundaries and Web-tool behavior. Thread's implementation is adapted to its own state and tool runtime.
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): its [`tool-web`](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/web/tool-web) package was reviewed when comparing web-search, fetch and SSRF trade-offs.
 - [htmlparser2](https://github.com/fb55/htmlparser2) and [Turndown](https://github.com/mixmark-io/turndown): direct runtime dependencies used for HTML parsing and HTML-to-Markdown conversion in `webfetch`.
 

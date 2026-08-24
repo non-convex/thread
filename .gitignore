@@ -1,6 +1,9 @@
 # Dependencies and generated output
 node_modules/
 dist/
+release/
+.bun/
+.*.bun-build
 *.tsbuildinfo
 coverage/
 *.log

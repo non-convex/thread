@@ -36,8 +36,13 @@ type WebFetchArgs = {
   timeout?: number;
 }
 
+export type WebToolFetch = (
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: Parameters<typeof globalThis.fetch>[1],
+) => Promise<Response>;
+
 interface WebToolOptions {
-  fetch?: typeof globalThis.fetch;
+  fetch?: WebToolFetch;
   env?: NodeJS.ProcessEnv;
 }
 

@@ -20,7 +20,7 @@ workspace snapshot + conversation context head
 
 ### Harness 核心
 
-- 基于 npm 公开发行的 `@earendil-works/pi-ai` / `@earendil-works/pi-tui`（当前 0.84.2）实现多 provider 模型调用和流式 agent loop；不再依赖本机 pi 源码树。
+- 基于 npm 公开发行的 `@earendil-works/pi-ai`（当前 0.84.2）实现多 provider 模型调用和流式 agent loop；不再依赖本机 pi 源码树，也不依赖 pi-agent-core/pi-coding-agent。
 - 基础工具注册、工具调用/结果处理和多 step 执行；内置 `read`、`list`、`grep`、`write`、`edit`、`bash`、`websearch` 与 `webfetch`。
 - `websearch` 通过 Exa 或 Parallel MCP 搜索当前网络信息，默认 Exa，可由 `THREAD_WEBSEARCH_PROVIDER` 切换，并支持可选的 `EXA_API_KEY` / `PARALLEL_API_KEY`。
 - `webfetch` 获取 HTTP(S) 文本资源，支持 HTML→Markdown/纯文本转换、超时、5 MiB 响应上限和 200,000 字符模型输出上限；两个网络工具均不自动重放。
@@ -29,7 +29,8 @@ workspace snapshot + conversation context head
 - 从启动目录发现并关联 Git workspace。
 - 全局 thread 模型配置；未配置 thread 时可回退读取本机 pi 模型配置。
 - `/model` 在 TUI 中打开二级模型选择列表，默认只显示活动配置中明确声明的模型并始终补入当前模型；`/model all` 可显式浏览 pi-ai 完整内置及配置目录。支持 ↑/↓ 或 j/k 循环选择、Enter 切换、Esc 取消及长目录窗口化显示；plain/direct 模式可查看当前模型、列出默认选项或指定 provider 的完整模型集合，并用显式参数从完整目录切换。切换会保留现有 workspace/context，同时统一更新主 agent loop、compaction、Capsule、semantic diff/merge 和 TUI 状态。
-- GitHub 仓库公开发布并采用 MIT License；英文/简体中文 README 在顶部双向跳转，并在 README 内集中记录 pi、OpenCode、DeepSeek Harness、htmlparser2、Turndown 的依赖/参考关系和 pi 派生代码的 MIT 归属声明。
+- 推理模型支持在 TUI 主界面用 `Shift+Tab` 按模型能力循环切换 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` 档位；当前档位显示在 footer，并统一透传给主对话、compaction、Capsule、semantic diff/merge。thread 配置可声明 `defaultThinkingLevel` 和逐模型 `thinkingLevelMap`，回退 pi 配置时会继承 pi 的默认推理档位。
+- GitHub 仓库公开发布并采用 MIT License；英文/简体中文 README 在顶部双向跳转，并在 README 内集中记录 pi、OpenTUI、SolidJS、Bun、OpenCode、DeepSeek Harness、htmlparser2、Turndown 的依赖/参考关系和 pi 派生代码的 MIT 归属声明。
 
 ### Session 与持久化
 
@@ -90,11 +91,14 @@ workspace snapshot + conversation context head
 
 ### 终端界面
 
-- 基于 `@earendil-works/pi-tui` 的 fullscreen TUI，并保留 plain 输出适配器。
-- 支持 Markdown、代码块、表格和语义配色；流式显示 agent 回复和工具状态。
-- 固定 header、editor、status/footer，以及 conversation viewport。
-- diff、merge、history 使用不污染主 session 的临时 view。
-- 支持 `/model`、`/clear`、`/compact` 和 `/thread` 命令补全/路由。
+- 已迁移到 Bun 1.3.14 + SolidJS 1.9.12 + OpenTUI 0.5.7 native core，并保留非 TTY/显式 `--tui plain` 输出适配器；旧 `pi-tui` 运行时依赖已删除。
+- TTY 默认使用常驻 alternate-screen 的全屏应用；session transcript、live turn、输入区、footer 以及 model/diff/merge/history/document screen 在同一个 Solid root 内切换，不再使用 split-footer 或原生 scrollback snapshot。
+- session scrollbox 启用 sticky-bottom 与 viewport culling；启动、restore/switch 及 turn 完成后都只投影当前 branch 最近 8 次用户主导交互，窗口内保留 thinking、紧凑工具轨迹和回复的到达顺序。完整 session、上下文和工具记录仍保留在持久化层。
+- `/model`、diff、merge、history 和长命令文档作为应用内二级 screen 展示；`Esc` 返回同一个 session，不切换 renderer screen mode，也不写入主 conversation。
+- OpenTUI Markdown 支持语义配色、增量流式更新、代码块、表格、中文宽字符和 light/dark theme token；renderer 配置为 target 30 FPS、max 60 FPS、viewport culling 和 synchronized output。
+- live blocks 采用 append-only 稳定索引；thinking→正文后，后续 token 只更新同一个 Markdown renderable 的 `content`，避免销毁重建导致的闪烁。
+- 编辑器支持多行输入、bracketed paste、斜杠命令与项目路径补全；`Shift+Tab` 保留推理档位切换，模型列表、恢复、diff 和 merge 的键盘交互已经迁移。
+- 普通 Bun 构建输出可链接 CLI 与公共 API；tag release workflow 会在 Windows/Linux/macOS 的 x64/Arm64 原生 runner 上生成包含 Bun、Solid 和 OpenTUI native core 的独立压缩包，并在打包前执行最终二进制的 `--help` smoke；独立程序禁用运行时 `bunfig.toml` 自动加载，避免被用户项目的 Bun 开发钩子干扰，同时保留 `.env` 凭据读取。最终用户无需另装 Zig 或 JS 依赖。
 
 ## 当前已知限制
 
@@ -107,10 +111,23 @@ workspace snapshot + conversation context head
 - 内置 coding tools、权限策略和扩展生态仍较小；网络工具没有专用审批层。
 - `webfetch` 尚未阻止私网、loopback、link-local 或 DNS 重绑定目标，在可访问敏感内网服务的部署中存在 SSRF 风险；当前只拒绝非 HTTP(S)、URL 内嵌凭据和二进制响应。
 - `/model` 只切换当前进程，不写回全局配置；重启后仍按 CLI、环境变量和配置文件的优先级选择默认模型。
+- `Shift+Tab` 切换的推理档位同样只在当前进程有效，不写回 thread 或 pi 的全局配置。
+- 独立可执行程序当前约百 MiB，这是内嵌 Bun runtime、OpenTUI native core 与 parser assets 的体积成本；源码安装更小，但要求本机已有 Bun。
 - 尚未引入 SQLite、后台任务队列或多进程并发写入。
 
 ## 最近完成
 
+- 将旧 hybrid/split-footer 会话切换为常驻 alternate-screen 全屏树：历史 transcript、live turn 与固定底部输入区统一由 session scrollbox 管理，二级页面只切换 `UiState.screen`。
+- transcript projection 固定为最近 8 次用户主导交互；用户消息在 turn 开始时立即进入稳定 transcript，live blocks 继续显示 thinking / tool / reply，完成后再由 durable entries 接管。
+- live-turn 状态使用不可变快照更新，同时用 Solid `<Index>` 保持 append-only block 的组件身份；修复 thinking 结束后流式正文因 Markdown renderable 每批 token 重建而闪烁的问题。
+- 接通 `thinking_delta` 流：思维链、工具调用和助手回复按到达顺序分层显示，历史 transcript 同样保留 thinking 与工具行。
+- 收紧 session 视觉层次：弱化 thinking、压缩 tool 行、回复使用 Markdown；status 仅在有活动或 notice 时占行。
+- 完成一轮基于真实 Windows PTY 和长 session 的 TUI 稳定性修复：恢复 controller→Solid 响应式刷新，修正 `/clear`、模型/历史短窗口布局、merge 方向键、composer 光标补全、多行输入、临时页面滚动条、命令状态文案、退出手势过期和活动请求关闭竞态；历史 Markdown fence 会先规范化再高亮。
+- 修复源码模式下长 JSONL session replay 后才动态加载 Solid TSX 时，Bun/Windows 可能向预处理器传入损坏虚拟文件名并导致 TUI 无法启动的问题；交互模式现在先加载 TUI 模块，再打开持久化 session。CLI 错误输出也会保留原始 message，不再只显示缺失标题的 stack。
+- 完成 TUI 全量迁移：使用 renderer-neutral `ThreadTuiController` 隔离业务投影，Solid view 在单个 alternate-screen root 内实现 session 与二级 screen；有界 transcript 避免长期 Project Session 持续扩大实时树。
+- 将运行、开发、测试和构建链路统一到 Bun；增加 Solid JSX preload/build plugin、声明文件构建、单文件编译脚本、GitHub CI 与六平台 release matrix，删除 `package-lock.json`、`tsx` 和 `@earendil-works/pi-tui`。
+- 为 OpenTUI 增加语义 dark/light theme、增量 Markdown、Textarea、斜杠/路径补全以及模型列表、diff、merge、history、document 页面。
+- 增加与 pi 一致的推理档位运行时：读取 `defaultThinkingLevel`，保留 `thinkingLevelMap`，用 `Shift+Tab` 循环当前模型支持档位，并让所有模型调用使用同一档位；修复推理模型因缺省请求被下游解释为 `reasoning_effort: none` 的问题。
 - 收紧 `/model` picker：默认从 1,000 余项 pi-ai 全量目录缩减为配置模型及当前模型，完整目录改由显式 `/model all` 打开；provider 定向列出和直接切换仍可访问完整目录。
 - 调整主 Agent 默认 system prompt：明确其名称为 `thread`，移除无实际作用的命令路由说明，并要求总结或汇报时在不删减有效信息的前提下降低表达密度，通过必要铺垫、自然过渡和循序展开做到深入浅出。
 - 移除 `/new` 及其空上下文 checkpoint 路径，Project Session 不再提供主动失忆入口，长期上下文统一由 compaction 管理。
@@ -122,7 +139,7 @@ workspace snapshot + conversation context head
 - 移除独立外部 memory 系统：删除 MemoryService、检索投影、system prompt 注入以及 `memory_write` / `memory_search` / `memory_archive` 内置工具；旧日志中的 `memory_changed` 事件只为兼容读取而忽略，不再恢复为运行时状态。
 - 优化 compaction 项目状态提示词：选择性维护长期记忆、按新证据和日期淘汰过时状态，并保留滚动的近期会话摘要；语义投影为消息提供天级绝对日期。
 - 将 compaction 从重复生成自由摘要改为增量项目状态更新，并与 Context Capsule 共用去除 thinking、usage、raw details 等噪声的语义消息投影。
-- 将 `@earendil-works/pi-ai` / `@earendil-works/pi-tui` 依赖从本机 pi 源码树切换为 npm 公开发行的 0.84.2，删除 `.npmrc` 和 `scripts/check-pi-ai.mjs`。
+- 将 `@earendil-works/pi-ai` 依赖从本机 pi 源码树切换为 npm 公开发行的 0.84.2，删除 `.npmrc` 和 `scripts/check-pi-ai.mjs`；终端层后来进一步迁移到 OpenTUI。
 - 由于发布版 0.84.2 的根入口尚未导出 `estimateContextTokens`（本地 pi 源码领先发布版约 44 个提交），将其实现 vendor 到 `src/utils/estimate.ts`，与本地 pi 源码保持逐行一致；待上游发布后应改回从 pi-ai 导入并删除 vendor 文件。
 - 改进终端 Markdown 渲染和对话布局。
 - 增加 `/clear` 与 `/compact`。
@@ -135,8 +152,12 @@ workspace snapshot + conversation context head
 ## 验证状态
 
 - `/new` 的运行时路由、空上下文 checkpoint API、TUI 补全、CLI help 及中英文 README 已移除；源码和用户文档仅在本进度记录的移除说明中保留该名称。
-- `npm run check`、`npm run build` 通过，全部 14 个测试（phase0 + smoke）通过；`/model` 回归测试覆盖配置目录过滤、完整目录入口、当前模型补入、picker 视图、当前模型定位、循环选择、provider 定向目录、两种直接切换语法、含 `/` 的模型 ID、主循环和语义服务同步替换及无目录的注入模型边界；网络工具测试覆盖注册、provider 选择、JSON/SSE MCP 结果、Exa 请求、HTML 转换和响应上限；compaction 回归测试只验证语义投影和增量状态更新机制，不评价模型摘要质量；session log 恢复测试同时确认旧版 `memory_changed` 事件可读取但不会恢复记忆投影。
+- 测试集已从 30 条收敛为 21 条（20 phase0 + 1 smoke）：删除 OpenTUI 键盘编码与 `pi-ai` 依赖自测，以及重复的 Markdown、completion、列表布局和按键细节断言；保留 sidecar/replay 数据安全、异步 turn-base、compaction、模型运行时、Web 协议、全屏 session 刷新、流式 Markdown 实例稳定性、controller 生命周期和完整 Project Session smoke。当前 `bun run check`、完整测试和生产构建均通过。
+- TUI 代码按职责拆为 root 输入/键盘调度、session screen、transcript、二级 screens 与共享渲染资源；持久 session 到可见 transcript 的转换是独立纯投影。全屏 Solid 树已直接订阅 controller 状态，旧的空 `TerminalSurface` 回调层已删除。
+- 当前 Windows x64 独立程序已从 full-screen 实现重新构建，`--help` smoke 通过；CLI 首选 `--tui fullscreen`，并继续接受 `hybrid`/`regular` 兼容别名。
+- 使用现有长 session 项目启动源码 TUI 时，可见 projection 固定为最近 8 次完整用户交互，后端上下文和持久化记录未删减；全屏 scrollbox 不随整个 Project Session 历史无限增长。
 - 使用当前本机 pi 配置进行目录 smoke：默认 picker 精确列出 6 个配置模型，`/model all` 仍可访问包含这些配置项在内的 1,273 项完整目录；验证过程只输出模型标识和数量，不读取或打印凭据。
+- 使用当前本机 pi 配置验证推理初始化：thread 成功读取 `defaultThinkingLevel: high`，选中 `grok-officially/grok-4.6` 并识别其为推理模型；验证未发起真实模型请求，也未读取或打印凭据。
 - 无密钥真实网络 smoke 通过：Exa MCP `web_search_exa` 能返回 Node.js 官方站点结果，`webfetch` 能获取并提取 `https://example.com` 的文本。
 - `thread` 更名通过全仓旧名称零匹配扫描；`thread --help` 文案和 `ThreadApp` / `ThreadTerminalApp` / `THREAD_VERSION` 等构建产物公开导出已验证。
 - `/thread` 命令空间通过旧命令字符串零匹配扫描和构建产物路由检查；`/thread` 可列出并执行命令，旧前缀不再被命令路由器接收。
@@ -147,5 +168,5 @@ workspace snapshot + conversation context head
 
 1. 在真实长会话中交互验证 `/thread commit` → `/thread diff` 的 Capsule 和自然语言 diff 质量。
 2. 根据真实溢出情况决定是否让 Capsule 复用 compaction 的分块归并，而不是预先增加复杂度。
-3. 继续完善 diff/merge 临时 view 的信息层级、滚动和确认体验。
+3. 在真实 TTY 中确认 full-screen session 的 sticky-bottom、手动上滚、thinking→正文流式显示和紧凑 footer；并在不同宽度的 Windows Terminal、SSH 与 macOS/Linux 终端中继续检查 diff/merge 二级 screen 的信息层级、滚动、IME 和确认体验。
 4. 为 `webfetch` 增加 DNS 解析后的私网/loopback/link-local 拦截和逐跳 redirect 校验，再评估 web 专用审批策略。
