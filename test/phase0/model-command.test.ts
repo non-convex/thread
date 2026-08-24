@@ -16,8 +16,8 @@ function commandContent(result: InputResult): string {
   return result.kind === "command" ? result.result.content : "";
 }
 
-test("PiModelClient retries transient model errors six times and reports each attempt", async () => {
-  assert.equal(DEFAULT_MODEL_MAX_RETRIES, 6);
+test("PiModelClient retries transient model errors ten times and reports each attempt", async () => {
+  assert.equal(DEFAULT_MODEL_MAX_RETRIES, 10);
   const faux = fauxProvider();
   let streamCalls = 0;
   const fakeModels = {
@@ -43,15 +43,15 @@ test("PiModelClient retries transient model errors six times and reports each at
   const context: Context = { systemPrompt: "", messages: [], tools: [] };
   const message = await client.stream(context, {
     signal: new AbortController().signal,
-    maxRetries: 6,
+    maxRetries: 10,
     retryBaseDelayMs: 1,
     onRetryScheduled: (attempt) => { scheduled.push(attempt); },
     onRetryAttemptStart: (attempt) => { started.push(attempt); },
   });
   assert.equal(message.stopReason, "error");
-  assert.equal(streamCalls, 7, "one initial attempt plus six retries");
-  assert.deepEqual(scheduled, [1, 2, 3, 4, 5, 6]);
-  assert.deepEqual(started, [1, 2, 3, 4, 5, 6]);
+  assert.equal(streamCalls, 11, "one initial attempt plus ten retries");
+  assert.deepEqual(scheduled, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(started, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
 test("configured model catalogs hide built-ins from the default list", () => {

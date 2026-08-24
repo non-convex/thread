@@ -39,14 +39,14 @@ test("model retry events surface progress and discard the partial reply", () => 
     type: "model_retry_scheduled",
     step: 1,
     attempt: 1,
-    maxAttempts: 6,
+    maxAttempts: 10,
     delayMs: 1_000,
     errorMessage: "overloaded",
   });
-  assert.equal(state.activity, "retrying model · attempt 1/6 in 1.0s");
+  assert.equal(state.activity, "retrying model · attempt 1/10 in 1.0s");
 
-  reduceUiEvent(state, { type: "model_retry_started", step: 1, attempt: 1, maxAttempts: 6 });
-  assert.equal(state.activity, "retrying model · attempt 1/6");
+  reduceUiEvent(state, { type: "model_retry_started", step: 1, attempt: 1, maxAttempts: 10 });
+  assert.equal(state.activity, "retrying model · attempt 1/10");
   assert.equal(state.liveTurn?.blocks.some((block) => block.kind === "assistant" && block.streaming), false);
 });
 

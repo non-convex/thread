@@ -19,7 +19,7 @@ import { resolveConfigHeaders, resolveConfigValue } from "../config/config-value
 import type { CustomProviderConfig, SupportedCustomApi } from "../config/model-config.js";
 
 /** Transient provider errors (408/409/429/5xx and server-requested retries). */
-export const DEFAULT_MODEL_MAX_RETRIES = 6;
+export const DEFAULT_MODEL_MAX_RETRIES = 10;
 /** Initial backoff for assistant-level retries; doubles each attempt. */
 export const DEFAULT_MODEL_RETRY_BASE_DELAY_MS = 500;
 
