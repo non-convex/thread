@@ -112,7 +112,11 @@ test("compaction forks the live context and updates the previous project state",
   assert.equal(model.forks[0]!.context.systemPrompt, "You are thread.");
   assert.match(model.forks[0]!.instruction, /Compact this conversation into a project state document/);
   assert.match(model.forks[0]!.instruction, /- \[YYYY-MM-DD HH\] \(interaction content\)/);
-  assert.match(model.forks[0]!.instruction, /keep at most the 10\s+most recent entries/);
+  assert.match(model.forks[0]!.instruction, /keep at most the 10 most recent entries/);
+  // The provider format carries no timestamps, so the instruction must state the
+  // current time for the model to stamp entries it writes or revises.
+  assert.match(model.forks[0]!.instruction, /The current local date and time is \d{4}-\d{2}-\d{2} \d{2}\./);
+  assert.match(model.forks[0]!.instruction, /entries carried forward unchanged keep their existing stamp/);
 
   const active: Message[] = [
     {

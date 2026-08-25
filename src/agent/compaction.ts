@@ -10,9 +10,9 @@ const PROJECT_STATE_REQUIREMENTS = [
   "compress the conversation history that is leaving the raw retained tail. Return one concise Markdown document",
   "organized under the following three headings.",
   "Under `## Long-term memory`, record durable knowledge as an ordered list of independent entries. Use exactly this",
-  "format for every entry: `- [YYYY-MM-DD] (memory content)`. The timestamp is the entry's last-modified date, not",
-  "its original mention date: keep the existing date when an entry is carried forward unchanged, and use the latest",
-  "source date in the input when an entry is created, corrected, or merged. Do not store project details that can be",
+  "format for every entry: `- [YYYY-MM-DD] (memory content)`. The timestamp is the entry's last-modified date: keep",
+  "the existing date verbatim when you carry an entry forward unchanged, and use the current date stated in this",
+  "instruction when you create, correct, or merge an entry. Do not store project details that can be",
   "inferred from the code or workspace. Store durable meta-information instead: active goals and constraints, user",
   "preferences, architectural directions and their reasons, conventions, and facts the user mentioned or requested,",
   "or the agent discovered, that remain useful over the long term. Reorganize this section on every compaction rather",
@@ -23,12 +23,14 @@ const PROJECT_STATE_REQUIREMENTS = [
   "behavior, validation evidence, unresolved problems or uncertainty, and the exact next useful action. Describe the",
   "material current state, not a historical inventory; omit completed changes that no longer help future work.",
   "Under `## Recent user-agent conversation`, record the most recent interactions as an ordered list, oldest first.",
-  "Use exactly this format for every entry: `- [YYYY-MM-DD HH] (interaction content)`, where the timestamp marks when",
-  "the interaction happened. Each entry states what the user asked, corrected, rejected, or decided, and the material",
-  "assistant response, action, or outcome. This section exists so that you still remember recent interaction after",
-  "compaction, so overlap with the project state is acceptable. Evict this section purely by time: keep at most the 10",
-  "most recent entries and drop the oldest beyond that, even when their content still looks valuable — anything with",
-  "durable value belongs in long-term memory instead. Never let this section become a turn-by-turn transcript.",
+  "Use exactly this format for every entry: `- [YYYY-MM-DD HH] (interaction content)`. As with long-term memory the",
+  "timestamp is the entry's last-modified time: keep an existing entry's timestamp verbatim when you carry it forward,",
+  "and use the current time stated in this instruction for entries you write or revise now. Each entry states what the",
+  "user asked, corrected, rejected, or decided, and the material assistant response, action, or outcome. This section",
+  "exists so that you still remember recent interaction after compaction, so overlap with the project state is",
+  "acceptable. Evict this section purely by time: keep at most the 10 most recent entries and drop the oldest beyond",
+  "that, even when their content still looks valuable — anything with durable value belongs in long-term memory",
+  "instead. Never let this section become a turn-by-turn transcript.",
   "Treat later evidence as authoritative over earlier state. When an older item is contradicted, obsolete, completed",
   "and no longer useful, or too temporary to matter, replace or remove it instead of preserving both versions.",
   "Preserve material outcomes and evidence from tool calls, not raw tool output.",
@@ -78,6 +80,21 @@ export const POST_COMPACTION_CONTEXT_RATIO = 0.07;
 export const COMPACTION_TRIGGER_RATIO = 0.78;
 /** Slack reserved for the summary wrapper when sizing the retained tail. */
 const PROMPT_WRAPPER_TOKENS = 128;
+
+/**
+ * The provider's message format carries no timestamps, so a forked compaction
+ * cannot read when anything happened. Stating the current local time in the
+ * instruction gives the model the one anchor its entry timestamps need: it
+ * stamps whatever it writes or revises now, and copies existing timestamps
+ * verbatim for entries it carries forward unchanged.
+ */
+function currentTimeAnchor(now = new Date()): string {
+  const year = now.getFullYear().toString().padStart(4, "0");
+  const month = (now.getMonth() + 1).toString().padStart(2, "0");
+  const day = now.getDate().toString().padStart(2, "0");
+  const hour = now.getHours().toString().padStart(2, "0");
+  return `The current local date and time is ${year}-${month}-${day} ${hour}. Use this as the last-modified stamp for every entry you write or revise in this compaction; entries carried forward unchanged keep their existing stamp.`;
+}
 
 export interface CompactionOptions {
   minRetainTurns?: number;
@@ -291,7 +308,7 @@ export class ContextCompactor {
     if (!forkContext) throw new Error("Compaction requires the live context to fork");
     const previousState = this.priorProjectState(messages[0]);
     const instruction = this.withTokenLimit(
-      previousState === undefined ? INITIAL_STATE_INSTRUCTION : UPDATE_STATE_INSTRUCTION,
+      `${previousState === undefined ? INITIAL_STATE_INSTRUCTION : UPDATE_STATE_INSTRUCTION}\n\n${currentTimeAnchor()}`,
       this.maxSummaryTokens,
     );
     /* Fork the live conversation instead of rebuilding a projected transcript:
