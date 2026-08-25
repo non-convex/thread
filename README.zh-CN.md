@@ -182,7 +182,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
-`/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据——system prompt 中描述了 sidecar 的 session log 与 object store 的位置和用法——然后以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。因为它是 agent turn，`/thread diff` 需要已配置模型。
+`/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据——system prompt 中描述了 sidecar 的 session log、object store 与 Context Capsule 的位置和用法——然后以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。有提交的端点附带 Context Capsule，agent 对该版本的记忆已被压缩时可以查阅；当前状态端点永远没有 Capsule，agent 依赖自己的即时记忆。因为它是 agent turn，`/thread diff` 需要已配置模型。
 
 在 TUI 中直接输入 `/rewind` 会打开浮层，按时间列出最近的用户消息；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选消息之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 以整屏形式展示同一批 turn，两者走同一条恢复路径。
 
