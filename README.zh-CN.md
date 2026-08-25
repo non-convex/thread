@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-`thread` 是一个 mini coding-agent harness，其中 Project Session 会伴随一个项目的整个生命周期。一个 thread version 由 workspace 快照和 conversation context head 共同组成；thread 分支、恢复、比较和合并都会同时作用于这两个维度。
+`thread` 是一个 mini coding-agent harness。Project Session 可以伴随项目的整个生命周期，但用户也可以自由决定新的 session 起点。一个 thread version 由 workspace 快照和 conversation context head 共同组成；thread 分支、恢复、比较和合并都会同时作用于这两个维度。
 
 它并不试图复刻 Git 的全部功能。项目没有 staging area、rebase、stash 或逐工具 revision，也没有独立的外部记忆存储。持久项目知识由版本化的 conversation context 及其 compaction state 承载。
 
@@ -24,7 +24,7 @@ bun link
 
 ## 终端界面
 
-交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考折叠为单行，工具行会带上参数摘要与耗时。`/model` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考默认保留最多 5 行预览并可点击展开/折叠，工具行会带上参数摘要与耗时。`/model`、`/session` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
 
 进程启动、context restore 及后续 turn 完成时，可见 transcript 都限制为最近 8 次完整的用户主导交互。窗口内的 thinking 与紧凑工具轨迹会保留，并维持到达顺序。该限制只影响应用内 transcript；持久化 session、模型上下文和工具记录都不会删减。
 
@@ -115,7 +115,13 @@ thread
 thread
 ```
 
-普通文本会进入流式、多步骤 agent loop。`/model`、`/clear`、`/compact`、`/thread ...` 和 `/rewind ...` 会在 LLM 之前被 harness 拦截，不会成为普通用户消息。
+普通文本会进入流式、多步骤 agent loop。`/new`、`/session ...`、`/model`、`/clear`、`/compact`、`/thread ...` 和 `/rewind ...` 会在 LLM 之前被 harness 拦截，不会成为普通用户消息。
+
+## Project Session
+
+`/new` 会以此刻的 workspace 为起点创建新的 Project Session。Thread 会先在旧 session 中记录 safety checkpoint，再创建带有 genesis workspace 快照、空 conversation context 和 `main` 分支的新 session；不会生成 handoff、调用模型或复制消息。当前模型、thinking level、工具和已加载扩展属于运行进程，因此会继续保留。
+
+使用 `/session` 或 `/session list` 查看保留的 session，使用 `/session switch <session-id-or-unique-prefix>` 切回其中一个。在 TUI 中，裸 `/session` 会打开浮层 picker，可用 ↑/↓、Enter 和 Esc 操作。切换前会先保存当前 workspace，然后同时恢复目标 session 的 workspace 与 context。最近创建或显式激活的 session 会成为下次启动的默认 session。
 
 ## 模型切换
 
@@ -151,6 +157,9 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 ```text
 /clear
 /compact
+/new
+/session [list]
+/session switch <session-id-or-unique-prefix>
 /model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
 /thread status
 /thread branches
@@ -199,12 +208,13 @@ Workspace merge 是三方合并，v1 只会应用 clean 结果。在 TUI 中，`
 ```text
 <git-common-dir>/thread/
 ├── store.git/                  独立 sidecar object database
+├── projects/<project-id>.json  一个 worktree 的 active session 与激活顺序
 ├── indexes/<session-id>        私有 Git index
 ├── sessions/<session-id>/
 │   ├── events.jsonl            canonical append-only Project Session log
 │   ├── session.json
 │   └── cache/                   可重建的 capsules 和 semantic diffs
-├── locks/
+├── locks/                      project/session 进程锁
 └── tmp/
 ```
 
@@ -232,11 +242,11 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 公共 API
 
-`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序；最小端到端 smoke 也是通过这种方式使用 faux provider。`app.fsck()` 检查 log projection 和 sidecar objects。`app.deleteProjectSession()` 会显式删除本 harness 的 session log、private index 和 keep ref，然后执行 sidecar GC；它不会删除主 worktree。
+`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序；最小端到端 smoke 也是通过这种方式使用 faux provider。它的 `session`、`versions`、`capsules`、`diff` 和 `merge` 属性始终指向当前 active session runtime。`app.fsck()` 检查 project catalog、所有保留 session 的 log/keep ref 和 sidecar objects。`app.deleteProjectSession()` 只删除当前 active session 的 log、private index 和 keep ref；存在其他 session 时会恢复其中最近激活的一项，然后执行 sidecar GC。它不会删除主 worktree。
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、滚轮加速度、turn 分组、重设计视觉语言的实际渲染、`/model` 与 `/rewind` 浮层的 view 侧导航、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、多 session 创建/迁移/切换、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、滚轮加速度、turn 分组、重设计视觉语言的实际渲染、`/model`、`/session` 与 `/rewind` 浮层的 view 侧导航、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

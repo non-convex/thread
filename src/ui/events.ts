@@ -4,6 +4,13 @@ export type UiEvent =
   | { type: "command_started"; name: string }
   | { type: "command_finished"; name: string; ok: boolean }
   | {
+      type: "session_changed";
+      sessionId: string;
+      branch: string;
+      checkpointId: string;
+      reason: "new" | "switch";
+    }
+  | {
       type: "head_changed";
       branch: string;
       checkpointId: string;

@@ -45,6 +45,11 @@ export interface VersionStatus {
   commitCount: number;
 }
 
+export interface InitializeVersionOptions {
+  active?: boolean;
+  create?: boolean;
+}
+
 export class VersionService {
   readonly warnings: string[] = [];
   constructor(
@@ -76,9 +81,15 @@ export class VersionService {
     return this.lastRetentionCommitOid;
   }
 
-  async initialize(rootPath: string): Promise<{ created: boolean; recoveredOperations: string[] }> {
+  async initialize(
+    rootPath: string,
+    options: InitializeVersionOptions = {},
+  ): Promise<{ created: boolean; recoveredOperations: string[] }> {
     await this.workspace.initialize();
     if (!this.projection.session) {
+      if (options.create === false) {
+        throw new SessionCorruptionError(`Project session ${this.session.store.sessionId} has not been initialized`);
+      }
       const snapshot = await this.workspace.capture();
       const now = Date.now();
       const checkpoint: InternalCheckpoint = {
@@ -126,6 +137,16 @@ export class VersionService {
       );
     }
     await this.reconcileKeepRef();
+    if (options.active === false) {
+      const open = this.projection.getOpenOperations();
+      if (open.length > 0) {
+        throw new SessionCorruptionError(
+          `Inactive session ${this.session.store.sessionId} has ${open.length} interrupted operation(s)`,
+        );
+      }
+      this.projection.assertIdleInvariant(this.projection.session.currentBranch);
+      return { created: false, recoveredOperations: [] };
+    }
     const recoveredOperations = await this.recoverStartup();
     this.projection.assertIdleInvariant(this.projection.session.currentBranch);
     return { created: false, recoveredOperations };

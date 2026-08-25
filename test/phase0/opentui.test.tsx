@@ -455,3 +455,50 @@ test("the /rewind overlay lists user messages as rewind targets and navigates vi
   }
 });
 
+test("the /session overlay marks the active session and navigates view-side", async () => {
+  const viewResources = resources();
+  const state = createUiState("main", "checkpoint-123456789", []);
+  state.screen = {
+    type: "session_picker",
+    sessions: [
+      { id: "session_current111111", createdAt: 1_700_000_000_000, lastActivatedAt: 1_700_000_120_000, current: true },
+      { id: "session_previous2222", createdAt: 1_699_000_000_000, lastActivatedAt: 1_700_000_060_000, current: false },
+    ],
+    selected: 0,
+    busy: false,
+    error: undefined,
+  };
+  const meta: TerminalMeta = {
+    rootPath: process.cwd(),
+    modelLabel: "no model",
+    modelName: "no model",
+    thinkingLevel: "off",
+    supportsThinking: false,
+    contextPercent: 0,
+    uncommitted: false,
+  };
+  const viewModel = fakeViewModel(state, meta);
+  viewModel.controller.handleScreenKey = (key) => {
+    if (key.name === "up" || key.name === "down") throw new Error("overlay arrow keys must stay view-side");
+    return false;
+  };
+  const setup = await testRender(
+    () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
+    { width: 80, height: 24, screenMode: "alternate-screen", kittyKeyboard: true },
+  );
+  try {
+    await setup.flush();
+    let frame = setup.captureCharFrame();
+    assert.match(frame, /project sessions · most recently activated first/);
+    assert.match(frame, /▸ session_current111111/);
+    assert.match(frame, /session_previous2222/);
+    setup.mockInput.pressArrow("down");
+    await setup.flush();
+    frame = setup.captureCharFrame();
+    assert.match(frame, /▸ session_previous2222/);
+    assert.doesNotMatch(frame, /▸ session_current111111/);
+  } finally {
+    setup.renderer.destroy();
+    viewResources.syntaxStyle.destroy();
+  }
+});

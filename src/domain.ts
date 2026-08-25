@@ -17,6 +17,13 @@ export interface ProjectSession {
   updatedAt: number;
 }
 
+export interface SessionSummary {
+  id: string;
+  createdAt: number;
+  lastActivatedAt: number;
+  current: boolean;
+}
+
 export interface EntryBase {
   id: string;
   sessionId: string;

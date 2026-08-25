@@ -30,7 +30,7 @@ export function ThreadRoot(props: {
   const [composerCursor, setComposerCursor] = createSignal(0);
   const [forcePathCompletion, setForcePathCompletion] = createSignal(false);
   const [suggestionIndex, setSuggestionIndex] = createSignal(0);
-  /* Selection for the floating overlays (model picker, rewind). Kept in a
+  /* Selection for the floating overlays (model/session picker, rewind). Kept in a
    * local signal instead of the mutable screen object so arrow keys repaint
    * only the overlay rows — routing every keystroke through the controller's
    * notify() re-evaluated every state()/meta() binding in the tree and the
@@ -78,7 +78,7 @@ export function ThreadRoot(props: {
    * are set, which Solid treats as no-ops. */
   createEffect(() => {
     const active = screen();
-    if (active.type === "model_picker" || active.type === "rewind") {
+    if (active.type === "model_picker" || active.type === "session_picker" || active.type === "rewind") {
       setOverlaySelected(active.selected);
       setOverlayNavigated(false);
     }
@@ -151,13 +151,15 @@ export function ThreadRoot(props: {
       return;
     }
     const activeScreen = screen();
-    if (activeScreen.type === "model_picker" || activeScreen.type === "rewind") {
+    if (activeScreen.type === "model_picker" || activeScreen.type === "session_picker" || activeScreen.type === "rewind") {
       // The picker/rewind panels float over the session screen: selection
       // keys move the view-side signal (no notify — that is what flickered),
       // enter goes to the controller, everything else reaches the composer.
       const count = activeScreen.type === "model_picker"
         ? activeScreen.models.length
-        : activeScreen.items.length;
+        : activeScreen.type === "session_picker"
+          ? activeScreen.sessions.length
+          : activeScreen.items.length;
       if ((key.name === "up" || key.name === "down") && count > 0 && !activeScreen.busy) {
         key.preventDefault();
         const delta = key.name === "up" ? -1 : 1;
@@ -225,9 +227,9 @@ export function ThreadRoot(props: {
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={props.resources.theme.background}>
       <Switch>
-        {/* The model picker and rewind panels are overlays on the session
-            screen, not separate screens, so all three route here. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind"}>
+        {/* The model/session pickers and rewind panel are overlays on the
+            session screen, not separate screens, so all four route here. */}
+        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "session_picker" || screen().type === "rewind"}>
           <SessionScreen
             controller={props.controller}
             state={state}

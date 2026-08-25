@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`thread` is a mini coding-agent harness in which a Project Session lasts for the life of a project. A thread version is the combination of a workspace snapshot and a conversation-context head. Thread branches, restore, diff and merge operate on those two dimensions together.
+`thread` is a mini coding-agent harness in which a Project Session can span the life of a project, while the user remains free to choose a new session boundary. A thread version is the combination of a workspace snapshot and a conversation-context head. Thread branches, restore, diff and merge operate on those two dimensions together.
 
 It deliberately does not reproduce all of Git. There is no staging area, rebase, stash or per-tool revision, and there is no separate external-memory store. Durable project knowledge is carried by the versioned conversation context and its compaction state.
 
@@ -24,7 +24,7 @@ Tagged releases also produce standalone Windows, Linux and macOS archives for x6
 
 ## Terminal interface
 
-An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. One agent turn — thinking, tool calls and reply — is tied together by an accent rail, completed thinking collapses to a single line, and tool rows carry their arguments and elapsed time. `/model` and a bare `/rewind` open compact panels floating above the composer, so the conversation and input stay visible. `/thread diff`, `/thread merge`, `/thread history` and long command results open full in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
+An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. One agent turn — thinking, tool calls and reply — is tied together by an accent rail, completed thinking keeps a collapsible five-line preview, and tool rows carry their arguments and elapsed time. `/model`, `/session` and a bare `/rewind` open compact panels floating above the composer, so the conversation and input stay visible. `/thread diff`, `/thread merge`, `/thread history` and long command results open full in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
 
 On process startup, context restoration and subsequent turns, the visible transcript is bounded to the eight most recent complete user-led interactions. Thinking and compact tool traces inside that window remain visible and preserve arrival order. This bound affects only the in-app transcript; the durable session, model context and tool records remain intact.
 
@@ -115,7 +115,13 @@ The version commands remain usable without any configured model:
 thread
 ```
 
-Normal text enters the streaming multi-step agent loop. `/model`, `/clear`, `/compact`, `/thread ...` and `/rewind ...` are intercepted before the LLM and never become ordinary user messages.
+Normal text enters the streaming multi-step agent loop. `/new`, `/session ...`, `/model`, `/clear`, `/compact`, `/thread ...` and `/rewind ...` are intercepted before the LLM and never become ordinary user messages.
+
+## Project sessions
+
+`/new` starts a new Project Session from the workspace exactly as it is now. Thread first records a safety checkpoint in the old session, then creates a new `main` branch with a genesis workspace snapshot and an empty conversation context. It does not generate a handoff, call the model or copy messages. The selected model, thinking level, tools and loaded extensions remain active because they belong to the running process rather than the session context.
+
+Use `/session` or `/session list` to inspect retained sessions, and `/session switch <session-id-or-unique-prefix>` to return to one. In the TUI, bare `/session` opens a floating picker; use ↑/↓, Enter and Esc. Switching first saves the current workspace, then restores both the target session's workspace and context. The most recently created or explicitly activated session becomes the default on the next launch.
 
 ## Model switching
 
@@ -151,6 +157,9 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 ```text
 /clear
 /compact
+/new
+/session [list]
+/session switch <session-id-or-unique-prefix>
 /model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
 /thread status
 /thread branches
@@ -199,12 +208,13 @@ Data lives under the worktree's Git common directory:
 ```text
 <git-common-dir>/thread/
 ├── store.git/                  independent sidecar object database
+├── projects/<project-id>.json  active session and activation order for one worktree
 ├── indexes/<session-id>        private Git index
 ├── sessions/<session-id>/
 │   ├── events.jsonl            canonical append-only Project Session log
 │   ├── session.json
 │   └── cache/                   rebuildable capsules and semantic diffs
-├── locks/
+├── locks/                      project and session process locks
 └── tmp/
 ```
 
@@ -232,11 +242,11 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Public API
 
-`ThreadApp.open()` can be embedded with an injected `ModelClient`, which is also how the faux provider is used for the minimal end-to-end smoke. `app.fsck()` checks log projections and sidecar objects. `app.deleteProjectSession()` explicitly deletes this harness's session log, private index and keep ref, then runs sidecar GC; it does not delete the main worktree.
+`ThreadApp.open()` can be embedded with an injected `ModelClient`, which is also how the faux provider is used for the minimal end-to-end smoke. Its `session`, `versions`, `capsules`, `diff` and `merge` properties always refer to the active session runtime. `app.fsck()` checks the project catalog, every retained session log/keep ref and sidecar objects. `app.deleteProjectSession()` explicitly deletes only the active session's log, private index and keep ref, restores the most recently activated remaining session when one exists, then runs sidecar GC; it does not delete the main worktree.
 
 ## Verification policy
 
-`bun run check`, `bun test` and `bun run build` are the local verification entry points. The intentionally compact suite covers the Project Session version loop, sidecar and replay safety, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen session updates, stable streaming Markdown identity, wheel scroll acceleration, turn grouping, the redesign's rendered language, view-side navigation of the `/model` and `/rewind` panels, controller screen routing and composer submission. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun test` and `bun run build` are the local verification entry points. The intentionally compact suite covers the Project Session version loop, multi-session creation/migration/switching, sidecar and replay safety, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen session updates, stable streaming Markdown identity, wheel scroll acceleration, turn grouping, the redesign's rendered language, view-side navigation of the `/model`, `/session` and `/rewind` panels, controller screen routing and composer submission. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

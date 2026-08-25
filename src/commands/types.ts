@@ -5,6 +5,7 @@ import type { MergeService } from "../revisions/merge-service.js";
 import type { ThreadDiffResult } from "../revisions/diff-service.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { VersionService } from "../revisions/version-service.js";
+import type { SessionSummary } from "../domain.js";
 
 export interface HistoryViewItem {
   turnId: string;
@@ -24,6 +25,7 @@ export type EphemeralView =
       currentModelId: string | undefined;
       scope: "configured" | "all";
     }
+  | { type: "session_picker"; sessions: SessionSummary[] }
   | { type: "thread_diff"; result: ThreadDiffResult }
   | { type: "thread_merge"; preview: MergePreview; selectedContext: ContextMergeStrategy }
   | { type: "history"; items: HistoryViewItem[] }

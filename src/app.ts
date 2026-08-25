@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import { clearDisplayResult, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
@@ -17,12 +17,14 @@ import { DiffService } from "./revisions/diff-service.js";
 import { MergeService } from "./revisions/merge-service.js";
 import { VersionService } from "./revisions/version-service.js";
 import { SessionLogStore } from "./session/log-store.js";
+import { ProjectSessionCatalog } from "./session/catalog.js";
 import { SessionService } from "./session/service.js";
 import { registerBuiltinTools } from "./tools/builtins.js";
 import { ToolRegistry } from "./tools/types.js";
 import { safeUiEvent, type UiEventSink } from "./ui/events.js";
 import { discoverGitWorkspace, type GitWorkspace } from "./workspace/discovery.js";
 import { SidecarWorkspaceStore } from "./workspace/sidecar-store.js";
+import { createId } from "./utils/id.js";
 
 export interface ThreadAppOptions {
   rootPath: string;
@@ -36,22 +38,28 @@ export type InputResult =
   | { kind: "command"; result: CommandResult }
   | { kind: "turn"; result: TurnResult };
 
+interface SessionRuntime {
+  log: SessionLogStore;
+  session: SessionService;
+  versions: VersionService;
+  cache: DerivedCache;
+  capsules: CapsuleService;
+  diff: DiffService;
+  merge: MergeService;
+  loop: AgentLoop | undefined;
+}
+
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
 
 export class ThreadApp {
   readonly extensionApi: ExtensionAPI;
   readonly rootPath: string;
-  readonly session: SessionService;
-  readonly versions: VersionService;
   readonly tools: ToolRegistry;
   readonly commands: CommandRegistry;
-  capsules!: CapsuleService;
-  diff!: DiffService;
-  merge!: MergeService;
   readonly workspace: GitWorkspace;
-  private readonly log: SessionLogStore;
-  private readonly cache: DerivedCache;
+  private runtime: SessionRuntime;
+  private readonly catalog: ProjectSessionCatalog;
   private readonly events: ExtensionEvents;
   private readonly modelCatalog: ModelCatalog | undefined;
   private readonly systemPrompt: string | undefined;
@@ -59,21 +67,20 @@ export class ThreadApp {
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
   private currentThinkingLevel: ModelThinkingLevel = "off";
-  private loop: AgentLoop | undefined;
+  private activeInputCount = 0;
+  private sessionTransitioning = false;
 
   private constructor(
     options: ThreadAppOptions,
     workspace: GitWorkspace,
+    catalog: ProjectSessionCatalog,
     log: SessionLogStore,
     session: SessionService,
     versions: VersionService,
   ) {
     this.rootPath = workspace.rootPath;
     this.workspace = workspace;
-    this.log = log;
-    this.session = session;
-    this.versions = versions;
-    this.cache = new DerivedCache(log.cacheDir);
+    this.catalog = catalog;
     this.events = new ExtensionEvents();
     this.modelCatalog = options.modelCatalog;
     this.systemPrompt = options.systemPrompt;
@@ -84,22 +91,61 @@ export class ThreadApp {
     this.commandRouter = new ThreadCommandRouter(this.commands);
     this.extensionApi = createExtensionAPI(this.tools, this.commands, this.events);
     this.preferredThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
-    this.configureRuntime(options.model);
+    this.currentModel = options.model;
+    this.currentThinkingLevel = this.clampThinkingLevel(options.model, this.preferredThinkingLevel);
+    this.runtime = this.buildRuntime(log, session, versions);
   }
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
     const workspace = await discoverGitWorkspace(path.resolve(options.rootPath));
-    const log = await SessionLogStore.open({ rootPath: workspace.rootPath, sidecarRoot: workspace.sidecarRoot });
+    const catalog = await ProjectSessionCatalog.open({
+      rootPath: workspace.rootPath,
+      sidecarRoot: workspace.sidecarRoot,
+    });
+    let log: SessionLogStore | undefined;
     try {
+      const sessionId = catalog.activeSessionId;
+      const registered = catalog.list().some((session) => session.id === sessionId);
+      log = await SessionLogStore.open({
+        rootPath: workspace.rootPath,
+        sidecarRoot: workspace.sidecarRoot,
+        sessionId,
+      });
       const session = new SessionService(log);
       const sidecar = new SidecarWorkspaceStore({ workspace, sessionId: log.sessionId });
       const versions = new VersionService(session, sidecar);
-      await versions.initialize(workspace.rootPath);
-      return new ThreadApp(options, workspace, log, session, versions);
+      await versions.initialize(workspace.rootPath, { active: true, create: !registered });
+      await catalog.activate(log.sessionId, session.projection.session!.createdAt);
+      return new ThreadApp(options, workspace, catalog, log, session, versions);
     } catch (error) {
-      await log.close();
+      await log?.close();
+      await catalog.close();
       throw error;
     }
+  }
+
+  get session(): SessionService {
+    return this.runtime.session;
+  }
+
+  get versions(): VersionService {
+    return this.runtime.versions;
+  }
+
+  get capsules(): CapsuleService {
+    return this.runtime.capsules;
+  }
+
+  get diff(): DiffService {
+    return this.runtime.diff;
+  }
+
+  get merge(): MergeService {
+    return this.runtime.merge;
+  }
+
+  private get loop(): AgentLoop | undefined {
+    return this.runtime.loop;
   }
 
   get model(): ModelClient | undefined {
@@ -155,17 +201,26 @@ export class ThreadApp {
   private configureRuntime(model: ModelClient | undefined): void {
     this.currentModel = model;
     this.currentThinkingLevel = this.clampThinkingLevel(model, this.preferredThinkingLevel);
+    this.runtime = this.buildRuntime(this.runtime.log, this.runtime.session, this.runtime.versions);
+  }
+
+  private buildRuntime(
+    log: SessionLogStore,
+    session: SessionService,
+    versions: VersionService,
+  ): SessionRuntime {
+    const cache = new DerivedCache(log.cacheDir);
     const reasoning = this.requestReasoning();
-    const semantic = model ? new ModelSemanticRunner(model, reasoning) : undefined;
-    this.capsules = new CapsuleService(this.session, this.cache, semantic);
-    this.diff = new DiffService(this.versions, this.session, this.capsules, this.cache, semantic);
-    this.merge = new MergeService(this.versions, this.session, this.capsules, semantic);
-    this.loop = model
+    const semantic = this.currentModel ? new ModelSemanticRunner(this.currentModel, reasoning) : undefined;
+    const capsules = new CapsuleService(session, cache, semantic);
+    const diff = new DiffService(versions, session, capsules, cache, semantic);
+    const merge = new MergeService(versions, session, capsules, semantic);
+    const loop = this.currentModel
       ? new AgentLoop(
           this.rootPath,
-          model,
-          this.session,
-          this.versions,
+          this.currentModel,
+          session,
+          versions,
           this.tools,
           this.events,
           {
@@ -174,6 +229,94 @@ export class ThreadApp {
           },
         )
       : undefined;
+    return { log, session, versions, cache, capsules, diff, merge, loop };
+  }
+
+  private async openSessionRuntime(
+    sessionId: string,
+    options: { active: boolean; create: boolean },
+  ): Promise<SessionRuntime> {
+    const log = await SessionLogStore.open({
+      rootPath: this.rootPath,
+      sidecarRoot: this.workspace.sidecarRoot,
+      sessionId,
+    });
+    try {
+      const session = new SessionService(log);
+      const sidecar = new SidecarWorkspaceStore({ workspace: this.workspace, sessionId });
+      const versions = new VersionService(session, sidecar);
+      await versions.initialize(this.rootPath, options);
+      return this.buildRuntime(log, session, versions);
+    } catch (error) {
+      await log.close();
+      if (options.create) {
+        await new SidecarWorkspaceStore({ workspace: this.workspace, sessionId }).deleteSessionObjects()
+          .catch(() => undefined);
+        await rm(log.sessionDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  private sessionListResult(): CommandResult {
+    const sessions = this.catalog.list();
+    const content = sessions.map((session) =>
+      `${session.current ? "*" : " "} ${session.id}  created ${new Date(session.createdAt).toISOString()}  last used ${new Date(session.lastActivatedAt).toISOString()}`
+    ).join("\n");
+    return viewResult(content || "(no project sessions)", { type: "session_picker", sessions });
+  }
+
+  private async createProjectSession(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    this.versions.requireIdle();
+    const previous = this.runtime;
+    await previous.versions.syncCurrentWorkspace("safety", true);
+    signal.throwIfAborted();
+    const sessionId = createId("session");
+    let next: SessionRuntime | undefined;
+    try {
+      next = await this.openSessionRuntime(sessionId, { active: false, create: true });
+      signal.throwIfAborted();
+      await this.catalog.activate(sessionId, next.session.projection.session!.createdAt);
+    } catch (error) {
+      if (next) {
+        await next.log.close();
+        await next.versions.workspace.deleteSessionObjects().catch(() => undefined);
+        await rm(next.log.sessionDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw error;
+    }
+    this.runtime = next;
+    await previous.log.close();
+    return sessionId;
+  }
+
+  private async switchProjectSession(idOrPrefix: string, signal: AbortSignal): Promise<string | undefined> {
+    signal.throwIfAborted();
+    const sessionId = this.catalog.resolve(idOrPrefix);
+    if (sessionId === this.runtime.log.sessionId) return undefined;
+    this.versions.requireIdle();
+    const previous = this.runtime;
+    const safety = await previous.versions.syncCurrentWorkspace("safety", true);
+    signal.throwIfAborted();
+    const next = await this.openSessionRuntime(sessionId, { active: false, create: false });
+    let restored = false;
+    try {
+      await next.versions.workspace.restoreTree(safety.workspaceTreeOid, next.versions.head.workspaceTreeOid);
+      restored = true;
+      signal.throwIfAborted();
+      await this.catalog.activate(sessionId, next.session.projection.session!.createdAt);
+    } catch (error) {
+      if (restored) {
+        await next.versions.workspace.restoreTree(next.versions.head.workspaceTreeOid, safety.workspaceTreeOid)
+          .catch(() => undefined);
+      }
+      await next.log.close();
+      throw error;
+    }
+    this.runtime = next;
+    await previous.log.close();
+    return sessionId;
   }
 
   private modelPickerModels(scope: "configured" | "all"): ModelDescriptor[] {
@@ -305,6 +448,87 @@ export class ThreadApp {
     input: string,
     options: { signal: AbortSignal; onTextDelta?: (delta: string) => void; onUiEvent?: UiEventSink },
   ): Promise<InputResult> {
+    const trimmed = input.trim();
+    const transition = trimmed === "/new" || /^\/session\s+switch(?:\s|$)/.test(trimmed);
+    if (this.sessionTransitioning) throw new Error("A project session transition is already running");
+    if (transition && this.activeInputCount > 0) {
+      throw new Error("Wait for the active turn or command before changing project sessions");
+    }
+    this.activeInputCount++;
+    if (transition) this.sessionTransitioning = true;
+    try {
+      return await this.handleInputInner(input, options);
+    } finally {
+      this.activeInputCount--;
+      if (transition) this.sessionTransitioning = false;
+    }
+  }
+
+  private async handleInputInner(
+    input: string,
+    options: { signal: AbortSignal; onTextDelta?: (delta: string) => void; onUiEvent?: UiEventSink },
+  ): Promise<InputResult> {
+    const isNewCommand = input === "/new" || (input.startsWith("/new") && /\s/.test(input[4] ?? ""));
+    if (isNewCommand) {
+      if (input.trim() !== "/new") throw new Error("Usage: /new");
+      safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
+      try {
+        const sessionId = await this.createProjectSession(options.signal);
+        safeUiEvent(options.onUiEvent, {
+          type: "session_changed",
+          sessionId,
+          branch: this.versions.currentBranch.name,
+          checkpointId: this.versions.head.id,
+          reason: "new",
+        });
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
+        return {
+          kind: "command",
+          result: ephemeral(`Started new project session ${sessionId} from the current workspace`, true),
+        };
+      } catch (error) {
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
+        throw error;
+      }
+    }
+    const sessionPrefix = "/session";
+    const isSessionCommand = input === sessionPrefix ||
+      (input.startsWith(sessionPrefix) && /\s/.test(input[sessionPrefix.length] ?? ""));
+    if (isSessionCommand) {
+      safeUiEvent(options.onUiEvent, { type: "command_started", name: "session" });
+      try {
+        options.signal.throwIfAborted();
+        const args = parseCommandLine(input.slice(sessionPrefix.length).trim());
+        if (args.length === 0 || (args.length === 1 && args[0] === "list")) {
+          const result = this.sessionListResult();
+          safeUiEvent(options.onUiEvent, { type: "command_finished", name: "session", ok: true });
+          return { kind: "command", result };
+        }
+        if (args[0] !== "switch" || args.length !== 2) {
+          throw new Error("Usage: /session [list] or /session switch <session-id-or-prefix>");
+        }
+        const sessionId = await this.switchProjectSession(args[1]!, options.signal);
+        if (sessionId) {
+          safeUiEvent(options.onUiEvent, {
+            type: "session_changed",
+            sessionId,
+            branch: this.versions.currentBranch.name,
+            checkpointId: this.versions.head.id,
+            reason: "switch",
+          });
+        }
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "session", ok: true });
+        return {
+          kind: "command",
+          result: sessionId
+            ? ephemeral(`Switched to project session ${sessionId}`, true)
+            : ephemeral(`Already using project session ${this.runtime.log.sessionId}`),
+        };
+      } catch (error) {
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "session", ok: false });
+        throw error;
+      }
+    }
     const commandContext = {
       rootPath: this.rootPath,
       versions: this.versions,
@@ -446,43 +670,100 @@ export class ThreadApp {
   }
 
   async fsck(): Promise<string[]> {
+    const summaries = this.catalog.list();
+    const existingIds = new Set<string>();
     const issues: string[] = [];
-    for (const branch of this.session.projection.branches.values()) {
-      if (!this.session.projection.checkpoints.has(branch.headCheckpointId)) {
+    const sessionsRoot = path.join(this.workspace.sidecarRoot, "sessions");
+    for (const entry of await readdir(sessionsRoot, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory() && /^session_[A-Za-z0-9]+$/.test(entry.name)) existingIds.add(entry.name);
+    }
+    issues.push(...await this.catalog.fsck(existingIds));
+    const registeredIds = new Set(summaries.map((summary) => summary.id));
+    for (const id of existingIds) {
+      if (!registeredIds.has(id)) issues.push(`session directory is not registered in the catalog: ${id}`);
+    }
+    if (this.catalog.activeSessionId !== this.runtime.log.sessionId) {
+      issues.push(
+        `session catalog active id is ${this.catalog.activeSessionId}; open session is ${this.runtime.log.sessionId}`,
+      );
+    }
+    issues.push(...await this.fsckRuntime(this.runtime));
+    for (const summary of summaries) {
+      if (summary.current || !existingIds.has(summary.id)) continue;
+      let log: SessionLogStore | undefined;
+      try {
+        log = await SessionLogStore.open({
+          rootPath: this.rootPath,
+          sidecarRoot: this.workspace.sidecarRoot,
+          sessionId: summary.id,
+        });
+        const session = new SessionService(log);
+        const versions = new VersionService(
+          session,
+          new SidecarWorkspaceStore({ workspace: this.workspace, sessionId: summary.id }),
+        );
+        issues.push(...(await this.fsckRuntime(this.buildRuntime(log, session, versions)))
+          .map((issue) => `${summary.id}: ${issue}`));
+      } catch (error) {
+        issues.push(`${summary.id}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        await log?.close();
+      }
+    }
+    return issues;
+  }
+
+  private async fsckRuntime(runtime: SessionRuntime): Promise<string[]> {
+    const issues: string[] = [];
+    for (const branch of runtime.session.projection.branches.values()) {
+      if (!runtime.session.projection.checkpoints.has(branch.headCheckpointId)) {
         issues.push(`branch ${branch.name} references missing checkpoint ${branch.headCheckpointId}`);
       }
     }
-    for (const commit of this.session.projection.commits.values()) {
-      if (!this.session.projection.checkpoints.has(commit.checkpointId)) {
+    for (const commit of runtime.session.projection.commits.values()) {
+      if (!runtime.session.projection.checkpoints.has(commit.checkpointId)) {
         issues.push(`commit ${commit.id} references missing checkpoint ${commit.checkpointId}`);
       }
     }
-    for (const checkpoint of this.session.projection.checkpoints.values()) {
+    for (const checkpoint of runtime.session.projection.checkpoints.values()) {
       try {
-        await this.versions.workspace.verifySnapshot(checkpoint.workspaceTreeOid, checkpoint.retentionCommitOid);
+        await runtime.versions.workspace.verifySnapshot(checkpoint.workspaceTreeOid, checkpoint.retentionCommitOid);
       } catch (error) {
         issues.push(`checkpoint ${checkpoint.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    const keep = await this.versions.workspace.readKeepRef();
-    if (keep !== this.versions.expectedKeepRef) {
-      issues.push(`sidecar keep ref is ${keep ?? "missing"}; expected ${this.versions.expectedKeepRef ?? "none"}`);
+    const keep = await runtime.versions.workspace.readKeepRef();
+    if (keep !== runtime.versions.expectedKeepRef) {
+      issues.push(`sidecar keep ref is ${keep ?? "missing"}; expected ${runtime.versions.expectedKeepRef ?? "none"}`);
     }
     try {
-      for (const branch of this.session.projection.branches.keys()) this.session.projection.assertIdleInvariant(branch);
+      for (const branch of runtime.session.projection.branches.keys()) {
+        runtime.session.projection.assertIdleInvariant(branch);
+      }
     } catch (error) {
       issues.push(error instanceof Error ? error.message : String(error));
     }
     return issues;
   }
 
-  close(): Promise<void> {
-    return this.log.close();
+  async close(): Promise<void> {
+    await this.runtime.log.close();
+    await this.catalog.close();
   }
 
   async deleteProjectSession(): Promise<void> {
-    await this.log.close();
-    await rm(this.log.sessionDir, { recursive: true, force: true });
-    await this.versions.workspace.deleteSessionObjects();
+    this.versions.requireIdle();
+    const deleted = this.runtime;
+    const fallback = this.catalog.list().find((session) => !session.current);
+    if (fallback) {
+      await this.switchProjectSession(fallback.id, new AbortController().signal);
+    } else {
+      await deleted.log.close();
+    }
+    await this.catalog.remove(deleted.log.sessionId);
+    await rm(deleted.log.sessionDir, { recursive: true, force: true });
+    await deleted.versions.workspace.deleteSessionObjects();
+    if (fallback) await this.runtime.log.close();
+    await this.catalog.close();
   }
 }

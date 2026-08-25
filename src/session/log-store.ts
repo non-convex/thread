@@ -8,6 +8,7 @@ import { SessionCorruptionError, SessionProjection } from "./projection.js";
 export interface SessionLogStoreOptions {
   rootPath: string;
   sidecarRoot: string;
+  sessionId?: string;
 }
 
 export interface AppendOptions {
@@ -37,7 +38,10 @@ export class SessionLogStore {
   private constructor(options: SessionLogStoreOptions) {
     const resolvedRoot = path.resolve(options.rootPath);
     const normalizedRoot = process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
-    this.sessionId = stableId("session", normalizedRoot);
+    this.sessionId = options.sessionId ?? stableId("session", normalizedRoot);
+    if (!/^session_[A-Za-z0-9]+$/.test(this.sessionId)) {
+      throw new Error(`Invalid session id: ${this.sessionId}`);
+    }
     this.sessionDir = path.join(options.sidecarRoot, "sessions", this.sessionId);
     this.eventsPath = path.join(this.sessionDir, "events.jsonl");
     this.cacheDir = path.join(this.sessionDir, "cache");
@@ -163,7 +167,11 @@ export class SessionLogStore {
     const target = path.join(this.sessionDir, "session.json");
     await writeFile(
       target,
-      `${JSON.stringify({ id: this.sessionId, rootPath: path.resolve(rootPath) }, null, 2)}\n`,
+      `${JSON.stringify({
+        id: this.sessionId,
+        rootPath: path.resolve(rootPath),
+        ...(this.projection.session ? { createdAt: this.projection.session.createdAt } : {}),
+      }, null, 2)}\n`,
       "utf8",
     );
   }

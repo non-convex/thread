@@ -4,6 +4,7 @@ import type { ThreadDiffResult } from "../revisions/diff-service.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { ToolResult } from "../tools/types.js";
 import type { UiEvent } from "./events.js";
+import type { SessionSummary } from "../domain.js";
 
 export interface TranscriptItem {
   id: string;
@@ -67,10 +68,20 @@ export interface RewindScreen {
   error: string | undefined;
 }
 
+export interface SessionPickerScreen {
+  type: "session_picker";
+  sessions: SessionSummary[];
+  /** Written by the view on every arrow key; the controller only reads it. */
+  selected: number;
+  busy: boolean;
+  error: string | undefined;
+}
+
 export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
+  | SessionPickerScreen
   | RewindScreen
   | { type: "diff"; result: ThreadDiffResult; tab: "summary" | "context" | "workspace" }
   | {
@@ -127,6 +138,16 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       currentProviderId: view.currentProviderId,
       currentModelId: view.currentModelId,
       scope: view.scope,
+      selected: current >= 0 ? current : 0,
+      busy: false,
+      error: undefined,
+    };
+  }
+  if (view.type === "session_picker") {
+    const current = view.sessions.findIndex((session) => session.current);
+    state.screen = {
+      type: "session_picker",
+      sessions: view.sessions,
       selected: current >= 0 ? current : 0,
       busy: false,
       error: undefined,
@@ -210,7 +231,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
     case "command_started":
       state.busy = true;
-      state.activity = ["clear", "compact", "model", "rewind"].includes(event.name)
+      state.activity = ["clear", "compact", "model", "new", "session", "rewind"].includes(event.name)
         ? `running /${event.name}`
         : `running /thread ${event.name}`;
       state.notice = undefined;
@@ -218,6 +239,10 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "command_finished":
       state.busy = false;
       state.activity = undefined;
+      return;
+    case "session_changed":
+      state.branch = event.branch;
+      state.checkpointId = event.checkpointId;
       return;
     case "head_changed":
       state.branch = event.branch;

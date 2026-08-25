@@ -63,8 +63,8 @@ TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain 
 Default config: ~/.thread/config.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
-Inside the prompt use /model to inspect or switch models, /clear, /compact,
-/thread for version commands, /rewind <turn-id>, or /exit.
+Inside the prompt use /new, /session to manage project sessions, /model,
+/clear, /compact, /thread for version commands, /rewind <turn-id>, or /exit.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 
