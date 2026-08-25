@@ -54,6 +54,13 @@ export interface ModelClient {
   readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
   completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string>;
+  /**
+   * Fork the live conversation: reuse its exact prefix (system prompt plus
+   * messages) and append one instruction as the newest user message. The reply
+   * is returned to the caller instead of entering the agent loop, so the prefix
+   * stays byte-identical and keeps hitting the provider's prompt cache.
+   */
+  forkComplete(context: Context, instruction: string, options: ModelRequestOptions): Promise<string>;
 }
 
 export interface ModelDescriptor {
@@ -126,6 +133,28 @@ export class PiModelClient implements ModelClient {
         },
       },
     );
+  }
+
+  async forkComplete(context: Context, instruction: string, options: ModelRequestOptions): Promise<string> {
+    /* The fork keeps the live prefix intact and only appends the instruction,
+     * so the provider's cached prefix still matches. Tools are dropped: the
+     * fork must produce text, never a tool call. */
+    const forked: Context = {
+      ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
+      messages: [...context.messages, { role: "user", content: instruction, timestamp: Date.now() }],
+      tools: [],
+    };
+    const message = await this.stream(forked, options);
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      throw new Error(message.errorMessage ?? `Forked request stopped with ${message.stopReason}`);
+    }
+    const text = message.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("\n")
+      .trim();
+    if (!text) throw new Error("Forked request returned no text");
+    return text;
   }
 
   async completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string> {

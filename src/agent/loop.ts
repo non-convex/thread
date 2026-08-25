@@ -113,6 +113,7 @@ export class AgentLoop {
         { runId: operationId, resultEntryId },
         "manual",
         observer,
+        manualContext,
       );
       if (!run) throw new Error("Context became ineligible for compaction");
       const checkpoint = await this.versions.finishCompaction(operationId, branchName);
@@ -226,6 +227,7 @@ export class AgentLoop {
           runSignal,
           { runId: operationId },
           compactionObserver,
+          assembled.context,
         );
         if (compacted) {
           assembled = await this.assembleContext(branchName, turnId);
@@ -296,6 +298,7 @@ export class AgentLoop {
             { runId: operationId },
             "overflow",
             compactionObserver,
+            { systemPrompt: this.systemPrompt, messages: current, tools: this.tools.modelDefinitions() },
           );
           continue;
         }

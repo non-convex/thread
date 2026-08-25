@@ -1,9 +1,8 @@
-import { type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "../domain.js";
 import type { SessionService } from "../session/service.js";
 import { estimateContextTokens } from "../utils/estimate.js";
 import { createId } from "../utils/id.js";
-import { semanticMessageTranscript } from "./message-projection.js";
 import type { ModelClient } from "./model-client.js";
 
 const PROJECT_STATE_REQUIREMENTS = [
@@ -23,10 +22,13 @@ const PROJECT_STATE_REQUIREMENTS = [
   "Under `## Current project state`, record the current goal and phase, implemented workspace changes and intended",
   "behavior, validation evidence, unresolved problems or uncertainty, and the exact next useful action. Describe the",
   "material current state, not a historical inventory; omit completed changes that no longer help future work.",
-  "Under `## Recent user-agent conversation`, concisely summarize what the user and agent recently discussed: what",
-  "the user asked, corrected, rejected, or decided, and the material assistant response, action, or outcome. This",
-  "section may contain useful conversational context that is not durable long-term memory, but it must not become a",
-  "turn-by-turn transcript or repeat the retained raw tail.",
+  "Under `## Recent user-agent conversation`, record the most recent interactions as an ordered list, oldest first.",
+  "Use exactly this format for every entry: `- [YYYY-MM-DD HH] (interaction content)`, where the timestamp marks when",
+  "the interaction happened. Each entry states what the user asked, corrected, rejected, or decided, and the material",
+  "assistant response, action, or outcome. This section exists so that you still remember recent interaction after",
+  "compaction, so overlap with the project state is acceptable. Evict this section purely by time: keep at most the 10",
+  "most recent entries and drop the oldest beyond that, even when their content still looks valuable — anything with",
+  "durable value belongs in long-term memory instead. Never let this section become a turn-by-turn transcript.",
   "Treat later evidence as authoritative over earlier state. When an older item is contradicted, obsolete, completed",
   "and no longer useful, or too temporary to matter, replace or remove it instead of preserving both versions.",
   "Preserve material outcomes and evidence from tool calls, not raw tool output.",
@@ -41,52 +43,24 @@ const PROJECT_STATE_REQUIREMENTS = [
   "evidence from inference. Use concise Markdown with useful project-state headings; omit empty headings.",
 ].join(" ");
 
-const INITIAL_STATE_SYSTEM_PROMPT = [
-  "Create the initial compacted project state from the supplied chronological session interactions.",
-  "Within those interactions, later corrections and decisions supersede earlier ones. Select long-term memory for",
-  "future usefulness rather than trying to preserve every detail.",
+const INITIAL_STATE_INSTRUCTION = [
+  "Compact this conversation into a project state document, replacing the earlier turns that are about to leave your",
+  "context. Read the conversation above as the source; later corrections and decisions supersede earlier ones. Select",
+  "long-term memory for future usefulness rather than trying to preserve every detail.",
   PROJECT_STATE_REQUIREMENTS,
 ].join(" ");
 
-const UPDATE_STATE_SYSTEM_PROMPT = [
-  "Update an existing compacted project state using later chronological session interactions.",
-  "The input contains PREVIOUS PROJECT STATE and NEW INTERACTIONS TO ABSORB. Re-evaluate the previous long-term",
-  "memory instead of copying it mechanically. Carry forward only items that remain valid and likely to help future",
-  "work, even when the new interactions do not repeat them; update, replace, or remove items made stale or irrelevant",
-  "by later evidence or the passage of time. Apply later user corrections and decisions over superseded state, move",
-  "completed or validated work to its current status, and retain genuinely unresolved disagreement or uncertainty.",
-  "Replace the old Recent user-agent conversation section with a fresh digest of the newest interactions being",
-  "absorbed; do not accumulate the entire conversation history in that section. Return one complete updated project",
-  "state, not a change list and not two summaries.",
+const UPDATE_STATE_INSTRUCTION = [
+  "Compact this conversation into an updated project state document, replacing the earlier turns that are about to",
+  "leave your context. The conversation above already contains a previous project state followed by newer",
+  "interactions. Re-evaluate that previous long-term memory instead of copying it mechanically: carry forward only",
+  "items that remain valid and likely to help future work, even when the newer interactions do not repeat them, and",
+  "update, replace, or remove items made stale or irrelevant by later evidence or the passage of time. Apply later",
+  "user corrections and decisions over superseded state, move completed or validated work to its current status, and",
+  "retain genuinely unresolved disagreement or uncertainty. Rebuild the recent-conversation section from the newest",
+  "interactions rather than accumulating the whole history. Return one complete updated project state, not a change",
+  "list and not two summaries.",
   PROJECT_STATE_REQUIREMENTS,
-].join(" ");
-
-const CHUNK_SYSTEM_PROMPT = [
-  "Summarize one chronological fragment of a coding-agent session.",
-  "Preserve concrete user requirements, corrections, decisions, code changes, validation evidence, unresolved",
-  "problems, source uncertainty, and what the user discussed or asked. Messages carry YYYY-MM-DD source dates; retain",
-  "an absolute date for time-sensitive or superseding information when it is needed later to judge freshness.",
-  "Preserve material tool-call findings and essential diagnostics, but do not inventory commands or copy long file",
-  "contents, search results, or logs.",
-  "Keep an exact command only when required to reproduce an important validation or unresolved failure.",
-  "Consolidate repeated tests and attempts into conclusions; omit routine navigation, inspection commands, and",
-  "successful commands with no future relevance.",
-  "This fragment will later be merged with summaries of other fragments. Do not invent facts.",
-  "Return concise free text.",
-].join(" ");
-
-const REDUCTION_SYSTEM_PROMPT = [
-  "Merge chronological partial summaries of new coding-agent interactions into fewer chronological partial",
-  "summaries. These will later be applied to a separate previous project state, so preserve corrections, decisions,",
-  "changes, validation, unresolved problems, source uncertainty, what the user discussed or asked, relevant absolute",
-  "dates, and ordering needed to update that state. Preserve which later facts correct, replace, or invalidate earlier",
-  "ones, and keep the most recent conversational context identifiable for the final recent-conversation digest.",
-  "Remove repetition while preserving the project goal, explicit user requirements, decisions, files changed and",
-  "their intended behavior, material tool-call findings, validation results, unresolved problems, and the exact next",
-  "useful action. Do not produce a command history: retain exact commands only when needed to reproduce important",
-  "validation or unresolved failures, and consolidate repeated tests or attempts into conclusions.",
-  "Keep conclusions and essential evidence, not raw file contents or logs. Do not invent facts.",
-  "Return concise free text.",
 ].join(" ");
 
 const PRIOR_STATE_PREFIX = "[Summary of earlier project-session context]";
@@ -96,7 +70,13 @@ const PRIOR_STATE_PREFIX = "[Summary of earlier project-session context]";
 // that will actually be sent.
 export const CONTEXT_SAFETY_TOKENS = 4_096;
 export const POST_COMPACTION_CONTEXT_RATIO = 0.07;
-const INTERMEDIATE_SUMMARY_TOKENS = 1_536;
+/**
+ * Compaction forks the live conversation, so its request carries the same
+ * prefix it is about to compact. Triggering at a ratio instead of "the next
+ * request no longer fits" keeps enough headroom for that fork to be sent.
+ */
+export const COMPACTION_TRIGGER_RATIO = 0.78;
+/** Slack reserved for the summary wrapper when sizing the retained tail. */
 const PROMPT_WRAPPER_TOKENS = 128;
 
 export interface CompactionOptions {
@@ -148,8 +128,14 @@ export class ContextCompactor {
     if (this.maxSummaryTokens < 1) throw new Error("maxSummaryTokens must be at least 1");
   }
 
-  shouldCompact(requestTokens: number, outputTokens: number): boolean {
-    return requestTokens + outputTokens + this.safetyTokens > this.model.contextWindow;
+  /**
+   * Compaction forks the live context, so the fork request carries the same
+   * prefix plus the instruction and its own output budget. Trigger on a ratio
+   * of the window to leave room for that, rather than waiting until the next
+   * ordinary request no longer fits.
+   */
+  shouldCompact(requestTokens: number, _outputTokens: number): boolean {
+    return requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
   }
 
   retainedTailBudget(overheadTokens: number): number {
@@ -172,6 +158,7 @@ export class ContextCompactor {
     signal: AbortSignal,
     execution: CompactionExecution = {},
     observer?: CompactionObserver,
+    forkContext?: Context,
   ): Promise<CompactionRun | undefined> {
     if (!this.shouldCompact(budget.requestTokens, budget.outputTokens)) return undefined;
     return this.compact(
@@ -183,6 +170,7 @@ export class ContextCompactor {
       execution,
       "threshold",
       observer,
+      forkContext,
     );
   }
 
@@ -195,6 +183,7 @@ export class ContextCompactor {
     execution: CompactionExecution = {},
     reason: "manual" | "threshold" | "overflow" = "manual",
     observer?: CompactionObserver,
+    forkContext?: Context,
   ): Promise<CompactionRun | undefined> {
     const partition = this.partition(messages, retainedTailBudgetTokens);
     if (partition.toSummarize.length === 0 || this.isPriorSummaryOnly(partition.toSummarize)) return undefined;
@@ -216,7 +205,7 @@ export class ContextCompactor {
           true,
         );
       }
-      const generated = await this.summarize(partition.toSummarize, signal);
+      const generated = await this.summarize(partition.toSummarize, signal, forkContext);
       const entry = await this.session.appendEntry(
         lane,
         {
@@ -294,75 +283,37 @@ export class ContextCompactor {
     return estimateContextTokens([estimateMarker, ...messages]).tokens;
   }
 
-  private async summarize(messages: Message[], signal: AbortSignal): Promise<{ summary: string; modelCalls: number }> {
+  private async summarize(
+    messages: Message[],
+    signal: AbortSignal,
+    forkContext?: Context,
+  ): Promise<{ summary: string; modelCalls: number }> {
+    if (!forkContext) throw new Error("Compaction requires the live context to fork");
     const previousState = this.priorProjectState(messages[0]);
-    const newMessages = previousState === undefined ? messages : messages.slice(1);
-    const transcript = semanticMessageTranscript(
-      newMessages,
-      "Session interaction message",
-      "[No new session interactions.]",
-    );
-    const finalPrompt = this.withTokenLimit(
-      previousState === undefined ? INITIAL_STATE_SYSTEM_PROMPT : UPDATE_STATE_SYSTEM_PROMPT,
+    const instruction = this.withTokenLimit(
+      previousState === undefined ? INITIAL_STATE_INSTRUCTION : UPDATE_STATE_INSTRUCTION,
       this.maxSummaryTokens,
     );
-    const directLimit = this.maxPromptChars(finalPrompt, this.maxSummaryTokens);
-    const directInput = this.projectStateInput(previousState, transcript);
-    if (directInput.length <= directLimit) {
-      const summary = await this.complete(finalPrompt, directInput, this.maxSummaryTokens, signal);
-      return { summary, modelCalls: 1 };
-    }
-
-    const intermediateTokens = Math.min(INTERMEDIATE_SUMMARY_TOKENS, this.maxSummaryTokens);
-    const chunkPrompt = this.withTokenLimit(CHUNK_SYSTEM_PROMPT, intermediateTokens);
-    const chunkLimit = this.maxPromptChars(chunkPrompt, intermediateTokens);
-    const chunks = this.splitText(transcript, chunkLimit);
-    let modelCalls = 0;
-    let partials: string[] = [];
-    for (let index = 0; index < chunks.length; index++) {
-      partials.push(
-        await this.complete(
-          chunkPrompt,
-          `[Transcript fragment ${index + 1}/${chunks.length}]\n${chunks[index]!}`,
-          intermediateTokens,
-          signal,
-        ),
+    /* Fork the live conversation instead of rebuilding a projected transcript:
+     * the model reads what it actually experienced, and the request reuses the
+     * cached prefix. The fork still has to fit beside its own output budget. */
+    const forkTokens = estimateContextTokens({
+      ...forkContext,
+      messages: [...forkContext.messages, { role: "user", content: instruction, timestamp: Date.now() }],
+    }).tokens;
+    const ceiling = this.model.contextWindow - this.safetyTokens - this.maxSummaryTokens;
+    if (forkTokens > ceiling) {
+      throw new Error(
+        `Context is too large to compact: the forked request needs about ${forkTokens.toLocaleString("en-US")} tokens but only ${Math.max(0, ceiling).toLocaleString("en-US")} are available. Use /clear or /rewind to reduce it.`,
       );
-      modelCalls++;
     }
-
-    const reductionPrompt = this.withTokenLimit(REDUCTION_SYSTEM_PROMPT, intermediateTokens);
-    const finalLimit = this.maxPromptChars(finalPrompt, this.maxSummaryTokens);
-    if (this.projectStateInput(previousState, "").length >= finalLimit) {
-      throw new Error("Previous compacted project state leaves no room for new interaction summaries");
-    }
-    for (let pass = 0; pass < 12; pass++) {
-      const combined = partials.map((summary, index) => `[Partial summary ${index + 1}]\n${summary}`).join("\n\n");
-      const stateInput = this.projectStateInput(previousState, combined);
-      if (stateInput.length <= finalLimit) {
-        const summary = await this.complete(finalPrompt, stateInput, this.maxSummaryTokens, signal);
-        return { summary, modelCalls: modelCalls + 1 };
-      }
-      const reductionLimit = this.maxPromptChars(reductionPrompt, intermediateTokens);
-      const reductionChunks = this.splitText(combined, reductionLimit);
-      const next: string[] = [];
-      for (let index = 0; index < reductionChunks.length; index++) {
-        next.push(
-          await this.complete(
-            reductionPrompt,
-            `[Summary reduction ${index + 1}/${reductionChunks.length}]\n${reductionChunks[index]!}`,
-            intermediateTokens,
-            signal,
-          ),
-        );
-        modelCalls++;
-      }
-      const previousLength = combined.length;
-      const nextLength = next.reduce((sum, value) => sum + value.length, 0);
-      if (nextLength >= previousLength) throw new Error("Chunked compaction did not reduce its intermediate summaries");
-      partials = next;
-    }
-    throw new Error("Chunked compaction exceeded its reduction pass limit");
+    const summary = await this.model.forkComplete(forkContext, instruction, {
+      signal,
+      maxTokens: this.maxSummaryTokens,
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+    });
+    if (!summary.trim()) throw new Error("Compaction model returned an empty summary");
+    return { summary: summary.trim(), modelCalls: 1 };
   }
 
   private priorProjectState(message: Message | undefined): string | undefined {
@@ -370,57 +321,7 @@ export class ContextCompactor {
     return message.content.slice(PRIOR_STATE_PREFIX.length).trim();
   }
 
-  private projectStateInput(previousState: string | undefined, newEvidence: string): string {
-    if (previousState === undefined) {
-      return `[SESSION INTERACTIONS TO CONVERT INTO PROJECT STATE]\n${newEvidence}`;
-    }
-    return [
-      `[PREVIOUS PROJECT STATE — CARRY FORWARD UNCHANGED ITEMS]\n${previousState}`,
-      `[NEW INTERACTIONS TO ABSORB — LATER EVIDENCE OVERRIDES SUPERSEDED STATE]\n${newEvidence}`,
-    ].join("\n\n");
-  }
-
-  private maxPromptChars(systemPrompt: string, outputTokens: number): number {
-    const systemTokens = Math.ceil(systemPrompt.length / 4);
-    const available =
-      this.model.contextWindow - this.safetyTokens - outputTokens - systemTokens - PROMPT_WRAPPER_TOKENS;
-    if (available < 256) {
-      throw new Error(`Model context window ${this.model.contextWindow} is too small for compaction`);
-    }
-    return available * 4;
-  }
-
   private withTokenLimit(prompt: string, maxTokens: number): string {
     return `${prompt}\n\nYour response must not exceed ${maxTokens.toLocaleString("en-US")} tokens. Use less when the required continuation context is already complete; never add filler to reach the limit.`;
-  }
-
-  private splitText(text: string, maxChars: number): string[] {
-    if (text.length <= maxChars) return [text];
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining.length > maxChars) {
-      const window = remaining.slice(0, maxChars);
-      const newline = window.lastIndexOf("\n");
-      const cut = newline >= Math.floor(maxChars / 2) ? newline + 1 : maxChars;
-      chunks.push(remaining.slice(0, cut));
-      remaining = remaining.slice(cut);
-    }
-    if (remaining) chunks.push(remaining);
-    return chunks;
-  }
-
-  private async complete(
-    systemPrompt: string,
-    prompt: string,
-    maxTokens: number,
-    signal: AbortSignal,
-  ): Promise<string> {
-    const result = await this.model.completeText(systemPrompt, prompt, {
-      signal,
-      maxTokens,
-      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-    });
-    if (!result.trim()) throw new Error("Compaction model returned an empty summary");
-    return result.trim();
   }
 }

@@ -178,7 +178,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `/clear` 不改变任何持久状态：它隐藏当前 context head 之前的消息，之后的消息仍会使用完整后端上下文。重启终端或切换到其他 context 后，这些消息可能再次显示。
 
-`/compact` 强制执行运行时 context compaction，但不会添加用户消息。压缩后 input context 的目标是模型 context window 的 7%，其中包括 system prompt、tools、extension context、生成的 project state 和保留的原始交互。摘要之前，消息会投影为带日期的纯文本语义证据：排除 provider metadata、usage、thinking、signature、图片二进制和 raw tool details，同时保留每条消息的 `YYYY-MM-DD` 来源日期、用户可见文本、tool call、模型可见 tool result 以及材料性的停止/错误状态。最终 project state 的上限为 4K tokens：一方面选择性携带未来可能有用的持久项目知识，另一方面保存最近被压缩会话的滚动摘要，包括用户最近讨论或要求的内容。时间敏感或会被覆盖的状态可以保留绝对日期；永恒事实不会机械添加日期。第一次压缩会从更早的交互前缀创建状态；之后的压缩会显式使用“上一版状态 + 本次新增交互”重新生成完整状态：保留仍然有用的项目知识，用较新的修正替换旧状态，删除过时或无关内容，并替换而不是累积上一段近期会话摘要。在尾部预算内，compactor 会尽可能保留更多近期完整 user-led interactions，至少两轮。如果两轮本身已超过目标，它们仍会完整保留，因此 7% 是目标而不是破坏性硬限制。压缩会创建一个可恢复的内部 checkpoint，但不会创建 `/thread commit`。如果没有可吸收的更早交互，则操作为空。
+`/compact` 强制执行运行时 context compaction，但不会添加用户消息。压缩采用 **fork 当前对话**的方式：复用逐字节相同的前缀（system prompt + messages），只追加一条压缩指令作为最新用户消息，因此请求命中 provider 的 prompt cache，模型读到的是它真实经历过的对话而非投影后的 transcript。回复不会进入 agent loop，只用于替换上下文。由于 fork 携带的正是它将要压缩的那份前缀，压缩改为在 **context window 的 78%** 触发，而不是等到下一次普通请求装不下。压缩后 input context 的目标是模型 context window 的 7%，其中包括 system prompt、tools、extension context、生成的 project state 和保留的原始交互。最终 project state 上限 4K tokens，固定三个小节：`Long-term memory` 以 `- [YYYY-MM-DD] (…)` 分条记录持久知识，最多 25 条，每次压缩重新整理；`Current project state` 描述当前目标、改动、验证、未解决问题与下一步；`Recent user-agent conversation` 以 `- [YYYY-MM-DD HH] (…)` 分条记录，最旧在前，最多 10 条并纯按时间淘汰——有持久价值的内容必须"毕业"进入长期记忆。在尾部预算内，compactor 会尽可能保留更多近期完整 user-led interactions，至少两轮。如果两轮本身已超过目标，它们仍会完整保留，因此 7% 是目标而不是破坏性硬限制。压缩会创建一个可恢复的内部 checkpoint，但不会创建 `/thread commit`。如果没有可吸收的更早交互，则操作为空。如果单轮交互过大、一次跳过触发阈值导致 fork 本身装不下，压缩会明确失败并提示使用 `/clear` 或 `/rewind`，不做静默降级。
 
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
@@ -226,7 +226,7 @@ Workspace objects 完全由独立 sidecar 拥有。按时间排列的 retention 
 
 ## 上下文与压缩
 
-原始 session entries 只追加。运行时 compaction 会追加更新后的 project state 和 retained tail，而不是删除旧条目。自动压缩依据完整请求估算触发：包括 system prompt、tools、extension context、messages、显式 output budget 和 pi-ai safety margin。当新增交互无法装入单次请求时，它会先通过有界的时间顺序分块缩减，再应用到上一版 project state。Context Capsules 是附着于 checkpoint 的有界、有损缓存；显式 commit 会尝试立即创建，semantic diff/merge 则会延迟生成缺失 Capsule。Compaction 与 Capsule 共用同一套确定性语义消息投影，因此派生摘要不会摄入 provider bookkeeping、hidden thinking 或重复 raw tool details。
+原始 session entries 只追加。运行时 compaction 会追加更新后的 project state 和 retained tail，而不是删除旧条目。自动压缩按 context window 比例触发，以便留出发送 fork 压缩请求的空间。Context Capsules 是附着于 checkpoint 的有界、有损缓存；显式 commit 会尝试立即创建，merge 则会延迟生成缺失 Capsule。Capsule 仍使用确定性语义消息投影（排除 provider bookkeeping、hidden thinking 与重复 raw tool details）；compaction 因为直接 fork 真实对话，已不再需要投影。
 
 项目没有独立的 project-memory 服务、检索 projection 或内置 memory tool。长期项目知识必须通过压缩后的 conversation state 延续，因此它会和 session context 的其他部分遵循相同的 branch、checkpoint、restore、diff 和 merge 边界。
 
