@@ -1,6 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
 import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
-import type { ThreadDiffResult } from "../revisions/diff-service.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { ToolResult } from "../tools/types.js";
 import type { UiEvent } from "./events.js";
@@ -83,7 +82,6 @@ export type UiScreen =
   | ModelPickerScreen
   | SessionPickerScreen
   | RewindScreen
-  | { type: "diff"; result: ThreadDiffResult; tab: "summary" | "context" | "workspace" }
   | {
       type: "merge";
       preview: MergePreview;
@@ -153,7 +151,6 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       error: undefined,
     };
   }
-  if (view.type === "thread_diff") state.screen = { type: "diff", result: view.result, tab: "summary" };
   if (view.type === "thread_merge") {
     state.screen = {
       type: "merge",

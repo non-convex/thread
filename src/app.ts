@@ -6,14 +6,13 @@ import { buildHistoryItems, registerBuiltinCommands, rewindCommand } from "./com
 import { parseCommandLine } from "./commands/parser.js";
 import { THREAD_COMMAND_PREFIX, ThreadCommandRouter } from "./commands/registry.js";
 import { CommandRegistry } from "./commands/types.js";
-import { AgentLoop, type TurnResult } from "./agent/loop.js";
+import { AgentLoop, DEFAULT_SYSTEM_PROMPT, type TurnResult } from "./agent/loop.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "./agent/model-client.js";
 import { ModelSemanticRunner } from "./agent/semantic-runner.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { ExtensionEvents } from "./extensions/events.js";
 import { DerivedCache } from "./persistence/cache.js";
 import { CapsuleService } from "./revisions/capsule-service.js";
-import { DiffService } from "./revisions/diff-service.js";
 import { MergeService } from "./revisions/merge-service.js";
 import { VersionService } from "./revisions/version-service.js";
 import { SessionLogStore } from "./session/log-store.js";
@@ -44,13 +43,52 @@ interface SessionRuntime {
   versions: VersionService;
   cache: DerivedCache;
   capsules: CapsuleService;
-  diff: DiffService;
   merge: MergeService;
   loop: AgentLoop | undefined;
 }
 
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
+
+/**
+ * Version metacognition appended to every agent system prompt. Composed once
+ * per runtime build (not per request) with this session's concrete paths, so
+ * the string stays byte-stable for the lifetime of a session and prompt-cache
+ * prefixes keep hitting. The agent uses this section to answer version
+ * questions — including wrapped /thread diff commands — with its normal
+ * atomic tools instead of a dedicated service.
+ */
+function versionSystemPromptSection(log: SessionLogStore, versions: VersionService): string {
+  return [
+    "## Version system (thread)",
+    "",
+    "This project session is versioned: every durable state change is a checkpoint that pairs a full",
+    "workspace snapshot with a conversation-context head. Thread commits name checkpoints as immutable",
+    "milestones; branches move between checkpoints. All version data is append-only and readable with",
+    "your existing tools:",
+    "",
+    `- Session log: ${log.eventsPath} — one JSON object per line, the canonical record of every`,
+    "  message, checkpoint, branch move and commit. Query it with grep, not by reading it whole; it",
+    "  grows unboundedly. Event types you will need: `thread_commit_created` (commit.checkpointId),",
+    "  `checkpoint_created` (checkpoint.id, .parentCheckpointIds, .workspaceTreeOid, .sessionHeadId,",
+    "  .reason), `branch_moved` (branchName, newCheckpointId). Refs resolve as: HEAD (current branch",
+    "  head), a branch name (its latest branch_moved target), a thread commit id or prefix, or a",
+    "  checkpoint id or prefix.",
+    `- Sidecar object store: ${versions.workspace.storeGitDir} — an independent Git object database`,
+    "  holding every snapshot. Read it with git, e.g.",
+    `  git --git-dir=${versions.workspace.storeGitDir} diff-tree -r <from-tree> <to-tree>.`,
+    "- The most recent `checkpoint_created` line in the log is this turn's base: a mechanical snapshot",
+    "  of the workspace exactly as the current turn began. When a task asks about \"now\" or the",
+    "  current state, diff against that tree instead of approximating the live workspace by hand.",
+    "",
+    "Rules:",
+    "- Version queries are strictly read-only. Never write to the session log or the sidecar store,",
+    "  and never run git commands that create objects, refs or commits in it. Version-mutating",
+    "  operations are driven by the user through /thread commands.",
+    "- If the sidecar paths are outside the workspace root (linked worktrees), the read/grep/list",
+    "  tools cannot reach them; use bash instead.",
+  ].join("\n");
+}
 
 export class ThreadApp {
   readonly extensionApi: ExtensionAPI;
@@ -136,10 +174,6 @@ export class ThreadApp {
     return this.runtime.capsules;
   }
 
-  get diff(): DiffService {
-    return this.runtime.diff;
-  }
-
   get merge(): MergeService {
     return this.runtime.merge;
   }
@@ -213,8 +247,8 @@ export class ThreadApp {
     const reasoning = this.requestReasoning();
     const semantic = this.currentModel ? new ModelSemanticRunner(this.currentModel, reasoning) : undefined;
     const capsules = new CapsuleService(session, cache, semantic);
-    const diff = new DiffService(versions, session, capsules, cache, semantic);
     const merge = new MergeService(versions, session, capsules, semantic);
+    const systemPrompt = `${this.systemPrompt ?? DEFAULT_SYSTEM_PROMPT}\n\n${versionSystemPromptSection(log, versions)}`;
     const loop = this.currentModel
       ? new AgentLoop(
           this.rootPath,
@@ -224,12 +258,12 @@ export class ThreadApp {
           this.tools,
           this.events,
           {
-            ...(this.systemPrompt ? { systemPrompt: this.systemPrompt } : {}),
+            systemPrompt,
             ...(reasoning ? { reasoning } : {}),
           },
         )
       : undefined;
-    return { log, session, versions, cache, capsules, diff, merge, loop };
+    return { log, session, versions, cache, capsules, merge, loop };
   }
 
   private async openSessionRuntime(
@@ -532,7 +566,6 @@ export class ThreadApp {
     const commandContext = {
       rootPath: this.rootPath,
       versions: this.versions,
-      diff: this.diff,
       merge: this.merge,
       capsules: this.capsules,
       signal: options.signal,
@@ -591,6 +624,61 @@ export class ThreadApp {
         safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: false });
         throw error;
       }
+    }
+    /* /thread diff is captured here and re-issued to the agent as a wrapped
+     * user message instead of routing to a dedicated diff service: the agent
+     * reads the version data itself with its atomic tools (see the version
+     * section of its system prompt) and its reply is an ordinary append-only
+     * turn. Persisting the wrapped prompt — not the bare command — keeps the
+     * canonical log faithful to what the model actually saw. */
+    const isThreadDiffCommand = input === "/thread diff" ||
+      (input.startsWith("/thread diff") && /\s/.test(input["/thread diff".length] ?? ""));
+    if (isThreadDiffCommand) {
+      const args = parseCommandLine(input.slice("/thread diff".length).trim());
+      const factsOnly = args.includes("--facts");
+      const refs = args.filter((arg) => arg !== "--facts");
+      if (refs.length !== 0 && refs.length !== 2) {
+        throw new Error("Usage: /thread diff [<from> <to>] [--facts]");
+      }
+      if (!this.loop) {
+        throw new Error("/thread diff runs as an agent turn, which requires a configured model");
+      }
+      const command = `/thread diff${refs.length > 0 ? ` ${refs.join(" ")}` : ""}${factsOnly ? " --facts" : ""}`;
+      const prompt = [
+        "The user ran the slash command:",
+        "",
+        `    ${command}`,
+        "",
+        ...(refs.length === 0
+          ? [
+            "Compare the most recent thread commit with the current state of this session.",
+            "Workspace: resolve the most recent thread commit and this turn's base checkpoint (the",
+            "latest checkpoint_created event), then diff their workspace trees through the sidecar",
+            "object store.",
+            "Context: summarize how the working context evolved since that commit, from your own",
+            "memory of this session.",
+          ]
+          : [
+            `Compare thread version ${refs[0]} with thread version ${refs[1]}.`,
+            "Resolve both refs yourself (branch name, thread commit id or prefix, or checkpoint id or",
+            "prefix), diff their workspace trees through the sidecar object store, and compare their",
+            "context heads by reading the session log.",
+          ]),
+        ...(factsOnly
+          ? [
+            "Report only deterministic facts — changed files with statuses and line counts, and which",
+            "entries lie between the two context heads. Do not interpret or speculate.",
+          ]
+          : ["Keep mechanical facts separate from your interpretation."]),
+      ].join("\n");
+      return {
+        kind: "turn",
+        result: await this.loop.run(prompt, {
+          signal: options.signal,
+          ...(options.onTextDelta ? { onTextDelta: options.onTextDelta } : {}),
+          ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+        }),
+      };
     }
     const prefixLength = THREAD_COMMAND_PREFIX.length;
     const isThreadCommand = input === THREAD_COMMAND_PREFIX ||

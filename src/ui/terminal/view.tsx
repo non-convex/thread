@@ -12,7 +12,6 @@ import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import {
-  DiffScreen,
   DocumentScreen,
   HistoryScreen,
   MergeScreen,
@@ -210,7 +209,7 @@ export function ThreadRoot(props: {
       return;
     }
     const scrollKey = key.name === "up" || key.name === "down" || key.name === "pageup" || key.name === "pagedown";
-    const scrollableScreen = screen().type === "document" || screen().type === "diff";
+    const scrollableScreen = screen().type === "document";
     const mergePageScroll = screen().type === "merge" && (key.name === "pageup" || key.name === "pagedown");
     if ((scrollableScreen && scrollKey) || mergePageScroll) {
       key.preventDefault();
@@ -249,9 +248,6 @@ export function ThreadRoot(props: {
             terminalWidth={() => dimensions().width}
             setScroll={(value) => { sessionScroll = value; }}
           />
-        </Match>
-        <Match when={screen().type === "diff"}>
-          <DiffScreen screen={() => screen() as Extract<UiScreen, { type: "diff" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />
         </Match>
         <Match when={screen().type === "merge"}>
           <MergeScreen screen={() => screen() as Extract<UiScreen, { type: "merge" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />

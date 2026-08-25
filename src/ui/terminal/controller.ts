@@ -211,18 +211,6 @@ export class ThreadTuiController {
       }
       return false;
     }
-    if (screen.type === "diff") {
-      const tabs = ["summary", "context", "workspace"] as const;
-      const direct: 0 | 1 | 2 | undefined = key.name === "1" ? 0 : key.name === "2" ? 1 : key.name === "3" ? 2 : undefined;
-      if (direct !== undefined) screen.tab = tabs[direct];
-      else if (key.name === "tab" || key.name === "right") {
-        screen.tab = tabs[(tabs.indexOf(screen.tab) + 1) % tabs.length]!;
-      } else if (key.name === "left") {
-        screen.tab = tabs[(tabs.indexOf(screen.tab) + tabs.length - 1) % tabs.length]!;
-      } else return false;
-      this.notify();
-      return true;
-    }
     if (screen.type === "merge") {
       if (up || down || key.name === "tab") {
         screen.selected = screen.selected === "keep-current" ? "summarize" : "keep-current";

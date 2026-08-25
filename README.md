@@ -24,7 +24,7 @@ Tagged releases also produce standalone Windows, Linux and macOS archives for x6
 
 ## Terminal interface
 
-An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. One agent turn — thinking, tool calls and reply — is tied together by an accent rail, completed thinking keeps a collapsible five-line preview, and tool rows carry their arguments and elapsed time. `/model`, `/session` and a bare `/rewind` open compact panels floating above the composer, so the conversation and input stay visible. `/thread diff`, `/thread merge`, `/thread history` and long command results open full in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
+An interactive TTY starts a full-screen OpenTUI application. The session screen keeps a scrollable transcript, the active turn, status, composer and footer in one persistent Solid render tree. The transcript follows new output while it is at the bottom; the mouse wheel and Page Up/Page Down can inspect earlier visible entries. One agent turn — thinking, tool calls and reply — is tied together by an accent rail, completed thinking keeps a collapsible five-line preview, and tool rows carry their arguments and elapsed time. `/model`, `/session` and a bare `/rewind` open compact panels floating above the composer, so the conversation and input stay visible. `/thread merge`, `/thread history` and long command results open full in-app screens and return to the same session without entering its conversation. `/clear` only hides the transcript rendered in the current terminal process, and `/compact` forces bounded runtime context compaction.
 
 On process startup, context restoration and subsequent turns, the visible transcript is bounded to the eight most recent complete user-led interactions. Thinking and compact tool traces inside that window remain visible and preserve arrival order. This bound affects only the in-app transcript; the durable session, model context and tool records remain intact.
 
@@ -109,7 +109,7 @@ $env:THREAD_MODEL = "<model-id>"
 thread
 ```
 
-The version commands remain usable without any configured model:
+The version commands remain usable without any configured model — the one exception is `/thread diff`, which runs as an agent turn:
 
 ```powershell
 thread
@@ -170,7 +170,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 /thread show <ref>
 /thread history
 /thread commit <message>
-/thread diff <from> <to> [--facts]
+/thread diff [<from> <to>] [--facts]
 /thread restore <ref> [--workspace|--context|--both]
 /thread merge <ref> [--context=keep-current|summarize]
 /rewind [<turn-id-or-user-entry-id>]
@@ -182,7 +182,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 
 `HEAD`, thread branch names, full IDs and unambiguous commit/checkpoint ID prefixes are valid refs. Thread branches are independent of the main repository's Git branches: switching a thread branch never moves the main Git HEAD, index, refs or reflog.
 
-`diff --facts` is deterministic and does not call a model. Normal `diff` adds a separately invoked semantic explanation and falls back to facts if that call fails. Semantic diff output is ephemeral and does not enter the main transcript.
+`/thread diff` is captured and re-issued to the agent as a wrapped user message instead of running through a dedicated diff service. The agent reads the version data itself with its normal tools — the sidecar session log and object store are described in its system prompt — and answers as an ordinary turn, so the exchange becomes append-only session history. A bare `/thread diff` compares the last thread commit with the current state; `<from> <to>` compares two explicit versions, and `--facts` asks for deterministic facts without interpretation. Because it is an agent turn, `/thread diff` requires a configured model.
 
 A bare `/rewind` in the TUI opens a panel listing recent user messages with their times; arrow keys move the highlight and Enter must be pressed twice, because the second press discards everything after the selected message. Passing an explicit ID rewinds directly. `/thread history` shows the same turns as a full screen, and both restore through the same path.
 

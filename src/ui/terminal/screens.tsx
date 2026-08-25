@@ -1,8 +1,7 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { For, Match, Show, Switch, createMemo, type Accessor } from "solid-js";
+import { For, Show, createMemo, type Accessor } from "solid-js";
 import type { ModelDescriptor } from "../../agent/model-client.js";
 import type { HistoryViewItem } from "../../commands/types.js";
-import type { ThreadDiffFacts } from "../../revisions/diff-service.js";
 import type { UiScreen, UiState } from "../state.js";
 import { short } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -56,86 +55,6 @@ export function modelDetail(model: ModelDescriptor): string {
 
 function SectionTitle(props: { children: string; resources: ThreadViewResources }) {
   return <text fg={props.resources.theme.accent} attributes={bold} marginTop={1}>{props.children.toUpperCase()}</text>;
-}
-
-function WorkspaceFacts(props: { facts: ThreadDiffFacts; resources: ThreadViewResources }) {
-  return (
-    <box flexDirection="column">
-      <SectionTitle resources={props.resources}>Workspace</SectionTitle>
-      <Show when={props.facts.workspace.files.length > 0} fallback={<text fg={props.resources.theme.muted}>No workspace changes</text>}>
-        <For each={props.facts.workspace.files}>
-          {(file) => {
-            const filePath = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
-            const status = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
-            const color = file.status === "added" ? props.resources.theme.diffAdded : file.status === "deleted" ? props.resources.theme.diffRemoved : props.resources.theme.warning;
-            return <text fg={color}>{status}  {filePath}  {file.binary ? "binary" : `+${file.additions ?? 0} -${file.deletions ?? 0}`}</text>;
-          }}
-        </For>
-      </Show>
-    </box>
-  );
-}
-
-function ContextFacts(props: { facts: ThreadDiffFacts; resources: ThreadViewResources }) {
-  const context = () => props.facts.context;
-  return (
-    <box flexDirection="column">
-      <SectionTitle resources={props.resources}>Context</SectionTitle>
-      <text fg={props.resources.theme.success}>+ {context().toOnly.count} entries on target version</text>
-      <text fg={props.resources.theme.error}>− {context().fromOnly.count} entries only on source version</text>
-      <text fg={props.resources.theme.softText}>{context().userMessageCount} user · {context().assistantMessageCount} assistant messages</text>
-      <text fg={props.resources.theme.softText}>{context().toolCallCount} tool calls · {context().compactionCount} compactions</text>
-    </box>
-  );
-}
-
-export function DiffScreen(props: {
-  screen: () => Extract<UiScreen, { type: "diff" }>;
-  state: Accessor<UiState>;
-  resources: ThreadViewResources;
-  setScroll: (value: ScrollBoxRenderable) => void;
-}) {
-  const facts = () => props.screen().result.facts;
-  return (
-    <>
-      <ScreenHeader
-        left="THREAD DIFF"
-        center={`${facts().from.ref} → ${facts().to.ref}`}
-        right={["summary", "context", "workspace"].map((tab) => tab === props.screen().tab ? `[${tab}]` : tab).join("  ")}
-        resources={props.resources}
-      />
-      <scrollbox
-        ref={props.setScroll}
-        flexGrow={1}
-        viewportCulling={true}
-        scrollAcceleration={wheelScrollAcceleration}
-        verticalScrollbarOptions={{ visible: false }}
-        paddingX={2}
-      >
-        <Switch>
-          <Match when={props.screen().tab === "summary"}>
-            <SectionTitle resources={props.resources}>What changed</SectionTitle>
-            <markdown
-              content={normalizeMarkdownForTerminal(props.screen().result.semantic ?? `Semantic summary unavailable: ${props.screen().result.semanticError ?? "not requested"}`)}
-              width="100%"
-              syntaxStyle={props.resources.syntaxStyle}
-              fg={props.resources.theme.text}
-              conceal={true}
-              internalBlockMode="top-level"
-            />
-            <ContextFacts facts={facts()} resources={props.resources} />
-            <WorkspaceFacts facts={facts()} resources={props.resources} />
-          </Match>
-          <Match when={props.screen().tab === "context"}>
-            <ContextFacts facts={facts()} resources={props.resources} />
-            <text fg={props.resources.theme.muted} wrapMode="char">{JSON.stringify(facts().context, null, 2)}</text>
-          </Match>
-          <Match when={props.screen().tab === "workspace"}><WorkspaceFacts facts={facts()} resources={props.resources} /></Match>
-        </Switch>
-      </scrollbox>
-      <ScreenFooter hint="tab / 1-3 section · ↑/↓ scroll · esc back" state={props.state} resources={props.resources} />
-    </>
-  );
 }
 
 export function MergeScreen(props: {

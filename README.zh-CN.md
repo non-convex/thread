@@ -24,7 +24,7 @@ bun link
 
 ## 终端界面
 
-交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考默认保留最多 5 行预览并可点击展开/折叠，工具行会带上参数摘要与耗时。`/model`、`/session` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread diff`、`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考默认保留最多 5 行预览并可点击展开/折叠，工具行会带上参数摘要与耗时。`/model`、`/session` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
 
 进程启动、context restore 及后续 turn 完成时，可见 transcript 都限制为最近 8 次完整的用户主导交互。窗口内的 thinking 与紧凑工具轨迹会保留，并维持到达顺序。该限制只影响应用内 transcript；持久化 session、模型上下文和工具记录都不会删减。
 
@@ -109,7 +109,7 @@ $env:THREAD_MODEL = "<model-id>"
 thread
 ```
 
-即使没有配置任何模型，版本命令仍然可以使用：
+即使没有配置任何模型，版本命令仍然可以使用——唯一的例外是 `/thread diff`，它以 agent turn 的方式运行：
 
 ```powershell
 thread
@@ -170,7 +170,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 /thread show <ref>
 /thread history
 /thread commit <message>
-/thread diff <from> <to> [--facts]
+/thread diff [<from> <to>] [--facts]
 /thread restore <ref> [--workspace|--context|--both]
 /thread merge <ref> [--context=keep-current|summarize]
 /rewind [<turn-id-or-user-entry-id>]
@@ -182,7 +182,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
-`diff --facts` 是确定性的，不调用模型。普通 diff 会额外调用隔离的模型生成语义解释，并在调用失败时回退为 facts。Semantic diff 输出是临时内容，不会进入主 transcript。
+`/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据——system prompt 中描述了 sidecar 的 session log 与 object store 的位置和用法——然后以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。因为它是 agent turn，`/thread diff` 需要已配置模型。
 
 在 TUI 中直接输入 `/rewind` 会打开浮层，按时间列出最近的用户消息；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选消息之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 以整屏形式展示同一批 turn，两者走同一条恢复路径。
 

@@ -1,5 +1,4 @@
 import { runGit } from "../workspace/git.js";
-import type { ThreadDiffFacts } from "../revisions/diff-service.js";
 import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
 
@@ -9,28 +8,6 @@ function requireArgs(args: string[], count: number, usage: string): void {
 
 function short(id: string): string {
   return id.length > 18 ? id.slice(0, 18) : id;
-}
-
-export function formatFacts(facts: ThreadDiffFacts): string {
-  const files = facts.workspace.files.length
-    ? facts.workspace.files
-        .map((file) => {
-          const stats = file.binary
-            ? "binary"
-            : `+${file.additions ?? 0}/-${file.deletions ?? 0}`;
-          return `${file.status.padEnd(8)} ${file.oldPath ? `${file.oldPath} -> ` : ""}${file.path} (${stats})`;
-        })
-        .join("\n")
-    : "(no workspace changes)";
-  return [
-    `${facts.from.ref} (${short(facts.from.checkpointId)}) -> ${facts.to.ref} (${short(facts.to.checkpointId)})`,
-    `common checkpoint: ${facts.commonAncestorCheckpointId ? short(facts.commonAncestorCheckpointId) : "none"}`,
-    "workspace:",
-    files,
-    "context:",
-    JSON.stringify(facts.context, null, 2),
-    `facts digest: ${facts.factsDigest}`,
-  ].join("\n");
 }
 
 function messageText(content: unknown): string {
@@ -227,22 +204,6 @@ const commit: ThreadCommand = {
   },
 };
 
-const diff: ThreadCommand = {
-  name: "diff",
-  description: "Compare workspace and context between two thread versions.",
-  async execute(args, context) {
-    const factsOnly = args.includes("--facts");
-    const labels = args.filter((arg) => arg !== "--facts");
-    requireArgs(labels, 2, "diff <from> <to> [--facts]");
-    const result = await context.diff.diff(labels[0]!, labels[1]!, context.signal, factsOnly);
-    const factsText = formatFacts(result.facts);
-    const content = result.semantic
-        ? `${result.semantic}\n\n--- deterministic facts ---\n${factsText}${result.cached ? "\n[semantic result from cache]" : ""}`
-        : `${factsText}${result.semanticError ? `\n\nSemantic diff unavailable: ${result.semanticError}` : ""}`;
-    return viewResult(content, { type: "thread_diff", result });
-  },
-};
-
 const restore: ThreadCommand = {
   name: "restore",
   description: "Restore workspace, context or both from a thread version.",
@@ -296,7 +257,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     show,
     history,
     commit,
-    diff,
     restore,
     merge,
   ]) {
