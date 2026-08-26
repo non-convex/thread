@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createModels, fauxAssistantMessage, fauxProvider, type Context } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, type Context } from "@earendil-works/pi-ai";
 import { ThreadApp, type InputResult } from "../../src/app.js";
 import { createConfiguredModelCatalog, DEFAULT_MODEL_MAX_RETRIES, PiModelCatalog, PiModelClient } from "../../src/agent/model-client.js";
 import { loadModelConfig } from "../../src/config/model-config.js";
@@ -15,6 +15,26 @@ function commandContent(result: InputResult): string {
   assert.equal(result.kind, "command");
   return result.kind === "command" ? result.result.content : "";
 }
+
+test("forkComplete preserves tool definitions but rejects tool calls without executing them", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("read", { path: "secret.txt" }), { stopReason: "toolUse" }),
+  ]);
+  const client = new PiModelClient(models, faux.getModel());
+  const context: Context = {
+    systemPrompt: "system",
+    messages: [{ role: "user", content: "summarize", timestamp: 1 }],
+    tools: [{ name: "read", description: "read", parameters: { type: "object", properties: {} } }],
+  };
+  await assert.rejects(
+    client.forkComplete(context, "Do not call tools", { signal: new AbortController().signal }),
+    /read-only and tools were not executed/,
+  );
+  assert.equal(context.tools?.length, 1, "the caller's exact tool prefix remains intact");
+});
 
 test("PiModelClient retries transient model errors ten times and reports each attempt", async () => {
   assert.equal(DEFAULT_MODEL_MAX_RETRIES, 10);

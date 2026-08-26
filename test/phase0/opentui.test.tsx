@@ -412,8 +412,8 @@ test("the /rewind overlay lists user messages as rewind targets and navigates vi
   state.screen = {
     type: "rewind",
     items: [
-      { turnId: "turn_zzzzzzzzzzzzzz2", userEntryId: "entry-2", baseCheckpointId: "checkpoint-b", label: "second question", outcome: "completed", startedAt: 1_700_000_060_000 },
-      { turnId: "turn_aaaaaaaaaaaaaa1", userEntryId: "entry-1", baseCheckpointId: "checkpoint-a", label: "first question", outcome: "completed", startedAt: 1_700_000_000_000 },
+      { turnId: "turn_zzzzzzzzzzzzzz2", userEntryId: "entry-2", baseCheckpointId: "checkpoint-b", label: "second question", outcome: "completed", startedAt: 1_700_000_060_000, status: "current-path" },
+      { turnId: "turn_aaaaaaaaaaaaaa1", userEntryId: "entry-1", baseCheckpointId: "checkpoint-a", label: "first question", outcome: "completed", startedAt: 1_700_000_000_000, status: "off-path" },
     ],
     selected: 0,
     confirm: false,
@@ -455,32 +455,38 @@ test("the /rewind overlay lists user messages as rewind targets and navigates vi
   }
 });
 
-test("the /session overlay marks the active session and navigates view-side", async () => {
+test("the /thread squash overlay confirms the selected current-path turn with one enter", async () => {
   const viewResources = resources();
   const state = createUiState("main", "checkpoint-123456789", []);
   state.screen = {
-    type: "session_picker",
-    sessions: [
-      { id: "session_current111111", createdAt: 1_700_000_000_000, lastActivatedAt: 1_700_000_120_000, current: true },
-      { id: "session_previous2222", createdAt: 1_699_000_000_000, lastActivatedAt: 1_700_000_060_000, current: false },
-    ],
+    type: "thread_squash",
+    items: [{
+      turnId: "turn_squash_target",
+      userEntryId: "entry-squash-target",
+      baseCheckpointId: "checkpoint-a",
+      label: "refactor this interval",
+      outcome: "completed",
+      startedAt: 1_700_000_000_000,
+      status: "current-path",
+    }],
     selected: 0,
     busy: false,
     error: undefined,
   };
   const meta: TerminalMeta = {
     rootPath: process.cwd(),
-    modelLabel: "no model",
-    modelName: "no model",
+    modelLabel: "faux/alpha",
+    modelName: "alpha",
     thinkingLevel: "off",
     supportsThinking: false,
-    contextPercent: 0,
+    contextPercent: 4,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
+  let enters = 0;
   viewModel.controller.handleScreenKey = (key) => {
-    if (key.name === "up" || key.name === "down") throw new Error("overlay arrow keys must stay view-side");
-    return false;
+    if (key.name === "return") enters++;
+    return key.name === "return";
   };
   const setup = await testRender(
     () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
@@ -488,15 +494,12 @@ test("the /session overlay marks the active session and navigates view-side", as
   );
   try {
     await setup.flush();
-    let frame = setup.captureCharFrame();
-    assert.match(frame, /project sessions · most recently activated first/);
-    assert.match(frame, /▸ session_current111111/);
-    assert.match(frame, /session_previous2222/);
-    setup.mockInput.pressArrow("down");
+    const frame = setup.captureCharFrame();
+    assert.match(frame, /squash from a user message/);
+    assert.match(frame, /▸ refactor this interval/);
+    setup.mockInput.pressEnter();
     await setup.flush();
-    frame = setup.captureCharFrame();
-    assert.match(frame, /▸ session_previous2222/);
-    assert.doesNotMatch(frame, /▸ session_current111111/);
+    assert.equal(enters, 1, "one enter is forwarded to execute the selected squash target");
   } finally {
     setup.renderer.destroy();
     viewResources.syntaxStyle.destroy();

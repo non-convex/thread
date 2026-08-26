@@ -3,11 +3,10 @@ import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { ToolResult } from "../tools/types.js";
 import type { UiEvent } from "./events.js";
-import type { SessionSummary } from "../domain.js";
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "context_merge";
+  kind: "user" | "assistant" | "thinking" | "tool" | "squash" | "context_merge";
   content: string;
   label?: string;
   isError?: boolean;
@@ -67,10 +66,9 @@ export interface RewindScreen {
   error: string | undefined;
 }
 
-export interface SessionPickerScreen {
-  type: "session_picker";
-  sessions: SessionSummary[];
-  /** Written by the view on every arrow key; the controller only reads it. */
+export interface SquashScreen {
+  type: "thread_squash";
+  items: HistoryViewItem[];
   selected: number;
   busy: boolean;
   error: string | undefined;
@@ -80,8 +78,8 @@ export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
-  | SessionPickerScreen
   | RewindScreen
+  | SquashScreen
   | {
       type: "merge";
       preview: MergePreview;
@@ -141,16 +139,6 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       error: undefined,
     };
   }
-  if (view.type === "session_picker") {
-    const current = view.sessions.findIndex((session) => session.current);
-    state.screen = {
-      type: "session_picker",
-      sessions: view.sessions,
-      selected: current >= 0 ? current : 0,
-      busy: false,
-      error: undefined,
-    };
-  }
   if (view.type === "thread_merge") {
     state.screen = {
       type: "merge",
@@ -178,6 +166,15 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       items: view.items,
       selected: 0,
       confirm: false,
+      busy: false,
+      error: undefined,
+    };
+  }
+  if (view.type === "thread_squash") {
+    state.screen = {
+      type: "thread_squash",
+      items: view.items,
+      selected: 0,
       busy: false,
       error: undefined,
     };
@@ -236,10 +233,6 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "command_finished":
       state.busy = false;
       state.activity = undefined;
-      return;
-    case "session_changed":
-      state.branch = event.branch;
-      state.checkpointId = event.checkpointId;
       return;
     case "head_changed":
       state.branch = event.branch;

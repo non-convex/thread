@@ -2,26 +2,22 @@ import type { Message, Usage } from "@earendil-works/pi-ai";
 
 export type CheckpointReason =
   | "genesis"
+  | "new"
   | "turn_base"
   | "turn_result"
   | "safety"
   | "command"
   | "recovery"
-  | "merge";
+  | "merge"
+  | "squash";
 
-export interface ProjectSession {
+export interface SessionTree {
+  formatVersion: 3;
   id: string;
   rootPath: string;
   currentBranch: string;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface SessionSummary {
-  id: string;
-  createdAt: number;
-  lastActivatedAt: number;
-  current: boolean;
 }
 
 export interface EntryBase {
@@ -35,10 +31,12 @@ export interface EntryBase {
 export type SessionEntry =
   | (EntryBase & { type: "message"; message: Message })
   | (EntryBase & {
-      type: "compaction";
+      type: "squash";
+      summaryKind: "project_state" | "incremental";
       summary: string;
-      retainedTail: Message[];
-      tokensBefore: number;
+      workspaceDiffStat: string;
+      retainedTail: Array<{ sourceEntryId: string; message: Message }>;
+      requestTokensBefore: number;
     })
   | (EntryBase & {
       type: "context_merge";
@@ -61,15 +59,7 @@ export interface OperationStartedRecord extends RecordBase {
   sourceLeafId: string | null;
   intent:
     | { kind: "run"; originalPrompt: Message[]; initialEntryIds: string[] }
-    | { kind: "compaction"; resultEntryId: string; customInstructions?: string }
-    | {
-        kind: "navigation";
-        targetId: string | null;
-        summarize: boolean;
-        customInstructions?: string;
-        label?: string;
-        summaryEntryId?: string;
-      };
+    | { kind: "compaction"; resultEntryId: string };
 }
 
 export interface OperationFinishedRecord extends RecordBase {
@@ -82,10 +72,10 @@ export interface OperationFinishedRecord extends RecordBase {
 export interface StepAttemptRecord extends RecordBase {
   type: "step_attempt";
   runId: string;
-  step: "assistant" | "branch_summary" | "compaction";
+  step: "assistant" | "compaction";
   attempt: number;
   resultEntryId: string;
-  compactionReason?: "manual" | "threshold" | "overflow";
+  compactionReason?: "compact_command" | "threshold" | "overflow";
 }
 
 export interface ToolStartedRecord extends RecordBase {
@@ -113,8 +103,14 @@ export interface InternalCheckpoint {
   outcome?: "completed" | "aborted" | "failed";
   details?: {
     sourceRef?: string;
+    workspaceSourceCheckpointId?: string;
     restoreMode?: "workspace" | "context" | "both";
     contextStrategy?: "keep-current" | "summarize";
+    squashFromEntryId?: string | null;
+    squashSourceHeadId?: string | null;
+    squashTrigger?: "compact_command" | "thread_command" | "threshold" | "overflow";
+    squashEntryCount?: number;
+    squashTurnCount?: number;
   };
   createdAt: number;
 }
@@ -157,7 +153,17 @@ export interface ThreadCommit {
   sessionId: string;
   checkpointId: string;
   message: string;
+  contextCost: CommitContextCost;
   createdAt: number;
+}
+
+export interface CommitContextCost {
+  percent: number;
+  estimatedTokens: number;
+  contextWindow: number;
+  providerId: string;
+  modelId: string;
+  estimatorVersion: string;
 }
 
 export interface ContextCapsule {
@@ -184,7 +190,7 @@ export type VersionRef =
   | { kind: "checkpoint"; id: string; checkpointId: string };
 
 export type SessionLogEvent =
-  | { type: "session_created"; session: ProjectSession }
+  | { type: "tree_created"; tree: SessionTree }
   | { type: "entry_appended"; entry: SessionEntry; lane: string }
   | { type: "lane_moved"; lane: string; leafId: string | null }
   | { type: "record_appended"; record: DurableRecord }

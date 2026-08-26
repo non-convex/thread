@@ -555,12 +555,6 @@ export class SidecarWorkspaceStore {
     await this.sidecarGit(["gc", "--prune=now"]);
   }
 
-  async deleteSessionObjects(): Promise<void> {
-    await this.sidecarGit(["update-ref", "-d", this.keepRef]);
-    await rm(this.indexPath, { force: true });
-    await this.gc();
-  }
-
   normalizePath(filePath: string): string {
     return normalizeGitPath(path.relative(this.workspace.rootPath, path.resolve(filePath)));
   }

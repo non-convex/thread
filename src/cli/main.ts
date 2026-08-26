@@ -53,7 +53,7 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function help(): string {
-  return `thread mini harness
+  return `thread — a session-tree coding agent
 
 Usage: thread [--root <git-worktree>] [--config <file>]
                  [--provider <id> --model <id>] [--extension <module>]
@@ -63,8 +63,8 @@ TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain 
 Default config: ~/.thread/config.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
-Inside the prompt use /new, /session to manage project sessions, /model,
-/clear, /compact, /thread for version commands, /rewind <turn-id>, or /exit.
+Inside the prompt use /new to start an empty-context root branch, /model,
+/clear, /compact, /thread for Session Tree commands, /rewind <turn-id>, or /exit.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 

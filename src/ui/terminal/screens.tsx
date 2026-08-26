@@ -107,7 +107,7 @@ export function MergeScreen(props: {
 }
 
 function historyLine(item: HistoryViewItem): string {
-  return `${short(item.turnId)}  ${item.outcome.padEnd(9)}  ${new Date(item.startedAt).toLocaleString()}  ${item.label}`;
+  return `${short(item.turnId)}  ${item.status.padEnd(16)}  ${item.outcome.padEnd(9)}  ${new Date(item.startedAt).toLocaleString()}  ${item.label}`;
 }
 
 export function HistoryScreen(props: {

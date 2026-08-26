@@ -1,4 +1,5 @@
 import { runGit } from "../workspace/git.js";
+import { CONTEXT_ESTIMATOR_VERSION, estimateContextTokens } from "../utils/estimate.js";
 import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
 
@@ -22,13 +23,13 @@ function messageText(content: unknown): string {
 
 const status: ThreadCommand = {
   name: "status",
-  description: "Show the current Project Session, thread branch and main Git branch.",
+  description: "Show the current Session Tree, thread branch and main Git branch.",
   async execute(_args, context) {
     const value = context.versions.status();
     const git = await runGit(["-C", context.rootPath, "branch", "--show-current"], { allowExitCodes: [0, 128] });
     return ephemeral(
       [
-        `project session: ${value.sessionId}`,
+        `session tree: ${value.sessionId}`,
         `thread branch: ${value.currentBranch}`,
         `thread HEAD: ${value.headCheckpointId}`,
         `workspace tree: ${value.workspaceTreeOid}`,
@@ -82,10 +83,17 @@ const reflog: ThreadCommand = {
       .filter((entry) => entry.branchName === name)
       .slice()
       .reverse()
-      .map(
-        (entry) =>
-          `${entry.seq.toString().padStart(5)} ${short(entry.oldCheckpointId ?? "none")} -> ${short(entry.newCheckpointId)} ${entry.reason}`,
-      );
+      .map((entry) => {
+        const checkpoint = context.versions.projection.checkpoints.get(entry.newCheckpointId);
+        const details = checkpoint?.reason === "squash"
+          ? ` trigger=${checkpoint.details?.squashTrigger ?? "unknown"}` +
+            ` from=${checkpoint.details?.squashFromEntryId ?? "root"}` +
+            ` source=${checkpoint.details?.squashSourceHeadId ?? "empty"}` +
+            ` entries=${checkpoint.details?.squashEntryCount ?? 0}` +
+            ` turns=${checkpoint.details?.squashTurnCount ?? 0}`
+          : "";
+        return `${entry.seq.toString().padStart(5)} ${short(entry.oldCheckpointId ?? "none")} -> ${short(entry.newCheckpointId)} ${entry.reason}${details}`;
+      });
     return ephemeral(lines.join("\n") || `(no reflog entries for ${name})`);
   },
 };
@@ -103,7 +111,9 @@ const log: ThreadCommand = {
     const commitsByCheckpoint = new Map<string, string[]>();
     for (const commit of context.versions.projection.commits.values()) {
       const labels = commitsByCheckpoint.get(commit.checkpointId) ?? [];
-      labels.push(`${short(commit.id)} ${commit.message}`);
+      labels.push(
+        `${short(commit.id)} ${commit.message} [ctx ${commit.contextCost.percent}% ${commit.contextCost.providerId}/${commit.contextCost.modelId}]`,
+      );
       commitsByCheckpoint.set(commit.checkpointId, labels);
     }
     const turnsByBase = new Map<string, string[]>();
@@ -152,19 +162,49 @@ const show: ThreadCommand = {
       (commit) => commit.checkpointId === checkpoint.id,
     );
     const capsule = await context.capsules.read(checkpoint.id);
-    return ephemeral(JSON.stringify({ ref, checkpoint, commits, capsule }, null, 2));
+    const currentModelContextCost = context.model
+      ? (() => {
+          const estimatedTokens = estimateContextTokens(
+            context.versions.session.buildContext(checkpoint.sessionHeadId).messages,
+          ).tokens;
+          return {
+            percent: Math.min(999, Math.round(estimatedTokens / context.model.contextWindow * 100)),
+            estimatedTokens,
+            contextWindow: context.model.contextWindow,
+            providerId: context.model.providerId,
+            modelId: context.model.modelId,
+            estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
+          };
+        })()
+      : undefined;
+    return ephemeral(JSON.stringify({ ref, checkpoint, commits, capsule, currentModelContextCost }, null, 2));
   },
 };
 
-/** User-message turns on the current branch, newest first — the rewind/history pick list. */
+/** All turns, classified against the active entry path rather than branch labels. */
 export function buildHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
-  const branch = context.versions.currentBranch.name;
+  const activePath = context.versions.session.pathTo(context.versions.head.sessionHeadId);
+  const pathIds = new Set(activePath.map((entry) => entry.id));
+  const retainedIds = new Set(
+    activePath
+      .filter((entry) => entry.type === "squash")
+      .flatMap((entry) => entry.type === "squash" ? entry.retainedTail.map((item) => item.sourceEntryId) : []),
+  );
   return [...context.versions.projection.turns.values()]
-    .filter((turn) => turn.branchName === branch)
     .sort((left, right) => right.startedAt - left.startedAt)
     .map((turn) => {
       const entry = context.versions.projection.entries.get(turn.userEntryId);
-      const text = entry?.type === "message" ? messageText(entry.message.content) : "";
+      const synthetic = entry?.type === "squash" && entry.summaryKind === "incremental";
+      const text = entry?.type === "message"
+        ? messageText(entry.message.content)
+        : synthetic ? `session squashed from ${entry.parentId ?? "root"}` : "";
+      const status: HistoryViewItem["status"] = synthetic
+        ? "synthetic-squash"
+        : pathIds.has(turn.userEntryId)
+        ? "current-path"
+        : retainedIds.has(turn.userEntryId)
+        ? "retained"
+        : "off-path";
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
@@ -172,8 +212,17 @@ export function buildHistoryItems(context: ThreadCommandContext): HistoryViewIte
         label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
         outcome: turn.outcome,
         startedAt: turn.startedAt,
+        status,
       };
     });
+}
+
+export function buildSquashItems(context: ThreadCommandContext): HistoryViewItem[] {
+  return buildHistoryItems(context).filter((item) => {
+    if (item.status !== "current-path") return false;
+    const entry = context.versions.projection.entries.get(item.userEntryId);
+    return entry?.type === "message" && entry.message.role === "user";
+  });
 }
 
 const history: ThreadCommand = {
@@ -183,9 +232,17 @@ const history: ThreadCommand = {
     const branch = context.versions.currentBranch.name;
     const items = buildHistoryItems(context);
     const content = items.length
-      ? items.map((item) => `${short(item.turnId)} ${item.outcome.padEnd(9)} ${item.label}`).join("\n")
+      ? items.map((item) => `${short(item.turnId)} ${item.status.padEnd(16)} ${item.outcome.padEnd(9)} ${item.label}`).join("\n")
       : `(no turns on thread branch ${branch})`;
     return viewResult(content, { type: "history", items });
+  },
+};
+
+const squash: ThreadCommand = {
+  name: "squash",
+  description: "Replace a current-path user-turn interval with a summary and continue as a normal turn.",
+  async execute() {
+    throw new Error("/thread squash must be run through the active agent runtime");
   },
 };
 
@@ -194,7 +251,19 @@ const commit: ThreadCommand = {
   description: "Create an immutable thread milestone at the current checkpoint.",
   async execute(args, context) {
     requireArgs(args, 1, "commit <message>");
-    const created = await context.versions.createCommit(args.join(" "));
+    if (!context.model) throw new Error("/thread commit requires a configured model to record context cost");
+    const head = context.versions.head;
+    const estimatedTokens = estimateContextTokens(
+      context.versions.session.buildContext(head.sessionHeadId).messages,
+    ).tokens;
+    const created = await context.versions.createCommit(args.join(" "), {
+      percent: Math.min(999, Math.round(estimatedTokens / context.model.contextWindow * 100)),
+      estimatedTokens,
+      contextWindow: context.model.contextWindow,
+      providerId: context.model.providerId,
+      modelId: context.model.modelId,
+      estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
+    });
     const checkpoint = context.versions.getCheckpoint(created.checkpointId);
     const capsule = await context.capsules.generate(checkpoint, "commit", context.signal);
     return ephemeral(
@@ -256,6 +325,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     reflog,
     show,
     history,
+    squash,
     commit,
     restore,
     merge,

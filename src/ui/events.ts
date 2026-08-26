@@ -4,19 +4,19 @@ export type UiEvent =
   | { type: "command_started"; name: string }
   | { type: "command_finished"; name: string; ok: boolean }
   | {
-      type: "session_changed";
-      sessionId: string;
-      branch: string;
-      checkpointId: string;
-      reason: "new" | "switch";
-    }
-  | {
       type: "head_changed";
       branch: string;
       checkpointId: string;
-      reason: "turn" | "command" | "switch" | "restore" | "merge" | "recovery";
+      reason: "turn" | "command" | "new" | "switch" | "restore" | "merge" | "recovery";
     }
-  | { type: "turn_started"; turnId: string; userEntryId?: string; input: string; branch: string }
+  | {
+      type: "turn_started";
+      turnId: string;
+      userEntryId?: string;
+      input: string;
+      branch: string;
+      syntheticSquash?: boolean;
+    }
   | { type: "assistant_started"; step: number }
   | { type: "assistant_text_delta"; step: number; delta: string }
   | { type: "assistant_thinking_delta"; step: number; delta: string }

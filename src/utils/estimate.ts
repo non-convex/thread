@@ -16,6 +16,8 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
+export const CONTEXT_ESTIMATOR_VERSION = "pi-ai-estimate-v1";
+
 const CHARS_PER_TOKEN = 4;
 const ESTIMATED_IMAGE_CHARS = 4800;
 

@@ -8,7 +8,6 @@ import { SessionCorruptionError, SessionProjection } from "./projection.js";
 export interface SessionLogStoreOptions {
   rootPath: string;
   sidecarRoot: string;
-  sessionId?: string;
 }
 
 export interface AppendOptions {
@@ -26,7 +25,7 @@ function isProcessAlive(pid: number): boolean {
 
 export class SessionLogStore {
   readonly sessionId: string;
-  readonly sessionDir: string;
+  readonly treeDir: string;
   readonly eventsPath: string;
   readonly cacheDir: string;
   readonly projection = new SessionProjection();
@@ -38,19 +37,19 @@ export class SessionLogStore {
   private constructor(options: SessionLogStoreOptions) {
     const resolvedRoot = path.resolve(options.rootPath);
     const normalizedRoot = process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
-    this.sessionId = options.sessionId ?? stableId("session", normalizedRoot);
-    if (!/^session_[A-Za-z0-9]+$/.test(this.sessionId)) {
-      throw new Error(`Invalid session id: ${this.sessionId}`);
+    this.sessionId = stableId("tree", normalizedRoot);
+    if (!/^tree_[A-Za-z0-9]+$/.test(this.sessionId)) {
+      throw new Error(`Invalid Session Tree id: ${this.sessionId}`);
     }
-    this.sessionDir = path.join(options.sidecarRoot, "sessions", this.sessionId);
-    this.eventsPath = path.join(this.sessionDir, "events.jsonl");
-    this.cacheDir = path.join(this.sessionDir, "cache");
+    this.treeDir = path.join(options.sidecarRoot, "trees", this.sessionId);
+    this.eventsPath = path.join(this.treeDir, "events.jsonl");
+    this.cacheDir = path.join(this.treeDir, "cache");
     this.lockPath = path.join(options.sidecarRoot, "locks", `${this.sessionId}.lock`);
   }
 
   static async open(options: SessionLogStoreOptions): Promise<SessionLogStore> {
     const store = new SessionLogStore(options);
-    await mkdir(store.sessionDir, { recursive: true });
+    await mkdir(store.treeDir, { recursive: true });
     await mkdir(store.cacheDir, { recursive: true });
     await mkdir(path.dirname(store.lockPath), { recursive: true });
     await store.acquireLock();
@@ -76,12 +75,12 @@ export class SessionLogStore {
         const content = await readFile(this.lockPath, "utf8").catch(() => "");
         const pid = Number.parseInt(content.split(/\r?\n/, 1)[0] ?? "", 10);
         if (Number.isFinite(pid) && isProcessAlive(pid)) {
-          throw new Error(`Project Session is already open by process ${pid}`);
+          throw new Error(`Session Tree is already open by process ${pid}`);
         }
         await rm(this.lockPath, { force: true });
       }
     }
-    throw new Error(`Could not acquire Project Session lock: ${this.lockPath}`);
+    throw new Error(`Could not acquire Session Tree lock: ${this.lockPath}`);
   }
 
   private async load(): Promise<void> {
@@ -163,14 +162,14 @@ export class SessionLogStore {
     return result;
   }
 
-  async writeSessionManifest(rootPath: string): Promise<void> {
-    const target = path.join(this.sessionDir, "session.json");
+  async writeTreeManifest(rootPath: string): Promise<void> {
+    const target = path.join(this.treeDir, "tree.json");
     await writeFile(
       target,
       `${JSON.stringify({
         id: this.sessionId,
         rootPath: path.resolve(rootPath),
-        ...(this.projection.session ? { createdAt: this.projection.session.createdAt } : {}),
+        ...(this.projection.tree ? { createdAt: this.projection.tree.createdAt } : {}),
       }, null, 2)}\n`,
       "utf8",
     );

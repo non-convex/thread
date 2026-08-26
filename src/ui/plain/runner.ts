@@ -9,7 +9,7 @@ export interface PlainRunnerOptions {
 export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): Promise<void> {
   const status = app.versions.status();
   output.write(
-    `Project Session ${status.sessionId}\nthread branch ${status.currentBranch} @ ${status.headCheckpointId}\n${
+    `Session Tree ${status.sessionId}\nthread branch ${status.currentBranch} @ ${status.headCheckpointId}\n${
       app.model
         ? `model ${app.model.providerId}/${app.model.modelId}`
         : "no model configured; use /model to select one or /thread for version commands"

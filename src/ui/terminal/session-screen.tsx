@@ -1,6 +1,6 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
-import type { LiveTurn, ModelPickerScreen, RewindScreen, SessionPickerScreen, UiState } from "../state.js";
+import type { LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { short, type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -233,73 +233,6 @@ function ModelPickerOverlay(props: {
   );
 }
 
-const SESSION_OVERLAY_MAX_ROWS = 8;
-
-function sessionTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
-function SessionPickerOverlay(props: {
-  screen: Accessor<SessionPickerScreen>;
-  selected: Accessor<number>;
-  navigated: Accessor<boolean>;
-  resources: ThreadViewResources;
-  contentWidth: Accessor<number>;
-}) {
-  const theme = () => props.resources.theme;
-  const visible = createMemo(() =>
-    selectedWindow(props.screen().sessions, props.selected(), SESSION_OVERLAY_MAX_ROWS));
-  return (
-    <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
-          project sessions · most recently activated first
-        </text>
-        <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ switch · esc</text>
-      </box>
-      <For each={visible()}>
-        {({ item: session, index }) => {
-          const selected = () => index === props.selected();
-          return (
-            <box
-              flexDirection="row"
-              width={props.contentWidth() - 2}
-              height={1}
-              backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
-            >
-              <text width={2} height={1} wrapMode="none" fg={theme().accent}>
-                {selected() ? "▸ " : session.current ? "● " : "  "}
-              </text>
-              <text
-                width={Math.max(14, props.contentWidth() - 22)}
-                flexShrink={1}
-                height={1}
-                wrapMode="none"
-                truncate={true}
-                fg={selected() || session.current ? theme().accent : theme().text}
-                attributes={selected() ? bold : 0}
-              >
-                {session.id}
-              </text>
-              <text width={18} height={1} wrapMode="none" fg={theme().faint}> {sessionTime(session.lastActivatedAt)}</text>
-            </box>
-          );
-        }}
-      </For>
-      <Show when={props.screen().busy}>
-        <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-          <SpinnerText fg={theme().accent} />
-          <text height={1} wrapMode="none" fg={theme().accent}> switching session…</text>
-        </box>
-      </Show>
-      <Show when={props.screen().error !== undefined && !props.navigated()}>
-        <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().error}>{props.screen().error}</text>
-      </Show>
-    </box>
-  );
-}
-
 /* Bare `/rewind` floats the same kind of panel as /model: one row per user
  * message, newest first; enter twice to restore to before the selected turn. */
 const REWIND_OVERLAY_MAX_ROWS = 8;
@@ -310,7 +243,7 @@ function rewindTime(startedAt: number): string {
 }
 
 function RewindOverlay(props: {
-  screen: Accessor<RewindScreen>;
+  screen: Accessor<RewindScreen | SquashScreen>;
   /** View-side selection signal — moving it must not notify the controller. */
   selected: Accessor<number>;
   /** True between an arrow-key move and the next controller notify. */
@@ -323,11 +256,15 @@ function RewindOverlay(props: {
   const visible = createMemo(() =>
     selectedWindow(props.screen().items, props.selected(), REWIND_OVERLAY_MAX_ROWS));
   const selectedItem = () => props.screen().items[props.selected()];
+  const rewindConfirm = () => {
+    const screen = props.screen();
+    return screen.type === "rewind" && screen.confirm;
+  };
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
       <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
         <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
-          rewind to before a user message
+          {props.screen().type === "thread_squash" ? "squash from a user message" : "rewind to before a user message"}
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
       </box>
@@ -360,7 +297,7 @@ function RewindOverlay(props: {
           );
         }}
       </For>
-      <Show when={props.screen().confirm && !props.navigated() && selectedItem() !== undefined}>
+      <Show when={rewindConfirm() && !props.navigated() && selectedItem() !== undefined}>
         <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().warning}>
           ⏎ again to rewind before this message · later messages discarded · esc
         </text>
@@ -368,7 +305,9 @@ function RewindOverlay(props: {
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
           <SpinnerText fg={theme().accent} />
-          <text height={1} wrapMode="none" fg={theme().accent}> rewinding…</text>
+          <text height={1} wrapMode="none" fg={theme().accent}>
+            {props.screen().type === "thread_squash" ? " squashing…" : " rewinding…"}
+          </text>
         </box>
       </Show>
       <Show when={props.screen().error !== undefined && !props.navigated()}>
@@ -406,10 +345,11 @@ export function SessionScreen(props: {
   const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
-  const sessionPicker = (): SessionPickerScreen | undefined =>
-    state().screen.type === "session_picker" ? state().screen as SessionPickerScreen : undefined;
   const rewindScreen = (): RewindScreen | undefined =>
     state().screen.type === "rewind" ? state().screen as RewindScreen : undefined;
+  const squashScreen = (): SquashScreen | undefined =>
+    state().screen.type === "thread_squash" ? state().screen as SquashScreen : undefined;
+  const pathPicker = (): RewindScreen | SquashScreen | undefined => rewindScreen() ?? squashScreen();
   /* Floating panels sit at left/right 1 with a rounded border, so their
    * interior width is the terminal width minus margins and the two border
    * columns. */
@@ -422,17 +362,12 @@ export function SessionScreen(props: {
       + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
   };
   const rewindOverlayHeight = () => {
-    const rewind = rewindScreen();
+    const rewind = pathPicker();
     if (!rewind) return 0;
     // header + windowed rows + optional confirm/busy/error lines + border
     return 1 + Math.min(REWIND_OVERLAY_MAX_ROWS, rewind.items.length)
-      + (rewind.confirm ? 1 : 0) + (rewind.busy ? 1 : 0) + (rewind.error ? 1 : 0) + 2;
-  };
-  const sessionOverlayHeight = () => {
-    const picker = sessionPicker();
-    if (!picker) return 0;
-    return 1 + Math.min(SESSION_OVERLAY_MAX_ROWS, picker.sessions.length)
-      + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
+      + (rewind.type === "rewind" && rewind.confirm ? 1 : 0)
+      + (rewind.busy ? 1 : 0) + (rewind.error ? 1 : 0) + 2;
   };
   return (
     <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
@@ -466,7 +401,7 @@ export function SessionScreen(props: {
           </Show>
         </scrollbox>
       </Show>
-      <Show when={modelPicker() === undefined && sessionPicker() === undefined && rewindScreen() === undefined && props.suggestions().length > 0}>
+      <Show when={modelPicker() === undefined && pathPicker() === undefined && props.suggestions().length > 0}>
         <box
           position="absolute"
           right={1}
@@ -512,7 +447,7 @@ export function SessionScreen(props: {
           />
         </box>
       </Show>
-      <Show when={rewindScreen() !== undefined}>
+      <Show when={pathPicker() !== undefined}>
         <box
           position="absolute"
           right={1}
@@ -526,29 +461,7 @@ export function SessionScreen(props: {
           backgroundColor={theme.surface}
         >
           <RewindOverlay
-            screen={() => rewindScreen() as RewindScreen}
-            selected={props.overlaySelected}
-            navigated={props.overlayNavigated}
-            resources={props.resources}
-            contentWidth={overlayContentWidth}
-          />
-        </box>
-      </Show>
-      <Show when={sessionPicker() !== undefined}>
-        <box
-          position="absolute"
-          right={1}
-          bottom={controlsHeight()}
-          left={1}
-          height={sessionOverlayHeight()}
-          zIndex={20}
-          border={true}
-          borderStyle="rounded"
-          borderColor={theme.borderStrong}
-          backgroundColor={theme.surface}
-        >
-          <SessionPickerOverlay
-            screen={() => sessionPicker() as SessionPickerScreen}
+            screen={() => pathPicker() as RewindScreen | SquashScreen}
             selected={props.overlaySelected}
             navigated={props.overlayNavigated}
             resources={props.resources}

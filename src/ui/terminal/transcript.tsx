@@ -78,6 +78,10 @@ export function groupTranscriptTurns(items: readonly TranscriptItem[]): Transcri
       groups.push({ id: item.id, user: item, items: [] });
       continue;
     }
+    if (item.kind === "squash") {
+      groups.push({ id: item.id, user: undefined, items: [item] });
+      continue;
+    }
     const last = groups.at(-1);
     if (last) last.items.push(item);
     else groups.push({ id: item.id, user: undefined, items: [item] });
@@ -331,7 +335,7 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
 function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const item = () => props.item;
   const theme = props.resources.theme;
-  const systemLabel = () => item().kind === "compaction" ? "◌ compact" : "◌ import";
+  const systemLabel = () => item().kind === "squash" ? "◌ squash" : "◌ import";
   return (
     <Show
       when={item().kind === "tool"}
@@ -340,8 +344,8 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
           when={item().kind === "thinking"}
           fallback={
             <box flexDirection="column" width="100%" marginBottom={1}>
-              <Show when={item().kind === "compaction" || item().kind === "context_merge"}>
-                <text height={1} wrapMode="none" fg={item().kind === "compaction" ? theme.warning : theme.success} attributes={dim}>
+              <Show when={item().kind === "squash" || item().kind === "context_merge"}>
+                <text height={1} wrapMode="none" fg={item().kind === "squash" ? theme.warning : theme.success} attributes={dim}>
                   {systemLabel()}
                 </text>
               </Show>
@@ -525,7 +529,7 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       >
         <ascii_font text="thread" font="tiny" color={theme.accent} backgroundColor={theme.surface} />
       </box>
-      <text fg={theme.softText} marginBottom={1}>project session · versioned workspace and context</text>
+      <text fg={theme.softText} marginBottom={1}>Session Tree · versioned workspace and context</text>
       <box flexDirection="row" height={1}>
         <text fg={theme.muted} height={1} wrapMode="none">type a task to start working, or </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">/model</text>

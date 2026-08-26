@@ -14,6 +14,13 @@ type NewEntry = SessionEntry extends infer T
     : never
   : never;
 
+export interface MessageOrigin {
+  entryId: string;
+  kind: "entry" | "retained";
+  containerEntryId?: string;
+  retainedIndex?: number;
+}
+
 type NewRecord = DurableRecord extends infer T
   ? T extends DurableRecord
     ? Omit<T, "seq" | "timestamp">
@@ -22,8 +29,8 @@ type NewRecord = DurableRecord extends infer T
 
 export interface BuiltSessionContext {
   messages: Message[];
-  sourceEntryIds: string[];
-  compactionEntryId: string | null;
+  origins: MessageOrigin[];
+  rootProjectState?: { entryId: string; summary: string };
 }
 
 export interface ContextDiffFacts {
@@ -34,7 +41,7 @@ export interface ContextDiffFacts {
   userMessageCount: number;
   assistantMessageCount: number;
   toolCallCount: number;
-  compactionCount: number;
+  squashCount: number;
 }
 
 function contextMergeMessage(entry: Extract<SessionEntry, { type: "context_merge" }>): Message {
@@ -45,10 +52,19 @@ function contextMergeMessage(entry: Extract<SessionEntry, { type: "context_merge
   };
 }
 
-function compactionMessage(entry: Extract<SessionEntry, { type: "compaction" }>): Message {
+export function squashMessage(entry: Extract<SessionEntry, { type: "squash" }>): Message {
+  const heading = entry.summaryKind === "project_state"
+    ? "[Summary of earlier project-session context]"
+    : "[Session history squashed from the selected user turn; workspace preserved]";
   return {
     role: "user",
-    content: `[Summary of earlier project-session context]\n${entry.summary}`,
+    content: [
+      heading,
+      "[Checkpointed workspace changes]",
+      entry.workspaceDiffStat || "No checkpointed workspace changes.",
+      "[Narrative project state]",
+      entry.summary,
+    ].join("\n"),
     timestamp: entry.timestamp,
   };
 }
@@ -61,14 +77,47 @@ export class SessionService {
   }
 
   async appendEntry(lane: string, entry: NewEntry, flush = false): Promise<SessionEntry> {
+    const leaf = this.projection.lanes.get(lane) ?? null;
+    return this.appendEntryAt(lane, leaf, entry, { expectedLeafId: leaf, flush });
+  }
+
+  async appendEntryAt(
+    lane: string,
+    parentId: string | null,
+    entry: NewEntry,
+    options: { expectedLeafId: string | null; flush?: boolean; entryTimestamp?: number },
+  ): Promise<SessionEntry> {
     let created: SessionEntry | undefined;
     await this.store.append(
       (seq, timestamp) => {
-        const parentId = this.projection.lanes.get(lane) ?? null;
-        created = { ...entry, seq, timestamp, parentId } as SessionEntry;
+        const currentLeaf = this.projection.lanes.get(lane) ?? null;
+        if (currentLeaf !== options.expectedLeafId) {
+          throw new Error(
+            `Session lane ${lane} moved while planning an entry: expected ${options.expectedLeafId ?? "null"}, has ${currentLeaf ?? "null"}`,
+          );
+        }
+        if (parentId !== null) {
+          const parent = this.projection.entries.get(parentId);
+          if (!parent) throw new Error(`Cannot append entry at missing parent ${parentId}`);
+          if (parent.sessionId !== entry.sessionId) {
+            throw new Error(`Cannot append entry to a parent from another session: ${parentId}`);
+          }
+          if (parent.id === entry.id) throw new Error(`Entry ${entry.id} cannot be its own parent`);
+        }
+        if (this.projection.entries.has(entry.id)) throw new Error(`Duplicate entry id: ${entry.id}`);
+        if (entry.type === "squash") {
+          for (const retained of entry.retainedTail) {
+            const source = this.projection.entries.get(retained.sourceEntryId);
+            if (!source) throw new Error(`Squash retained tail references missing entry ${retained.sourceEntryId}`);
+            if (source.sessionId !== entry.sessionId) {
+              throw new Error(`Squash retained tail references another session: ${retained.sourceEntryId}`);
+            }
+          }
+        }
+        created = { ...entry, seq, timestamp: options.entryTimestamp ?? timestamp, parentId } as SessionEntry;
         return { type: "entry_appended", entry: created, lane };
       },
-      { flush },
+      options.flush === undefined ? {} : { flush: options.flush },
     );
     return structuredClone(created!);
   }
@@ -106,32 +155,39 @@ export class SessionService {
 
   buildContext(headId: string | null): BuiltSessionContext {
     const path = this.pathTo(headId);
-    let compactionIndex = -1;
-    for (let index = path.length - 1; index >= 0; index--) {
-      if (path[index]!.type === "compaction") {
-        compactionIndex = index;
-        break;
+    const messages: Message[] = [];
+    const origins: MessageOrigin[] = [];
+    let rootProjectState: BuiltSessionContext["rootProjectState"];
+    for (let index = 0; index < path.length; index++) {
+      const entry = path[index]!;
+      if (entry.type === "message") {
+        messages.push(structuredClone(entry.message));
+        origins.push({ entryId: entry.id, kind: "entry" });
+      }
+      if (entry.type === "context_merge") {
+        messages.push(contextMergeMessage(entry));
+        origins.push({ entryId: entry.id, kind: "entry" });
+      }
+      if (entry.type === "squash") {
+        messages.push(squashMessage(entry));
+        origins.push({ entryId: entry.id, kind: "entry" });
+        if (entry.summaryKind === "project_state" && messages.length === 1) {
+          rootProjectState = { entryId: entry.id, summary: entry.summary };
+        }
+        for (let retainedIndex = 0; retainedIndex < entry.retainedTail.length; retainedIndex++) {
+          const retained = entry.retainedTail[retainedIndex]!;
+          messages.push(structuredClone(retained.message));
+          origins.push({
+            entryId: retained.sourceEntryId,
+            kind: "retained",
+            containerEntryId: entry.id,
+            retainedIndex,
+          });
+        }
       }
     }
-    const messages: Message[] = [];
-    const sourceEntryIds: string[] = [];
-    if (compactionIndex >= 0) {
-      const compaction = path[compactionIndex] as Extract<SessionEntry, { type: "compaction" }>;
-      messages.push(compactionMessage(compaction), ...structuredClone(compaction.retainedTail));
-      sourceEntryIds.push(compaction.id);
-    }
-    const start = compactionIndex + 1;
-    for (let index = start; index < path.length; index++) {
-      const entry = path[index]!;
-      if (entry.type === "message") messages.push(structuredClone(entry.message));
-      if (entry.type === "context_merge") messages.push(contextMergeMessage(entry));
-      if (entry.type === "message" || entry.type === "context_merge") sourceEntryIds.push(entry.id);
-    }
-    return {
-      messages,
-      sourceEntryIds,
-      compactionEntryId: compactionIndex >= 0 ? path[compactionIndex]!.id : null,
-    };
+    if (messages.length !== origins.length) throw new SessionCorruptionError("Context messages and origins diverged");
+    return { messages, origins, ...(rootProjectState ? { rootProjectState } : {}) };
   }
 
   contextDiff(fromHeadId: string | null, toHeadId: string | null): ContextDiffFacts {
@@ -152,10 +208,10 @@ export class SessionService {
     let userMessageCount = 0;
     let assistantMessageCount = 0;
     let toolCallCount = 0;
-    let compactionCount = 0;
+    let squashCount = 0;
     for (const entry of divergent) {
       countsByType[entry.type] = (countsByType[entry.type] ?? 0) + 1;
-      if (entry.type === "compaction") compactionCount++;
+      if (entry.type === "squash") squashCount++;
       if (entry.type !== "message") continue;
       if (entry.message.role === "user") userMessageCount++;
       if (entry.message.role === "assistant") {
@@ -171,7 +227,7 @@ export class SessionService {
       userMessageCount,
       assistantMessageCount,
       toolCallCount,
-      compactionCount,
+      squashCount,
     };
   }
 

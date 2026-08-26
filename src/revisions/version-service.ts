@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  CommitContextCost,
   ThreadCommit,
   BranchRef,
   DurableRecord,
@@ -23,6 +24,15 @@ export interface CreateCheckpointOptions {
   moveLane?: boolean;
   outcome?: InternalCheckpoint["outcome"];
   details?: InternalCheckpoint["details"];
+  updateKeepRef?: boolean;
+  extraEvents?: (seq: number, timestamp: number, checkpoint: InternalCheckpoint) => SessionLogEvent[];
+}
+
+export interface CreateSquashCheckpointOptions {
+  branchName: string;
+  expectedHeadCheckpointId: string;
+  sessionHeadId: string;
+  details: NonNullable<InternalCheckpoint["details"]>;
   extraEvents?: (seq: number, timestamp: number, checkpoint: InternalCheckpoint) => SessionLogEvent[];
 }
 
@@ -45,17 +55,23 @@ export interface VersionStatus {
   commitCount: number;
 }
 
-export interface InitializeVersionOptions {
-  active?: boolean;
-  create?: boolean;
+export interface NewBranchResult {
+  branch: BranchRef;
+  checkpoint: InternalCheckpoint;
+  workspaceSourceCheckpointId: string;
 }
 
 export class VersionService {
   readonly warnings: string[] = [];
+  private contextCostProvider: (() => CommitContextCost) | undefined;
   constructor(
     readonly session: SessionService,
     readonly workspace: SidecarWorkspaceStore,
   ) {}
+
+  setContextCostProvider(provider: (() => CommitContextCost) | undefined): void {
+    this.contextCostProvider = provider;
+  }
 
   get projection() {
     return this.session.projection;
@@ -71,25 +87,24 @@ export class VersionService {
     return checkpoint;
   }
 
-  private get lastRetentionCommitOid(): string | undefined {
+  private get globalRetentionTip(): string | undefined {
+    const seen = new Set<string>();
     let oid: string | undefined;
-    for (const checkpoint of this.projection.checkpoints.values()) oid = checkpoint.retentionCommitOid;
+    for (const checkpoint of this.projection.checkpoints.values()) {
+      if (seen.has(checkpoint.retentionCommitOid)) continue;
+      seen.add(checkpoint.retentionCommitOid);
+      oid = checkpoint.retentionCommitOid;
+    }
     return oid;
   }
 
   get expectedKeepRef(): string | undefined {
-    return this.lastRetentionCommitOid;
+    return this.globalRetentionTip;
   }
 
-  async initialize(
-    rootPath: string,
-    options: InitializeVersionOptions = {},
-  ): Promise<{ created: boolean; recoveredOperations: string[] }> {
+  async initialize(rootPath: string): Promise<{ created: boolean; recoveredOperations: string[] }> {
     await this.workspace.initialize();
-    if (!this.projection.session) {
-      if (options.create === false) {
-        throw new SessionCorruptionError(`Project session ${this.session.store.sessionId} has not been initialized`);
-      }
+    if (!this.projection.tree) {
       const snapshot = await this.workspace.capture();
       const now = Date.now();
       const checkpoint: InternalCheckpoint = {
@@ -112,8 +127,9 @@ export class VersionService {
       await this.session.store.appendBatch(
         () => [
           {
-            type: "session_created",
-            session: {
+            type: "tree_created",
+            tree: {
+              formatVersion: 3,
               id: this.session.store.sessionId,
               rootPath: path.resolve(rootPath),
               currentBranch: "main",
@@ -127,33 +143,23 @@ export class VersionService {
         { flush: true },
       );
       await this.workspace.updateKeepRef(snapshot.retentionCommitOid);
-      await this.session.store.writeSessionManifest(rootPath);
+      await this.session.store.writeTreeManifest(rootPath);
       return { created: true, recoveredOperations: [] };
     }
 
-    if (path.resolve(this.projection.session.rootPath) !== path.resolve(rootPath)) {
+    if (path.resolve(this.projection.tree.rootPath) !== path.resolve(rootPath)) {
       throw new SessionCorruptionError(
-        `Session root mismatch: log=${this.projection.session.rootPath}, current=${path.resolve(rootPath)}`,
+        `Session Tree root mismatch: log=${this.projection.tree.rootPath}, current=${path.resolve(rootPath)}`,
       );
     }
     await this.reconcileKeepRef();
-    if (options.active === false) {
-      const open = this.projection.getOpenOperations();
-      if (open.length > 0) {
-        throw new SessionCorruptionError(
-          `Inactive session ${this.session.store.sessionId} has ${open.length} interrupted operation(s)`,
-        );
-      }
-      this.projection.assertIdleInvariant(this.projection.session.currentBranch);
-      return { created: false, recoveredOperations: [] };
-    }
     const recoveredOperations = await this.recoverStartup();
-    this.projection.assertIdleInvariant(this.projection.session.currentBranch);
+    this.projection.assertIdleInvariant(this.projection.tree.currentBranch);
     return { created: false, recoveredOperations };
   }
 
   private async reconcileKeepRef(): Promise<void> {
-    const latest = this.lastRetentionCommitOid;
+    const latest = this.globalRetentionTip;
     if (!latest) return;
     await this.workspace.verifyObjectSet(
       [...this.projection.checkpoints.values()].map((checkpoint) => ({
@@ -161,15 +167,12 @@ export class VersionService {
         retentionCommitOid: checkpoint.retentionCommitOid,
       })),
     );
-    await this.workspace.verifySnapshot(this.latestCheckpoint().workspaceTreeOid, latest);
+    const owner = [...this.projection.checkpoints.values()].find(
+      (checkpoint) => checkpoint.retentionCommitOid === latest,
+    );
+    if (!owner) throw new SessionCorruptionError(`No checkpoint owns global retention tip ${latest}`);
+    await this.workspace.verifySnapshot(owner.workspaceTreeOid, latest);
     if ((await this.workspace.readKeepRef()) !== latest) await this.workspace.updateKeepRef(latest);
-  }
-
-  private latestCheckpoint(): InternalCheckpoint {
-    const checkpoints = [...this.projection.checkpoints.values()];
-    const latest = checkpoints.at(-1);
-    if (!latest) throw new SessionCorruptionError("Session has no checkpoints");
-    return latest;
   }
 
   async recoverStartup(): Promise<string[]> {
@@ -182,7 +185,7 @@ export class VersionService {
         throw new SessionCorruptionError(`Inactive branch ${lane} has an open operation`);
       }
     }
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
+    const snapshot = await this.workspace.capture(this.globalRetentionTip);
     const drifted = snapshot.treeOid !== this.head.workspaceTreeOid;
     if (!drifted && open.length === 0) return [];
 
@@ -229,7 +232,7 @@ export class VersionService {
 
   async captureTurnBase(): Promise<InternalCheckpoint> {
     this.requireIdle();
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
+    const snapshot = await this.workspace.capture(this.globalRetentionTip);
     return this.persistCheckpoint(snapshot, {
       reason: "turn_base",
       parentCheckpointIds: [this.head.id],
@@ -249,7 +252,7 @@ export class VersionService {
     const parentCheckpointId = this.head.id;
     const sessionHeadId = this.projection.lanes.get(branchName) ?? null;
     const id = createId("checkpoint");
-    const retentionParent = this.lastRetentionCommitOid;
+    const retentionParent = this.globalRetentionTip;
     const completion = this.workspace.capture(retentionParent).then((snapshot) =>
       this.persistCheckpoint(snapshot, {
         checkpointId: id,
@@ -270,7 +273,7 @@ export class VersionService {
     outcome: "completed" | "aborted" | "failed",
     error?: Error,
   ): Promise<InternalCheckpoint> {
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
+    const snapshot = await this.workspace.capture(this.globalRetentionTip);
     return this.persistCheckpoint(snapshot, {
       reason: "turn_result",
       parentCheckpointIds: [this.head.id],
@@ -302,19 +305,31 @@ export class VersionService {
     });
   }
 
-  async finishCompaction(operationId: string, branchName = this.currentBranch.name): Promise<InternalCheckpoint> {
+  async finishCompaction(
+    operationId: string,
+    branchName: string,
+    counts: { squashEntryCount: number; squashTurnCount: number },
+  ): Promise<InternalCheckpoint> {
     const branch = this.projection.branches.get(branchName);
     if (!branch) throw new Error(`Unknown thread branch: ${branchName}`);
     const operation = this.projection
       .getOpenOperations(branchName)
       .find((candidate) => candidate.id === operationId && candidate.intent.kind === "compaction");
     if (!operation) throw new Error(`Unknown open compaction operation: ${operationId}`);
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
-    return this.persistCheckpoint(snapshot, {
-      reason: "command",
-      parentCheckpointIds: [branch.headCheckpointId],
-      sessionHeadId: this.projection.lanes.get(branchName) ?? null,
+    const sourceHeadId = operation.sourceLeafId;
+    const sessionHeadId = this.projection.lanes.get(branchName) ?? null;
+    if (!sessionHeadId) throw new Error("Compaction did not append a result entry");
+    return this.persistSquashCheckpoint({
       branchName,
+      expectedHeadCheckpointId: branch.headCheckpointId,
+      sessionHeadId,
+      details: {
+        squashFromEntryId: null,
+        squashSourceHeadId: sourceHeadId,
+        squashTrigger: "compact_command",
+        squashEntryCount: counts.squashEntryCount,
+        squashTurnCount: counts.squashTurnCount,
+      },
       extraEvents: (seq, timestamp) => [
         {
           type: "record_appended",
@@ -332,9 +347,29 @@ export class VersionService {
     });
   }
 
+  async persistSquashCheckpoint(options: CreateSquashCheckpointOptions): Promise<InternalCheckpoint> {
+    const parent = this.getCheckpoint(options.expectedHeadCheckpointId);
+    const snapshot: WorkspaceSnapshot = {
+      treeOid: parent.workspaceTreeOid,
+      retentionCommitOid: parent.retentionCommitOid,
+      pathCount: 0,
+      elapsedMs: 0,
+    };
+    return this.persistCheckpoint(snapshot, {
+      reason: "squash",
+      parentCheckpointIds: [parent.id],
+      sessionHeadId: options.sessionHeadId,
+      branchName: options.branchName,
+      expectedHeadCheckpointId: parent.id,
+      details: options.details,
+      updateKeepRef: false,
+      ...(options.extraEvents ? { extraEvents: options.extraEvents } : {}),
+    });
+  }
+
   async syncCurrentWorkspace(reason: "command" | "safety" = "command", always = false): Promise<InternalCheckpoint> {
     this.requireIdle();
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
+    const snapshot = await this.workspace.capture(this.globalRetentionTip);
     if (!always && snapshot.treeOid === this.head.workspaceTreeOid) return this.head;
     return this.persistCheckpoint(snapshot, {
       reason,
@@ -388,7 +423,7 @@ export class VersionService {
       { flush: true },
     );
     try {
-      await this.workspace.updateKeepRef(snapshot.retentionCommitOid);
+      if (options.updateKeepRef !== false) await this.workspace.updateKeepRef(snapshot.retentionCommitOid);
     } catch (error) {
       this.warnings.push(
         `Checkpoint ${checkpoint.id} is durable but the keep ref update is pending reconciliation: ${
@@ -418,6 +453,55 @@ export class VersionService {
     await this.session.store.append(() => ({ type: "branch_created", branch }), { flush: true });
     if (switchTo) await this.switchBranch(name);
     return branch;
+  }
+
+  async createNewBranch(): Promise<NewBranchResult> {
+    this.requireIdle();
+    const roots = [...this.projection.checkpoints.values()].filter(
+      (checkpoint) => checkpoint.parentCheckpointIds.length === 0,
+    );
+    if (roots.length !== 1 || roots[0]!.reason !== "genesis") {
+      throw new SessionCorruptionError(
+        `Session Tree must have exactly one genesis checkpoint; found ${roots.length}`,
+      );
+    }
+    const workspaceSource = await this.syncCurrentWorkspace("safety", true);
+    let suffix = 1;
+    while (this.projection.branches.has(`new-${suffix}`)) suffix++;
+    const branchName = `new-${suffix}`;
+    const checkpointId = createId("checkpoint");
+    let checkpoint!: InternalCheckpoint;
+    let branch!: BranchRef;
+    await this.session.store.appendBatch(
+      (_seq, timestamp) => {
+        checkpoint = {
+          id: checkpointId,
+          sessionId: this.session.store.sessionId,
+          parentCheckpointIds: [roots[0]!.id],
+          sessionHeadId: null,
+          workspaceTreeOid: workspaceSource.workspaceTreeOid,
+          retentionCommitOid: workspaceSource.retentionCommitOid,
+          reason: "new",
+          details: { workspaceSourceCheckpointId: workspaceSource.id },
+          createdAt: timestamp,
+        };
+        branch = {
+          sessionId: this.session.store.sessionId,
+          name: branchName,
+          headCheckpointId: checkpoint.id,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        return [
+          { type: "checkpoint_created", checkpoint },
+          { type: "branch_created", branch },
+          { type: "current_branch_changed", branch: branchName, updatedAt: timestamp },
+        ];
+      },
+      { flush: true },
+    );
+    this.projection.assertIdleInvariant(branchName);
+    return { branch, checkpoint, workspaceSourceCheckpointId: workspaceSource.id };
   }
 
   async switchBranch(name: string): Promise<void> {
@@ -468,7 +552,7 @@ export class VersionService {
       await this.workspace.restoreTree(safety.workspaceTreeOid, target.workspaceTreeOid);
     }
     const combinedHead = mode === "context" ? target.sessionHeadId : safety.sessionHeadId;
-    const snapshot = await this.workspace.capture(this.lastRetentionCommitOid);
+    const snapshot = await this.workspace.capture(this.globalRetentionTip);
     return this.persistCheckpoint(snapshot, {
       reason: "command",
       parentCheckpointIds: [safety.id],
@@ -489,14 +573,17 @@ export class VersionService {
     return this.restore(candidates[0]!.baseCheckpointId, "both");
   }
 
-  async createCommit(message: string): Promise<ThreadCommit> {
+  async createCommit(message: string, contextCost?: CommitContextCost): Promise<ThreadCommit> {
     if (!message.trim()) throw new Error("Thread commit message cannot be empty");
     await this.syncCurrentWorkspace("command");
+    const resolvedContextCost = contextCost ?? this.contextCostProvider?.();
+    if (!resolvedContextCost) throw new Error("Thread commit requires a configured model to record context cost");
     const commit: ThreadCommit = {
       id: createId("commit"),
       sessionId: this.session.store.sessionId,
       checkpointId: this.head.id,
       message: message.trim(),
+      contextCost: resolvedContextCost,
       createdAt: Date.now(),
     };
     await this.session.store.append(() => ({ type: "thread_commit_created", commit }), { flush: true });
@@ -576,7 +663,7 @@ export class VersionService {
     const checkpoint = this.head;
     return {
       sessionId: this.session.store.sessionId,
-      rootPath: this.projection.session!.rootPath,
+      rootPath: this.projection.tree!.rootPath,
       currentBranch: this.currentBranch.name,
       headCheckpointId: checkpoint.id,
       workspaceTreeOid: checkpoint.workspaceTreeOid,
@@ -588,7 +675,7 @@ export class VersionService {
 
   requireIdle(): void {
     const open = this.projection.getOpenOperations();
-    if (open.length > 0) throw new Error(`Project Session has an open operation: ${open[0]!.id}`);
-    if (this.projection.session) this.projection.assertIdleInvariant(this.currentBranch.name);
+    if (open.length > 0) throw new Error(`Session Tree has an open operation: ${open[0]!.id}`);
+    if (this.projection.tree) this.projection.assertIdleInvariant(this.currentBranch.name);
   }
 }

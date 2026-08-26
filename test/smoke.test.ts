@@ -13,6 +13,7 @@ import { ThreadApp } from "../src/app.js";
 import { PiModelClient } from "../src/agent/model-client.js";
 import { loadExtension } from "../src/extensions/loader.js";
 import { commitAll, initRepository } from "./helpers/git-fixture.js";
+import { estimateContextTokens } from "../src/utils/estimate.js";
 
 function replyText(messages: ReadonlyArray<{ content: ReadonlyArray<{ type: string; text?: string }> }>): string {
   return messages.at(-1)?.content
@@ -21,7 +22,7 @@ function replyText(messages: ReadonlyArray<{ content: ReadonlyArray<{ type: stri
     .join("") ?? "";
 }
 
-test("one project session can branch, restore, diff and merge workspace plus context", async (t) => {
+test("one Session Tree can branch, restore, diff and merge workspace plus context", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-smoke-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
   const root = path.join(fixture, "project");
@@ -63,6 +64,15 @@ test("one project session can branch, restore, diff and merge workspace plus con
     assert.equal(mainTurn.kind === "turn" ? mainTurn.result.outcome : undefined, "completed");
     await app.handleInput("/thread commit main milestone", { signal });
     const mainCommit = [...app.session.projection.commits.values()].at(-1)!;
+    const mainCommitCheckpoint = app.versions.getCheckpoint(mainCommit.checkpointId);
+    const mainCommitTokens = estimateContextTokens(
+      app.session.buildContext(mainCommitCheckpoint.sessionHeadId).messages,
+    ).tokens;
+    assert.equal(mainCommit.contextCost.estimatedTokens, mainCommitTokens);
+    assert.equal(mainCommit.contextCost.contextWindow, model.contextWindow);
+    assert.equal(mainCommit.contextCost.providerId, model.providerId);
+    assert.equal(mainCommit.contextCost.modelId, model.modelId);
+    assert.equal(mainCommit.contextCost.percent, Math.min(999, Math.round(mainCommitTokens / model.contextWindow * 100)));
     const mainContextHead = app.versions.head.sessionHeadId;
 
     await app.handleInput("/thread branch feature", { signal });
@@ -88,9 +98,11 @@ test("one project session can branch, restore, diff and merge workspace plus con
     assert.equal(rewindView?.type, "rewind", "bare /rewind opens the message picker");
     if (!rewindView || rewindView.type !== "rewind") assert.fail("Expected rewind picker view");
     const rewindLabels = rewindView.items.map((item) => item.label);
-    assert.equal(rewindLabels.length, 2, "the wrapped diff turn is a rewindable turn like any other");
+    assert.equal(rewindLabels.length, 3, "current-path turns inherited from the parent branch remain visible");
     assert.match(rewindLabels[0]!, /\/thread diff --facts/, "newest turn is the wrapped diff command");
     assert.equal(rewindLabels[1]!, "build the feature");
+    assert.equal(rewindLabels[2]!, "create the main implementation");
+    assert.ok(rewindView.items.every((item) => item.status === "current-path"));
     await app.handleInput(`/rewind ${featureTurnId}`, { signal });
     await assert.rejects(access(path.join(root, "feature.txt")));
     await app.handleInput(`/thread restore ${featureCommit.id}`, { signal });

@@ -137,16 +137,19 @@ export class PiModelClient implements ModelClient {
 
   async forkComplete(context: Context, instruction: string, options: ModelRequestOptions): Promise<string> {
     /* The fork keeps the live prefix intact and only appends the instruction,
-     * so the provider's cached prefix still matches. Tools are dropped: the
-     * fork must produce text, never a tool call. */
+     * so the provider's cached prefix still matches. Tools stay in the request
+     * to preserve that prefix, but this method never executes a tool call. */
     const forked: Context = {
       ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
       messages: [...context.messages, { role: "user", content: instruction, timestamp: Date.now() }],
-      tools: [],
+      ...(context.tools === undefined ? {} : { tools: context.tools }),
     };
     const message = await this.stream(forked, options);
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage ?? `Forked request stopped with ${message.stopReason}`);
+    }
+    if (message.stopReason === "toolUse" || message.content.some((block) => block.type === "toolCall")) {
+      throw new Error("Forked summary requested a tool; summary forks are read-only and tools were not executed");
     }
     const text = message.content
       .filter((block) => block.type === "text")

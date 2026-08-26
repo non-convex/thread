@@ -61,8 +61,7 @@ export class ThreadTuiController {
     { name: "clear", description: "Clear the visible transcript without changing thread context" },
     { name: "compact", description: "Compact older context and retain recent interactions" },
     { name: "model", description: "Open a list and choose the active model" },
-    { name: "new", description: "Start a new project session from the current workspace" },
-    { name: "session", description: "List or switch project sessions" },
+    { name: "new", description: "Start an empty-context branch from the Session Tree root" },
     { name: "thread", description: "Thread version commands: status, history, commit, diff, merge, restore" },
     { name: "rewind", description: "Restore to before a historical turn" },
     { name: "exit", description: "Exit thread" },
@@ -197,7 +196,7 @@ export class ThreadTuiController {
     const up = key.name === "up" || key.name === "k";
     const down = key.name === "down" || key.name === "j";
     const enter = key.name === "return" || key.name === "kpenter" || key.name === "linefeed";
-    if (screen.type === "model_picker" || screen.type === "session_picker" || screen.type === "rewind") {
+    if (screen.type === "model_picker" || screen.type === "rewind" || screen.type === "thread_squash") {
       /* Arrow-key navigation for these floating panels is handled by the
        * view (a local Solid signal, written back onto screen.selected) so it
        * never round-trips through notify() — a notify per keystroke
@@ -205,8 +204,8 @@ export class ThreadTuiController {
        * visibly flickers. Only the enter key needs the controller. */
       if (enter) {
         if (screen.type === "model_picker") void this.advanceModelPicker();
-        else if (screen.type === "session_picker") void this.advanceSessionPicker();
-        else void this.advanceRewind();
+        else if (screen.type === "rewind") void this.advanceRewind();
+        else void this.advanceSquash();
         return true;
       }
       return false;
@@ -294,9 +293,13 @@ export class ThreadTuiController {
     reduceUiEvent(this.state, event);
     if (event.type === "turn_started") {
       this.currentTurn = { userEntryId: event.userEntryId, input: event.input };
-      this.commitUserPrompt(event.userEntryId ?? `user:${event.turnId}`, event.input);
+      this.commitUserPrompt(
+        event.userEntryId ?? `user:${event.turnId}`,
+        event.input,
+        event.syntheticSquash ? "squash" : "user",
+      );
     }
-    if (event.type === "session_changed") {
+    if (event.type === "head_changed" && event.reason === "new") {
       this.hiddenThroughEntryId = undefined;
       this.replayRequested = false;
       this.committedIds.clear();
@@ -306,7 +309,7 @@ export class ThreadTuiController {
       this.syncTranscript("reset");
       this.refreshMeta();
     }
-    if (event.type === "head_changed" && event.reason !== "turn") this.replayRequested = true;
+    if (event.type === "head_changed" && event.reason !== "turn" && event.reason !== "new") this.replayRequested = true;
     if (event.type === "turn_finished") {
       this.markStreamedTurnCommitted();
       this.clearLiveTurn();
@@ -317,10 +320,10 @@ export class ThreadTuiController {
     this.notify();
   }
 
-  private commitUserPrompt(id: string, content: string): void {
+  private commitUserPrompt(id: string, content: string, kind: "user" | "squash" = "user"): void {
     if (this.committedIds.has(id)) return;
     this.committedIds.add(id);
-    const item: TranscriptItem = { id, kind: "user", content };
+    const item: TranscriptItem = { id, kind, content };
     this.state.transcript = [...this.state.transcript, item];
   }
 
@@ -397,46 +400,6 @@ export class ThreadTuiController {
     }
   }
 
-  private async advanceSessionPicker(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "session_picker" || screen.busy) return;
-    const selected = screen.sessions[screen.selected];
-    if (!selected) return;
-    if (selected.current) {
-      this.closeView();
-      this.state.notice = { level: "info", text: `Already using project session ${selected.id}` };
-      this.notify();
-      return;
-    }
-
-    screen.busy = true;
-    screen.error = undefined;
-    const active = new AbortController();
-    this.active = active;
-    this.notify();
-    try {
-      const result = await this.app.handleInput(`/session switch ${quoteCommandArgument(selected.id)}`, {
-        signal: active.signal,
-        onUiEvent: (event) => this.batcher.push(event),
-      });
-      this.batcher.flush();
-      if (result.kind !== "command") throw new Error("Session selection did not produce a command result");
-      this.refreshMeta();
-      this.state.screen = { type: "session" };
-      this.state.notice = {
-        level: result.result.changedState ? "success" : "info",
-        text: result.result.content,
-      };
-    } catch (error) {
-      this.batcher.flush();
-      screen.error = error instanceof Error ? error.message : String(error);
-    } finally {
-      screen.busy = false;
-      this.finishActive(active);
-      this.notify();
-    }
-  }
-
   private async advanceMerge(): Promise<void> {
     const screen = this.state.screen;
     if (screen.type !== "merge" || screen.busy || !screen.preview.clean) return;
@@ -498,6 +461,14 @@ export class ThreadTuiController {
     const screen = this.state.screen;
     if (screen.type !== "rewind") return;
     await this.advanceRestore(screen);
+  }
+
+  private async advanceSquash(): Promise<void> {
+    const screen = this.state.screen;
+    if (screen.type !== "thread_squash" || screen.busy || screen.items.length === 0) return;
+    const selected = screen.items[screen.selected]!;
+    this.closeView();
+    await this.submit(`/thread squash ${selected.turnId}`);
   }
 
   /** Double-enter guarded restore shared by the history screen and the /rewind overlay. */
@@ -567,7 +538,7 @@ export class ThreadTuiController {
     }
     if (start >= 0) {
       for (const item of items.slice(start)) {
-        if (["user", "assistant", "thinking", "tool"].includes(item.kind)) this.committedIds.add(item.id);
+        if (["user", "squash", "assistant", "thinking", "tool"].includes(item.kind)) this.committedIds.add(item.id);
       }
     }
     this.currentTurn = undefined;

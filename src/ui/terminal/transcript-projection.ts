@@ -48,30 +48,28 @@ function toolResultSummary(name: string, args: Record<string, unknown>, content:
   return first.slice(0, 180) || target || "completed";
 }
 
-function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, ToolStartedRecord>): TranscriptItem[] {
-  if (entry.type === "compaction") return [{ id: entry.id, kind: "compaction", content: entry.summary }];
-  if (entry.type === "context_merge") {
-    return [{ id: entry.id, kind: "context_merge", label: entry.sourceRef, content: entry.content }];
-  }
-  if (entry.type !== "message") return [];
-  const message = entry.message;
-  if (message.role === "user") return [{ id: entry.id, kind: "user", content: contentText(message.content) }];
+function messageTranscriptItems(
+  entryId: string,
+  message: Extract<SessionEntry, { type: "message" }>["message"],
+  toolRecords: ReadonlyMap<string, ToolStartedRecord>,
+): TranscriptItem[] {
+  if (message.role === "user") return [{ id: entryId, kind: "user", content: contentText(message.content) }];
   if (message.role === "assistant") {
     const items: TranscriptItem[] = [];
     const thinking = thinkingText(message.content);
-    if (thinking) items.push({ id: `${entry.id}:thinking`, kind: "thinking", content: thinking });
+    if (thinking) items.push({ id: `${entryId}:thinking`, kind: "thinking", content: thinking });
     const text = contentText(message.content);
-    if (text) items.push({ id: entry.id, kind: "assistant", content: text });
+    if (text) items.push({ id: entryId, kind: "assistant", content: text });
     return items;
   }
   if (message.role === "toolResult") {
-    const record = toolRecords.get(entry.id);
+    const record = toolRecords.get(entryId);
     const args = record?.effectiveArgs ?? {};
     const name = message.toolName || record?.toolName || "tool";
     const text = contentText(message.content);
     const target = argSummary(args);
     return [{
-      id: entry.id,
+      id: entryId,
       kind: "tool",
       label: target ? `${name}  ${target}` : name,
       name,
@@ -81,6 +79,28 @@ function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, T
     }];
   }
   return [];
+}
+
+function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, ToolStartedRecord>): TranscriptItem[] {
+  if (entry.type === "squash") {
+    const squash: TranscriptItem = {
+      id: entry.id,
+      kind: "squash",
+      label: entry.summaryKind === "project_state" ? "project state" : "selected turn",
+      content: `[Checkpointed workspace changes]\n${entry.workspaceDiffStat}\n\n[Narrative]\n${entry.summary}`,
+    };
+    return [
+      squash,
+      ...entry.retainedTail.flatMap((retained) =>
+        messageTranscriptItems(retained.sourceEntryId, retained.message, toolRecords)
+      ),
+    ];
+  }
+  if (entry.type === "context_merge") {
+    return [{ id: entry.id, kind: "context_merge", label: entry.sourceRef, content: entry.content }];
+  }
+  if (entry.type !== "message") return [];
+  return messageTranscriptItems(entry.id, entry.message, toolRecords);
 }
 
 export function projectTranscript(
@@ -93,14 +113,15 @@ export function projectTranscript(
     const hiddenIndex = path.findIndex((entry) => entry.id === hiddenThroughEntryId);
     if (hiddenIndex >= 0) path = path.slice(hiddenIndex + 1);
   }
-  let start = path.length;
-  let userMessages = 0;
-  for (let index = path.length - 1; index >= 0; index--) {
-    const entry = path[index]!;
-    if (entry.type === "message" && entry.message.role === "user") userMessages++;
-    start = index;
-    if (userMessages >= TRANSCRIPT_REPLAY_USER_MESSAGES) break;
-  }
   const toolRecords = new Map(records.map((record) => [record.resultEntryId, record] as const));
-  return path.slice(start).flatMap((entry) => transcriptItems(entry, toolRecords));
+  const items = path.flatMap((entry) => transcriptItems(entry, toolRecords));
+  let start = items.length;
+  let userBoundaries = 0;
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]!;
+    if (item.kind === "user" || (item.kind === "squash" && item.label === "selected turn")) userBoundaries++;
+    start = index;
+    if (userBoundaries >= TRANSCRIPT_REPLAY_USER_MESSAGES) break;
+  }
+  return items.slice(start);
 }

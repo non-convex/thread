@@ -1,104 +1,70 @@
 import { type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "../domain.js";
-import type { SessionService } from "../session/service.js";
+import type { BuiltSessionContext, MessageOrigin, SessionService } from "../session/service.js";
+import type { WorkspaceFileDiff } from "../workspace/sidecar-store.js";
 import { estimateContextTokens } from "../utils/estimate.js";
 import { createId } from "../utils/id.js";
 import type { ModelClient } from "./model-client.js";
 
 const PROJECT_STATE_REQUIREMENTS = [
-  "The output must serve two purposes at once: preserve only project knowledge that is useful for future work, and",
-  "compress the conversation history that is leaving the raw retained tail. Return one concise Markdown document",
-  "organized under the following three headings.",
-  "Under `## Long-term memory`, record durable knowledge as an ordered list of independent entries. Use exactly this",
-  "format for every entry: `- [YYYY-MM-DD] (memory content)`. The timestamp is the entry's last-modified date: keep",
-  "the existing date verbatim when you carry an entry forward unchanged, and use the current date stated in this",
-  "instruction when you create, correct, or merge an entry. Do not store project details that can be",
-  "inferred from the code or workspace. Store durable meta-information instead: active goals and constraints, user",
-  "preferences, architectural directions and their reasons, conventions, and facts the user mentioned or requested,",
-  "or the agent discovered, that remain useful over the long term. Reorganize this section on every compaction rather",
-  "than appending blindly: remove entries that are obsolete, superseded, or no longer useful, add newly useful",
-  "entries, and merge related entries into one when that still preserves their meaning. Keep at most 25 entries; when",
-  "there are more, retain only the 25 most useful and current entries.",
-  "Under `## Current project state`, record the current goal and phase, implemented workspace changes and intended",
-  "behavior, validation evidence, unresolved problems or uncertainty, and the exact next useful action. Describe the",
-  "material current state, not a historical inventory; omit completed changes that no longer help future work.",
-  "Under `## Recent user-agent conversation`, record the most recent interactions as an ordered list, oldest first.",
-  "Use exactly this format for every entry: `- [YYYY-MM-DD HH] (interaction content)`. As with long-term memory the",
-  "timestamp is the entry's last-modified time: keep an existing entry's timestamp verbatim when you carry it forward,",
-  "and use the current time stated in this instruction for entries you write or revise now. Each entry states what the",
-  "user asked, corrected, rejected, or decided, and the material assistant response, action, or outcome. This section",
-  "exists so that you still remember recent interaction after compaction, so overlap with the project state is",
-  "acceptable. Evict this section purely by time: keep at most the 10 most recent entries and drop the oldest beyond",
-  "that, even when their content still looks valuable — anything with durable value belongs in long-term memory",
-  "instead. Never let this section become a turn-by-turn transcript.",
-  "Treat later evidence as authoritative over earlier state. When an older item is contradicted, obsolete, completed",
-  "and no longer useful, or too temporary to matter, replace or remove it instead of preserving both versions.",
-  "Preserve material outcomes and evidence from tool calls, not raw tool output.",
-  "For reads and searches, record relevant paths, symbols, and findings without copying file contents.",
-  "For edits, record changed files and intended behavior. Do not inventory commands.",
-  "Retain a command only when its exact form is needed to reproduce an important validation or unresolved failure;",
-  "otherwise retain only the material outcome.",
-  "Consolidate repeated tests or command attempts into one conclusion.",
-  "Omit routine navigation, inspection commands, successful commands with no future relevance, and repetitive,",
-  "superseded, or irrelevant output. Do not invent facts.",
-  "Clearly distinguish implemented work from proposals, successful validation from failed or unrun checks, and",
-  "evidence from inference. Use concise Markdown with useful project-state headings; omit empty headings.",
+  "Return one concise Markdown project-state document under these headings: `## Long-term memory`,",
+  "`## Current project state`, and `## Recent user-agent conversation`.",
+  "Long-term memory contains at most 25 independently useful, current entries in the exact form",
+  "`- [YYYY-MM-DD] (memory content)`. Preserve goals, user decisions, architectural constraints, failed",
+  "approaches and their reasons, external facts, and discoveries that cannot safely be recovered from files.",
+  "Remove superseded or obsolete entries and merge repetitions.",
+  "Current project state states the active objective and phase, durable implemented results, validation evidence,",
+  "remaining risks, unfinished work, and the exact next useful action. Distinguish completed work from proposals",
+  "and successful checks from unrun or failed checks.",
+  "Recent user-agent conversation contains at most the 10 newest material interactions, oldest first, in the exact",
+  "form `- [YYYY-MM-DD HH] (interaction content)`. It is a compact decision history, not a transcript.",
+  "Preserve material tool outcomes but never copy raw logs, file contents, hidden reasoning, or routine commands.",
+  "Only durable results represented by the workspace may be recovered from files; do not omit other important state.",
+  "Treat later user corrections and evidence as authoritative. Do not invent facts.",
 ].join(" ");
 
 const INITIAL_STATE_INSTRUCTION = [
-  "Compact this conversation into a project state document, replacing the earlier turns that are about to leave your",
-  "context. Read the conversation above as the source; later corrections and decisions supersede earlier ones. Select",
-  "long-term memory for future usefulness rather than trying to preserve every detail.",
+  "Compact the earlier part of this conversation into a complete project state for a continuing coding agent.",
   PROJECT_STATE_REQUIREMENTS,
 ].join(" ");
 
 const UPDATE_STATE_INSTRUCTION = [
-  "Compact this conversation into an updated project state document, replacing the earlier turns that are about to",
-  "leave your context. The conversation above already contains a previous project state followed by newer",
-  "interactions. Re-evaluate that previous long-term memory instead of copying it mechanically: carry forward only",
-  "items that remain valid and likely to help future work, even when the newer interactions do not repeat them, and",
-  "update, replace, or remove items made stale or irrelevant by later evidence or the passage of time. Apply later",
-  "user corrections and decisions over superseded state, move completed or validated work to its current status, and",
-  "retain genuinely unresolved disagreement or uncertainty. Rebuild the recent-conversation section from the newest",
-  "interactions rather than accumulating the whole history. Return one complete updated project state, not a change",
-  "list and not two summaries.",
+  "Update the existing structured project state using the newer conversation. Re-evaluate it instead of copying it",
+  "mechanically: keep still-useful facts, replace stale state, and remove completed details that no longer help.",
   PROJECT_STATE_REQUIREMENTS,
 ].join(" ");
 
-const PRIOR_STATE_PREFIX = "[Summary of earlier project-session context]";
+const INCREMENTAL_INSTRUCTION = [
+  "Summarize the selected user turn through the current conversation leaf as one concise Markdown continuation",
+  "request. Preserve the selected goal, later user decisions and corrections, completed durable results, validation",
+  "evidence, failed approaches and why they failed, unresolved issues, external facts, and the exact next useful action.",
+  "Do not regenerate the earlier project history because it remains before this new message. Do not invent facts.",
+].join(" ");
 
-// pi-ai's simple request path keeps the same fixed safety margin when it clamps
-// output tokens. Using it here makes the compaction decision match the request
-// that will actually be sent.
+const READ_ONLY_FORK_RULE = [
+  "This is a read-only summary branch. Do not call or request any tool, even though tool definitions are present.",
+  "Return only the summary body. Do not return a plan, explanation, preamble, or tool request.",
+].join(" ");
+
 export const CONTEXT_SAFETY_TOKENS = 4_096;
 export const POST_COMPACTION_CONTEXT_RATIO = 0.07;
-/**
- * Compaction forks the live conversation, so its request carries the same
- * prefix it is about to compact. Triggering at a ratio instead of "the next
- * request no longer fits" keeps enough headroom for that fork to be sent.
- */
 export const COMPACTION_TRIGGER_RATIO = 0.78;
-/** Slack reserved for the summary wrapper when sizing the retained tail. */
+export const WORKSPACE_DIFF_MAX_FILES = 100;
+export const WORKSPACE_DIFF_MAX_BYTES = 8 * 1024;
 const PROMPT_WRAPPER_TOKENS = 128;
 
-/**
- * The provider's message format carries no timestamps, so a forked compaction
- * cannot read when anything happened. Stating the current local time in the
- * instruction gives the model the one anchor its entry timestamps need: it
- * stamps whatever it writes or revises now, and copies existing timestamps
- * verbatim for entries it carries forward unchanged.
- */
 function currentTimeAnchor(now = new Date()): string {
   const year = now.getFullYear().toString().padStart(4, "0");
   const month = (now.getMonth() + 1).toString().padStart(2, "0");
   const day = now.getDate().toString().padStart(2, "0");
   const hour = now.getHours().toString().padStart(2, "0");
-  return `The current local date and time is ${year}-${month}-${day} ${hour}. Use this as the last-modified stamp for every entry you write or revise in this compaction; entries carried forward unchanged keep their existing stamp.`;
+  return `The current local date and time is ${year}-${month}-${day} ${hour}. Keep an existing memory timestamp verbatim when its content is unchanged; use this time for entries written or revised now.`;
 }
 
 export interface CompactionOptions {
   minRetainTurns?: number;
   maxSummaryTokens?: number;
+  maxIncrementalSummaryTokens?: number;
   safetyTokens?: number;
   reasoning?: ThinkingLevel;
 }
@@ -108,27 +74,84 @@ export interface CompactionObserver {
   finished(ok: boolean): void;
 }
 
-export interface CompactionRun {
-  entry: Extract<SessionEntry, { type: "compaction" }>;
-  summarizedMessages: number;
-  retainedMessages: number;
-  modelCalls: number;
-}
-
-export interface CompactionExecution {
-  runId?: string;
-  resultEntryId?: string;
-}
-
 export interface CompactionRequestBudget {
   requestTokens: number;
   outputTokens: number;
   overheadTokens: number;
 }
 
+export interface RootSquashDraft {
+  summaryKind: "project_state";
+  summary: string;
+  workspaceDiffStat: string;
+  retainedTail: Array<{ sourceEntryId: string; message: Message }>;
+  requestTokensBefore: number;
+  summarizedMessages: number;
+  retainedMessages: number;
+  summarizedEntries: number;
+  summarizedTurns: number;
+  modelCalls: 1;
+}
+
+export interface IncrementalSquashDraft {
+  summaryKind: "incremental";
+  summary: string;
+  workspaceDiffStat: string;
+  retainedTail: [];
+  requestTokensBefore: number;
+  summarizedMessages: number;
+  summarizedEntries: number;
+  summarizedTurns: number;
+  modelCalls: 1;
+}
+
+interface RootPartition {
+  toSummarize: Message[];
+  retainedTail: Array<{ sourceEntryId: string; message: Message }>;
+  retainedStartUserOrdinal: number;
+  summarizedEntries: number;
+  summarizedTurns: number;
+}
+
+function jsonPath(path: string): string {
+  return JSON.stringify(path);
+}
+
+function diffLine(file: WorkspaceFileDiff): string {
+  const change = file.binary ? "binary" : `+${file.additions ?? 0} -${file.deletions ?? 0}`;
+  const target = file.status === "renamed" && file.oldPath
+    ? `${jsonPath(file.oldPath)} -> ${jsonPath(file.path)}`
+    : jsonPath(file.path);
+  return `${file.status.padEnd(8)} ${change.padEnd(18)} ${target}`;
+}
+
+/** Stable, prompt-safe, bounded machine facts for a checkpointed tree diff. */
+export function formatWorkspaceDiffStat(files: readonly WorkspaceFileDiff[]): string {
+  const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
+  const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
+  const binaryFiles = files.filter((file) => file.binary).length;
+  const header = `total: ${files.length} file(s), +${additions} -${deletions}, ${binaryFiles} binary`;
+  if (files.length === 0) return `${header}\n(no changed files)`;
+
+  const selected: string[] = [];
+  const candidateFiles = files.slice(0, WORKSPACE_DIFF_MAX_FILES);
+  for (const file of candidateFiles) {
+    const candidate = [...selected, diffLine(file)];
+    const omitted = files.length - candidate.length;
+    const footer = omitted > 0 ? `[truncated: ${omitted} file(s) omitted]` : "";
+    const output = [header, ...candidate, footer].filter(Boolean).join("\n");
+    if (Buffer.byteLength(output, "utf8") > WORKSPACE_DIFF_MAX_BYTES) break;
+    selected.push(candidate.at(-1)!);
+  }
+  const omitted = files.length - selected.length;
+  const footer = omitted > 0 ? `[truncated: ${omitted} file(s) omitted]` : "";
+  return [header, ...selected, footer].filter(Boolean).join("\n");
+}
+
 export class ContextCompactor {
   private readonly minRetainTurns: number;
   private readonly maxSummaryTokens: number;
+  private readonly maxIncrementalSummaryTokens: number;
   private readonly safetyTokens: number;
   private readonly reasoning: ThinkingLevel | undefined;
 
@@ -139,206 +162,242 @@ export class ContextCompactor {
   ) {
     this.minRetainTurns = options.minRetainTurns ?? 2;
     this.maxSummaryTokens = Math.min(options.maxSummaryTokens ?? 4_000, model.maxOutputTokens);
+    this.maxIncrementalSummaryTokens = Math.min(options.maxIncrementalSummaryTokens ?? 2_000, model.maxOutputTokens);
     this.safetyTokens = options.safetyTokens ?? CONTEXT_SAFETY_TOKENS;
     this.reasoning = options.reasoning;
     if (this.minRetainTurns < 1) throw new Error("minRetainTurns must be at least 1");
-    if (this.maxSummaryTokens < 1) throw new Error("maxSummaryTokens must be at least 1");
   }
 
-  /**
-   * Compaction forks the live context, so the fork request carries the same
-   * prefix plus the instruction and its own output budget. Trigger on a ratio
-   * of the window to leave room for that, rather than waiting until the next
-   * ordinary request no longer fits.
-   */
   shouldCompact(requestTokens: number, _outputTokens: number): boolean {
     return requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
   }
 
-  retainedTailBudget(overheadTokens: number): number {
-    const targetContextTokens = Math.floor(this.model.contextWindow * POST_COMPACTION_CONTEXT_RATIO);
-    return Math.max(
-      0,
-      targetContextTokens - overheadTokens - this.maxSummaryTokens - PROMPT_WRAPPER_TOKENS,
+  retainedTailBudget(overheadTokens: number, workspaceDiffTokens = 0): number {
+    const target = Math.floor(this.model.contextWindow * POST_COMPACTION_CONTEXT_RATIO);
+    return Math.max(0, target - overheadTokens - workspaceDiffTokens - this.maxSummaryTokens - PROMPT_WRAPPER_TOKENS);
+  }
+
+  canCompact(built: BuiltSessionContext, retainedTailBudgetTokens: number): boolean {
+    return this.partitionRoot(built, retainedTailBudgetTokens) !== undefined;
+  }
+
+  async createProjectStateDraft(options: {
+    built: BuiltSessionContext;
+    requestTokensBefore: number;
+    retainedTailBudgetTokens: number;
+    workspaceDiffStat: string;
+    signal: AbortSignal;
+    forkContext: Context;
+  }): Promise<RootSquashDraft | undefined> {
+    const partition = this.partitionRoot(options.built, options.retainedTailBudgetTokens);
+    if (!partition) return undefined;
+    const boundary = [
+      `The retained raw tail starts at user message #${this.forkUserOrdinal(
+        options.built,
+        options.forkContext,
+        partition.retainedStartUserOrdinal,
+      )} in the conversation prefix.`,
+      "That user message and everything after it will be retained verbatim.",
+      "Your summary replaces only content before that boundary and must not duplicate the retained tail in detail.",
+    ].join(" ");
+    const base = options.built.rootProjectState ? UPDATE_STATE_INSTRUCTION : INITIAL_STATE_INSTRUCTION;
+    const instruction = this.withTokenLimit(
+      `${base}\n\n${boundary}\n\n${currentTimeAnchor()}\n\n${READ_ONLY_FORK_RULE}`,
+      this.maxSummaryTokens,
     );
+    const summary = await this.summarize(options.forkContext, instruction, this.maxSummaryTokens, options.signal);
+    return {
+      summaryKind: "project_state",
+      summary,
+      workspaceDiffStat: options.workspaceDiffStat,
+      retainedTail: partition.retainedTail,
+      requestTokensBefore: options.requestTokensBefore,
+      summarizedMessages: partition.toSummarize.length,
+      retainedMessages: partition.retainedTail.length,
+      summarizedEntries: partition.summarizedEntries,
+      summarizedTurns: partition.summarizedTurns,
+      modelCalls: 1,
+    };
   }
 
-  canCompact(messages: readonly Message[], retainedTailBudgetTokens: number): boolean {
-    const partition = this.partition(messages, retainedTailBudgetTokens);
-    return partition.toSummarize.length > 0 && !this.isPriorSummaryOnly(partition.toSummarize);
+  async createIncrementalDraft(options: {
+    built: BuiltSessionContext;
+    selectedUserEntryId: string;
+    requestTokensBefore: number;
+    workspaceDiffStat: string;
+    signal: AbortSignal;
+    forkContext: Context;
+  }): Promise<IncrementalSquashDraft> {
+    const selectedIndex = options.built.origins.findIndex(
+      (origin) => origin.kind === "entry" && origin.entryId === options.selectedUserEntryId,
+    );
+    if (selectedIndex < 0 || options.built.messages[selectedIndex]?.role !== "user") {
+      throw new Error(`Selected squash entry is not a structural user message in the active context: ${options.selectedUserEntryId}`);
+    }
+    const selectedOrdinal = this.forkUserOrdinal(
+      options.built,
+      options.forkContext,
+      this.userOrdinal(options.built.messages, selectedIndex),
+    );
+    const excerpt = this.messageText(options.built.messages[selectedIndex]!).replace(/\s+/g, " ").slice(0, 160);
+    const boundary = [
+      `The selected boundary is user message #${selectedOrdinal} in the conversation prefix`,
+      excerpt ? `(${JSON.stringify(excerpt)}).` : ".",
+      "Summarize that exact message through the current leaf, inclusive.",
+    ].join(" ");
+    const instruction = this.withTokenLimit(
+      `${INCREMENTAL_INSTRUCTION}\n\n${boundary}\n\n${READ_ONLY_FORK_RULE}`,
+      this.maxIncrementalSummaryTokens,
+    );
+    const summary = await this.summarize(
+      options.forkContext,
+      instruction,
+      this.maxIncrementalSummaryTokens,
+      options.signal,
+    );
+    const coveredOrigins = options.built.origins.slice(selectedIndex);
+    return {
+      summaryKind: "incremental",
+      summary,
+      workspaceDiffStat: options.workspaceDiffStat,
+      retainedTail: [],
+      requestTokensBefore: options.requestTokensBefore,
+      summarizedMessages: options.built.messages.length - selectedIndex,
+      summarizedEntries: new Set(coveredOrigins.map((origin) => origin.entryId)).size,
+      summarizedTurns: options.built.messages.slice(selectedIndex).filter((message) => message.role === "user").length,
+      modelCalls: 1,
+    };
   }
 
-  async compactIfNeeded(
+  async appendDraft(
     lane: string,
-    messages: Message[],
-    budget: CompactionRequestBudget,
-    signal: AbortSignal,
-    execution: CompactionExecution = {},
-    observer?: CompactionObserver,
-    forkContext?: Context,
-  ): Promise<CompactionRun | undefined> {
-    if (!this.shouldCompact(budget.requestTokens, budget.outputTokens)) return undefined;
-    return this.compact(
+    parentId: string | null,
+    expectedLeafId: string | null,
+    draft: RootSquashDraft | IncrementalSquashDraft,
+    entryId = createId("entry"),
+    entryTimestamp?: number,
+  ): Promise<Extract<SessionEntry, { type: "squash" }>> {
+    const entry = await this.session.appendEntryAt(
       lane,
-      messages,
-      budget.requestTokens,
-      this.retainedTailBudget(budget.overheadTokens),
-      signal,
-      execution,
-      "threshold",
-      observer,
-      forkContext,
+      parentId,
+      {
+        id: entryId,
+        sessionId: this.session.store.sessionId,
+        type: "squash",
+        summaryKind: draft.summaryKind,
+        summary: draft.summary,
+        workspaceDiffStat: draft.workspaceDiffStat,
+        retainedTail: structuredClone(draft.retainedTail),
+        requestTokensBefore: draft.requestTokensBefore,
+      },
+      { expectedLeafId, flush: true, ...(entryTimestamp === undefined ? {} : { entryTimestamp }) },
     );
+    return entry as Extract<SessionEntry, { type: "squash" }>;
   }
 
-  async compact(
-    lane: string,
-    messages: Message[],
-    tokensBefore: number,
-    retainedTailBudgetTokens: number,
-    signal: AbortSignal,
-    execution: CompactionExecution = {},
-    reason: "manual" | "threshold" | "overflow" = "manual",
-    observer?: CompactionObserver,
-    forkContext?: Context,
-  ): Promise<CompactionRun | undefined> {
-    const partition = this.partition(messages, retainedTailBudgetTokens);
-    if (partition.toSummarize.length === 0 || this.isPriorSummaryOnly(partition.toSummarize)) return undefined;
-    observer?.started(reason);
-    const resultEntryId = execution.resultEntryId ?? createId("entry");
-    try {
-      if (execution.runId) {
-        await this.session.appendRecord(
-          {
-            id: createId("record"),
-            type: "step_attempt",
-            lane,
-            runId: execution.runId,
-            step: "compaction",
-            attempt: 1,
-            resultEntryId,
-            compactionReason: reason,
-          },
-          true,
-        );
-      }
-      const generated = await this.summarize(partition.toSummarize, signal, forkContext);
-      const entry = await this.session.appendEntry(
-        lane,
-        {
-          id: resultEntryId,
-          sessionId: this.session.store.sessionId,
-          type: "compaction",
-          summary: generated.summary,
-          retainedTail: structuredClone(partition.retainedTail),
-          tokensBefore,
-        },
-        true,
-      );
-      observer?.finished(true);
-      return {
-        entry: entry as Extract<SessionEntry, { type: "compaction" }>,
-        summarizedMessages: partition.toSummarize.length,
-        retainedMessages: partition.retainedTail.length,
-        modelCalls: generated.modelCalls,
-      };
-    } catch (error) {
-      observer?.finished(false);
-      throw error;
-    }
-  }
-
-  private partition(
-    messages: readonly Message[],
-    retainedTailBudgetTokens: number,
-  ): { toSummarize: Message[]; retainedTail: Message[] } {
+  private partitionRoot(built: BuiltSessionContext, retainedTailBudgetTokens: number): RootPartition | undefined {
+    if (built.messages.length !== built.origins.length) throw new Error("Context messages and origins must align");
     const userStarts: number[] = [];
-    for (let index = 0; index < messages.length; index++) {
-      if (messages[index]!.role === "user" && !this.isPriorSummaryMessage(messages[index]!)) userStarts.push(index);
+    for (let index = 0; index < built.messages.length; index++) {
+      if (this.isRealUserBoundary(built.messages[index]!, built.origins[index]!)) userStarts.push(index);
     }
-    if (userStarts.length <= this.minRetainTurns) {
-      return { toSummarize: [], retainedTail: structuredClone(messages) as Message[] };
-    }
+    if (userStarts.length <= this.minRetainTurns) return undefined;
 
     let retainedTurns = this.minRetainTurns;
-    // Always leave at least one older interaction for the summary; otherwise a
-    // manual compaction could report success without reducing anything.
     for (let candidate = this.minRetainTurns + 1; candidate < userStarts.length; candidate++) {
       const candidateStart = userStarts[userStarts.length - candidate]!;
-      const candidateTail = messages.slice(candidateStart);
-      if (this.estimateTailTokens(candidateTail) > retainedTailBudgetTokens) break;
+      if (this.estimateTailTokens(built.messages.slice(candidateStart)) > retainedTailBudgetTokens) break;
       retainedTurns = candidate;
     }
     const tailStart = userStarts[userStarts.length - retainedTurns]!;
+    const summarizedOrigins = built.origins.slice(0, tailStart);
+    const retainedTail = built.messages.slice(tailStart).map((message, index) => ({
+      sourceEntryId: built.origins[tailStart + index]!.entryId,
+      message: structuredClone(message),
+    }));
     return {
-      toSummarize: structuredClone(messages.slice(0, tailStart)) as Message[],
-      retainedTail: structuredClone(messages.slice(tailStart)) as Message[],
+      toSummarize: structuredClone(built.messages.slice(0, tailStart)) as Message[],
+      retainedTail,
+      retainedStartUserOrdinal: this.userOrdinal(built.messages, tailStart),
+      summarizedEntries: new Set(summarizedOrigins.map((origin) => origin.entryId)).size,
+      summarizedTurns: built.messages.slice(0, tailStart).filter((message) => message.role === "user").length,
     };
   }
 
-  private isPriorSummaryOnly(messages: readonly Message[]): boolean {
-    return messages.length === 1 && this.isPriorSummaryMessage(messages[0]!);
+  private isRealUserBoundary(message: Message, origin: MessageOrigin): boolean {
+    if (message.role !== "user") return false;
+    const source = this.session.projection.entries.get(origin.entryId);
+    return source?.type === "message" && source.message.role === "user";
   }
 
-  private isPriorSummaryMessage(message: Message): boolean {
-    return (
-      message.role === "user" &&
-      typeof message.content === "string" &&
-      message.content.startsWith(PRIOR_STATE_PREFIX)
-    );
+  private userOrdinal(messages: readonly Message[], inclusiveIndex: number): number {
+    let ordinal = 0;
+    for (let index = 0; index <= inclusiveIndex; index++) {
+      if (messages[index]?.role === "user") ordinal++;
+    }
+    return ordinal;
+  }
+
+  private forkUserOrdinal(
+    built: BuiltSessionContext,
+    forkContext: Context,
+    builtUserOrdinal: number,
+  ): number {
+    const serializedBuilt = built.messages.map((message) => JSON.stringify(message));
+    const serializedFork = forkContext.messages.map((message) => JSON.stringify(message));
+    let start = -1;
+    for (let candidate = 0; candidate + serializedBuilt.length <= serializedFork.length; candidate++) {
+      if (serializedBuilt.every((message, index) => message === serializedFork[candidate + index])) {
+        start = candidate;
+        break;
+      }
+    }
+    if (start < 0) {
+      throw new Error("The active context extension changed session messages, so a precise squash boundary cannot be identified");
+    }
+    const userMessagesBefore = forkContext.messages.slice(0, start).filter((message) => message.role === "user").length;
+    return userMessagesBefore + builtUserOrdinal;
+  }
+
+  private messageText(message: Message): string {
+    if (typeof message.content === "string") return message.content;
+    return message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.type === "text" ? block.text : "")
+      .join("\n");
   }
 
   private estimateTailTokens(messages: readonly Message[]): number {
-    // A newer empty prefix invalidates assistant usage metadata that described
-    // the pre-compaction context, forcing pi-ai to estimate this tail by its
-    // actual retained contents instead.
-    const estimateMarker: Message = {
-      role: "user",
-      content: "",
-      timestamp: Number.MAX_SAFE_INTEGER,
-    };
-    return estimateContextTokens([estimateMarker, ...messages]).tokens;
+    const marker: Message = { role: "user", content: "", timestamp: Number.MAX_SAFE_INTEGER };
+    return estimateContextTokens([marker, ...messages]).tokens;
   }
 
   private async summarize(
-    messages: Message[],
+    forkContext: Context,
+    instruction: string,
+    maxTokens: number,
     signal: AbortSignal,
-    forkContext?: Context,
-  ): Promise<{ summary: string; modelCalls: number }> {
-    if (!forkContext) throw new Error("Compaction requires the live context to fork");
-    const previousState = this.priorProjectState(messages[0]);
-    const instruction = this.withTokenLimit(
-      `${previousState === undefined ? INITIAL_STATE_INSTRUCTION : UPDATE_STATE_INSTRUCTION}\n\n${currentTimeAnchor()}`,
-      this.maxSummaryTokens,
-    );
-    /* Fork the live conversation instead of rebuilding a projected transcript:
-     * the model reads what it actually experienced, and the request reuses the
-     * cached prefix. The fork still has to fit beside its own output budget. */
+  ): Promise<string> {
     const forkTokens = estimateContextTokens({
       ...forkContext,
       messages: [...forkContext.messages, { role: "user", content: instruction, timestamp: Date.now() }],
     }).tokens;
-    const ceiling = this.model.contextWindow - this.safetyTokens - this.maxSummaryTokens;
+    const ceiling = this.model.contextWindow - this.safetyTokens - maxTokens;
     if (forkTokens > ceiling) {
       throw new Error(
-        `Context is too large to compact: the forked request needs about ${forkTokens.toLocaleString("en-US")} tokens but only ${Math.max(0, ceiling).toLocaleString("en-US")} are available. Use /clear or /rewind to reduce it.`,
+        `Context is too large to squash: the forked request needs about ${forkTokens.toLocaleString("en-US")} tokens but only ${Math.max(0, ceiling).toLocaleString("en-US")} are available. Use /clear or /rewind to reduce it.`,
       );
     }
     const summary = await this.model.forkComplete(forkContext, instruction, {
       signal,
-      maxTokens: this.maxSummaryTokens,
+      maxTokens,
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
-    if (!summary.trim()) throw new Error("Compaction model returned an empty summary");
-    return { summary: summary.trim(), modelCalls: 1 };
-  }
-
-  private priorProjectState(message: Message | undefined): string | undefined {
-    if (!message || !this.isPriorSummaryMessage(message) || typeof message.content !== "string") return undefined;
-    return message.content.slice(PRIOR_STATE_PREFIX.length).trim();
+    if (!summary.trim()) throw new Error("Squash model returned an empty summary");
+    return summary.trim();
   }
 
   private withTokenLimit(prompt: string, maxTokens: number): string {
-    return `${prompt}\n\nYour response must not exceed ${maxTokens.toLocaleString("en-US")} tokens. Use less when the required continuation context is already complete; never add filler to reach the limit.`;
+    return `${prompt}\n\nYour response must not exceed ${maxTokens.toLocaleString("en-US")} tokens. Use less when the continuation context is already complete; never add filler.`;
   }
 }

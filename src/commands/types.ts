@@ -3,7 +3,6 @@ import type { CapsuleService } from "../revisions/capsule-service.js";
 import type { MergeService } from "../revisions/merge-service.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { VersionService } from "../revisions/version-service.js";
-import type { SessionSummary } from "../domain.js";
 
 export interface HistoryViewItem {
   turnId: string;
@@ -12,6 +11,7 @@ export interface HistoryViewItem {
   label: string;
   outcome: "running" | "completed" | "aborted" | "failed";
   startedAt: number;
+  status: "current-path" | "retained" | "off-path" | "synthetic-squash";
 }
 
 export type EphemeralView =
@@ -23,9 +23,9 @@ export type EphemeralView =
       currentModelId: string | undefined;
       scope: "configured" | "all";
     }
-  | { type: "session_picker"; sessions: SessionSummary[] }
   | { type: "thread_merge"; preview: MergePreview; selectedContext: ContextMergeStrategy }
   | { type: "history"; items: HistoryViewItem[] }
+  | { type: "thread_squash"; items: HistoryViewItem[] }
   | { type: "rewind"; items: HistoryViewItem[] };
 
 export interface CommandResult {
@@ -40,6 +40,7 @@ export interface ThreadCommandContext {
   versions: VersionService;
   merge: MergeService;
   capsules: CapsuleService;
+  model: import("../agent/model-client.js").ModelClient | undefined;
   signal: AbortSignal;
 }
 

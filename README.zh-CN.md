@@ -2,9 +2,33 @@
 
 [English](README.md) | 简体中文
 
-`thread` 是一个 mini coding-agent harness。Project Session 可以伴随项目的整个生命周期，但用户也可以自由决定新的 session 起点。一个 thread version 由 workspace 快照和 conversation context head 共同组成；thread 分支、恢复、比较和合并都会同时作用于这两个维度。
+`thread` 是一个围绕持久化 **Session Tree** 构建的 coding-agent runtime；每个 Git worktree 只有一棵树。树上的每一个历史节点都把 agent 修改后的 workspace，与解释这些修改缘由的 conversation context 绑定在一起。分支、恢复、比较、合并、rewind、squash 和新建空 context 都作用于这份共同历史。
 
-它并不试图复刻 Git 的全部功能。项目没有 staging area、rebase、stash 或逐工具 revision，也没有独立的外部记忆存储。持久项目知识由版本化的 conversation context 及其 compaction state 承载。
+它并不试图复刻 Git 的全部功能。项目没有 staging area、rebase、stash 或逐工具 revision，也没有独立的外部记忆存储。持久项目知识存在于版本化 session context 中，与 workspace 遵循相同的分支和恢复边界。
+
+## Session Tree
+
+Session Tree 是用户理解长期 coding session 的核心模型：
+
+```text
+thread branch ──► checkpoint
+                   ├── workspaceTreeOid ──► sidecar workspace snapshot
+                   └── sessionHeadId ─────► context entry leaf
+                                                │ parentId
+                                                ▼
+                                           ... entry root
+```
+
+每个 checkpoint 连接两个持久身份：
+
+- thread 独立 sidecar Git object database 中的 workspace tree；
+- 一个 context head；从它沿 `parentId` 走到根，得到的路径就是发送给模型的消息序列。
+
+Thread branch 指向 checkpoint，不使用主仓库的 Git refs。恢复 checkpoint 时可以只恢复 workspace、只恢复 context path，或同时恢复两者。Merge checkpoint 可以有两个父节点，因此 checkpoint 结构在实现上是 DAG；“Session Tree”是产品层概念，统一指代 checkpoint graph、context entry tree 和 branch pointers 构成的可导航 session 历史。
+
+Context 历史只追加，但活动上下文由路径决定。普通 turn 延长当前 entry leaf；squash 创建一条跳过旧区间的新路径，并不删除旧区间。旧 checkpoint 仍指向旧路径，因此历史可以审计和恢复，而 `buildContext()` 不需要再维护第二套 compaction barrier 解释。
+
+`/new` 不会离开这棵树。它先保存当前 branch，再从 genesis checkpoint 直接派生一条自动命名的新 branch。新 checkpoint 借用当前 workspace snapshot，但把 context head 设为 `null`：文件保持原样，对话从空白开始；旧 workspace 和 context 仍可从旧 branch 恢复。
 
 ## 环境要求
 
@@ -24,7 +48,7 @@ bun link
 
 ## 终端界面
 
-交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考默认保留最多 5 行预览并可点击展开/折叠，工具行会带上参数摘要与耗时。`/model`、`/session` 与不带参数的 `/rewind` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一个 session，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 强制执行有界的运行时上下文压缩。
+交互式 TTY 默认启动全屏 OpenTUI 应用。session screen 在同一个常驻 Solid 渲染树中容纳可滚动 transcript、当前执行轮次、状态、输入框和 footer。位于底部时 transcript 会跟随新输出；滚轮和 Page Up/Page Down 可查看更早的可见条目。一次 turn 的思考、工具调用与回复由一条 accent 竖线串在一起，完成的思考默认保留最多 5 行预览并可点击展开/折叠，工具行会带上参数摘要与耗时。`/model`、不带参数的 `/rewind` 和 `/thread squash` 会在输入框上方打开紧凑浮层，对话与输入区保持可见；`/thread merge`、`/thread history` 与较长命令结果会打开应用内整屏 screen，返回后仍是同一棵 Session Tree，也不会把这些页面写入 conversation。`/clear` 只隐藏当前终端进程渲染的 transcript；`/compact` 会创建更短的活动 context path。
 
 进程启动、context restore 及后续 turn 完成时，可见 transcript 都限制为最近 8 次完整的用户主导交互。窗口内的 thinking 与紧凑工具轨迹会保留，并维持到达顺序。该限制只影响应用内 transcript；持久化 session、模型上下文和工具记录都不会删减。
 
@@ -39,7 +63,7 @@ thread --tui plain        # readline/文本输出
 
 ## 运行
 
-完成一次 `bun link` 后（或将独立可执行程序放入 `PATH`），在你希望处理的项目目录中启动 harness。当前目录会被解析为包含它的 Git worktree 根目录：
+完成一次 `bun link` 后（或将独立可执行程序放入 `PATH`），在你希望处理的项目目录中启动 thread。当前目录会被解析为包含它的 Git worktree 根目录：
 
 ```powershell
 Set-Location .\your-git-worktree
@@ -58,14 +82,14 @@ thread
 
 设置 `THREAD_HOME` 可以移动整个用户配置目录。使用 `--config <path>` 或 `THREAD_CONFIG` 可以选择其他配置文件。API key 应通过 `apiKeyEnv` 引用；不要将密钥直接写入 JSON 文件。
 
-如果 thread 配置文件不存在，harness 会回退读取 pi 已有的全局配置：
+如果 thread 配置文件不存在，thread 会回退读取 pi 已有的全局配置：
 
 ```text
 ~/.pi/agent/models.json       provider 和模型定义
 ~/.pi/agent/settings.json     defaultProvider、defaultModel 和 defaultThinkingLevel
 ```
 
-当 pi 使用非默认目录时，`PI_CODING_AGENT_DIR` 仍然有效。这是 fallback，而不是配置合并：一旦 `~/.thread/config.json` 存在，或显式传入了 `--config`，就不会再加载 pi 配置。显式指定但不存在的配置文件会报错。pi 中的 `apiKey` 字面值、`$KEY`/`${KEY}` 等环境变量模板以及 `!command` 值会在不把密钥复制到 Project Session 的前提下解析。
+当 pi 使用非默认目录时，`PI_CODING_AGENT_DIR` 仍然有效。这是 fallback，而不是配置合并：一旦 `~/.thread/config.json` 存在，或显式传入了 `--config`，就不会再加载 pi 配置。显式指定但不存在的配置文件会报错。pi 中的 `apiKey` 字面值、`$KEY`/`${KEY}` 等环境变量模板以及 `!command` 值会在不把密钥复制到 Session Tree 的前提下解析。
 
 ```json
 {
@@ -91,7 +115,7 @@ thread
 }
 ```
 
-v1 支持的自定义 API 为 `anthropic-messages`、`openai-completions` 和 `openai-responses`。`contextWindow` 是必填项，因为 harness 会据此决定何时压缩；请填写 relay 模型真实的窗口大小。`defaultThinkingLevel` 可以是 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`，缺省为 `medium`。还可以配置 provider `headers`、模型 `samplingParams`、逐模型 `thinkingLevelMap` 和 pi-ai `compat` 覆盖项；`thinkingLevelMap` 中的 `null` 表示该档位不受支持。
+v1 支持的自定义 API 为 `anthropic-messages`、`openai-completions` 和 `openai-responses`。`contextWindow` 是必填项，因为 thread 会据此决定何时压缩；请填写 relay 模型真实的窗口大小。`defaultThinkingLevel` 可以是 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`，缺省为 `medium`。还可以配置 provider `headers`、模型 `samplingParams`、逐模型 `thinkingLevelMap` 和 pi-ai `compat` 覆盖项；`thinkingLevelMap` 中的 `null` 表示该档位不受支持。
 
 对于 pi-ai 内置 provider，配置只需包含模型选择，并设置该 provider 常规使用的凭据环境变量：
 
@@ -109,19 +133,19 @@ $env:THREAD_MODEL = "<model-id>"
 thread
 ```
 
-即使没有配置任何模型，版本命令仍然可以使用——唯一的例外是 `/thread diff`，它以 agent turn 的方式运行：
+即使没有配置模型，结构性导航命令仍然可以使用。会调用模型的普通 turn、`/compact`、`/thread squash`、`/thread diff`、`/thread commit`，以及使用 `--context=summarize` 的 merge 都需要模型：
 
 ```powershell
 thread
 ```
 
-普通文本会进入流式、多步骤 agent loop。`/new`、`/session ...`、`/model`、`/clear`、`/compact`、`/thread ...` 和 `/rewind ...` 会在 LLM 之前被 harness 拦截，不会成为普通用户消息。
+普通文本会进入流式、多步骤 agent loop。斜杠命令会在模型调用前识别：大部分直接返回命令结果；`/thread diff` 会被包装为普通 user turn，`/thread squash` 则创建 synthetic squash turn，再进入同一套 agent loop。
 
-## Project Session
+## 新建空 context branch
 
-`/new` 会以此刻的 workspace 为起点创建新的 Project Session。Thread 会先在旧 session 中记录 safety checkpoint，再创建带有 genesis workspace 快照、空 conversation context 和 `main` 分支的新 session；不会生成 handoff、调用模型或复制消息。当前模型、thinking level、工具和已加载扩展属于运行进程，因此会继续保留。
+`/new` 会创建新的 context 边界，但不会创建另一棵 Session Tree。Thread 先在旧 branch 上无条件记录 safety checkpoint，再从唯一 genesis checkpoint 下依次创建 `new-1`、`new-2` 等 branch。新 checkpoint 把 safety checkpoint 明确记录为 workspace 来源，复用它的 workspace tree 与 retention identity，同时设置 `sessionHeadId = null`；不会恢复 genesis workspace、生成 handoff、调用模型或复制消息。
 
-使用 `/session` 或 `/session list` 查看保留的 session，使用 `/session switch <session-id-or-unique-prefix>` 切回其中一个。在 TUI 中，裸 `/session` 会打开浮层 picker，可用 ↑/↓、Enter 和 Esc 操作。切换前会先保存当前 workspace，然后同时恢复目标 session 的 workspace 与 context。最近创建或显式激活的 session 会成为下次启动的默认 session。
+因此，新 branch 开始时文件与执行 `/new` 的那一刻完全相同，但不携带任何 conversation message。切回旧 thread branch 时，会恢复旧 branch 的 workspace 与 context。当前模型、thinking level、工具和已加载扩展属于运行进程，而不属于某一条 branch，因此会继续保留。
 
 ## 模型切换
 
@@ -138,9 +162,9 @@ thread
 
 在全屏 TUI 中，从斜杠命令补全选择 `model` 并按 Enter，会在输入框上方打开浮层列表；默认只包含活动 thread/pi 配置中明确声明的模型。当前模型始终包含在内并用 `●` 标记，即使它来自内置目录或直接切换。使用 ↑/↓ 移动，按 Enter 切换，按 Esc 关闭浮层。`/model all` 打开完整的内置及配置模型目录；长目录会始终围绕选中行显示。
 
-使用推理模型时，在 session 主界面按 `Shift+Tab` 可以循环切换该模型声明支持的档位，当前档位会显示在 footer 的模型名旁边。这个档位会统一用于主 agent loop、自动与手动 compaction、Context Capsule、semantic diff 和 context merge。切换模型后，当前偏好会自动校准到新模型支持的范围。thread 回退使用 pi 配置时会继承 pi 的 `defaultThinkingLevel`；其他情况下缺省为 `medium`。
+使用推理模型时，在 session 主界面按 `Shift+Tab` 可以循环切换该模型声明支持的档位，当前档位会显示在 footer 的模型名旁边。这个档位会统一用于主 agent loop、自动与手动 compaction、Context Capsule 和 context merge。切换模型后，当前偏好会自动校准到新模型支持的范围。thread 回退使用 pi 配置时会继承 pi 的 `defaultThinkingLevel`；其他情况下缺省为 `medium`。
 
-Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置模型及当前模型，`/model list <provider>` 输出指定 provider 在完整目录中的全部模型。即使某个模型未显示在默认 picker 中，仍可用 `/model <provider>/<model>` 从完整目录直接切换。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule、semantic diff 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
+Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置模型及当前模型，`/model list <provider>` 输出指定 provider 在完整目录中的全部模型。即使某个模型未显示在默认 picker 中，仍可用 `/model <provider>/<model>` 从完整目录直接切换。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
 
 模型和推理档位都只改变当前运行进程，不会编辑全局配置，也不会追加 message/checkpoint；重启后仍会按照正常优先级使用 `--provider`/`--model`、`THREAD_PROVIDER`/`THREAD_MODEL` 以及配置中的默认值。
 
@@ -150,7 +174,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 内置 `webfetch` 可以将一个 HTTP(S) URL 获取为 Markdown、纯文本或 HTML。默认超时为 30 秒（最多 120 秒），拒绝超过 5 MiB 的响应，并将模型可见的转换结果限制为 200,000 字符。二进制响应会被拒绝。两个 Web 工具均被记录为不可重放，因而中断的请求不会被自动再次执行。
 
-`webfetch` 会跟随 HTTP redirect，目前不会阻止 private、loopback 或 link-local 目标。Harness 也没有 Web 专用审批策略，因此当 HTTP 访问能够到达敏感内部服务时，不应让不受信任的模型直接使用它。
+`webfetch` 会跟随 HTTP redirect，目前不会阻止 private、loopback 或 link-local 目标。thread 也没有 Web 专用审批策略，因此当 HTTP 访问能够到达敏感内部服务时，不应让不受信任的模型直接使用它。
 
 ## 版本命令
 
@@ -158,8 +182,6 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 /clear
 /compact
 /new
-/session [list]
-/session switch <session-id-or-unique-prefix>
 /model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
 /thread status
 /thread branches
@@ -169,6 +191,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 /thread reflog [<branch>]
 /thread show <ref>
 /thread history
+/thread squash [<turn-id-or-user-entry-id>]
 /thread commit <message>
 /thread diff [<from> <to>] [--facts]
 /thread restore <ref> [--workspace|--context|--both]
@@ -178,13 +201,21 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `/clear` 不改变任何持久状态：它隐藏当前 context head 之前的消息，之后的消息仍会使用完整后端上下文。重启终端或切换到其他 context 后，这些消息可能再次显示。
 
-`/compact` 强制执行运行时 context compaction，但不会添加用户消息。压缩采用 **fork 当前对话**的方式：复用逐字节相同的前缀（system prompt + messages），只追加一条压缩指令作为最新用户消息，因此请求命中 provider 的 prompt cache，模型读到的是它真实经历过的对话而非投影后的 transcript。回复不会进入 agent loop，只用于替换上下文。由于 fork 携带的正是它将要压缩的那份前缀，压缩改为在 **context window 的 78%** 触发，而不是等到下一次普通请求装不下。压缩后 input context 的目标是模型 context window 的 7%，其中包括 system prompt、tools、extension context、生成的 project state 和保留的原始交互。最终 project state 上限 4K tokens，固定三个小节：`Long-term memory` 以 `- [YYYY-MM-DD] (…)` 分条记录持久知识，最多 25 条，每次压缩重新整理；`Current project state` 描述当前目标、改动、验证、未解决问题与下一步；`Recent user-agent conversation` 以 `- [YYYY-MM-DD HH] (…)` 分条记录，最旧在前，最多 10 条并纯按时间淘汰——有持久价值的内容必须"毕业"进入长期记忆。两个带时间的小节都把时间戳视为**最后修改时间**：由于 provider 的消息格式不携带时间戳，fork 指令中会注明当前本地日期与小时，模型只给本次新写或修改的条目打戳，原样沿用的条目保留旧时间戳。在尾部预算内，compactor 会尽可能保留更多近期完整 user-led interactions，至少两轮。如果两轮本身已超过目标，它们仍会完整保留，因此 7% 是目标而不是破坏性硬限制。压缩会创建一个可恢复的内部 checkpoint，但不会创建 `/thread commit`。如果没有可吸收的更早交互，则操作为空。如果单轮交互过大、一次跳过触发阈值导致 fork 本身装不下，压缩会明确失败并提示使用 `/clear` 或 `/rewind`，不做静默降级。
+`/compact` 会执行 root squash，但不添加用户 turn。它会 **fork 完整的活动请求前缀**——system prompt、tools、extension context 和 messages——并在末尾追加一条只读摘要指令。Tools 保留在请求中以维持前缀身份，但指令明确禁止工具；fork runtime 也会拒绝模型返回的任何 tool call，绝不执行。生成的 `project_state` entry 成为新的 context root，并展开它内嵌的 retained tail；此后 `buildContext()` 只遍历这条新的根到叶路径。旧路径仍可通过旧 checkpoint 恢复。
+
+自动 squash 在 context window 使用率达到 **78%** 时执行；provider 返回 context overflow 后也会走同一条 root squash 路径。压缩后 input 的目标是模型窗口的 7%，其中包括 system prompt、tools、extension 开销、受限 workspace diffstat、生成的 project state 和保留的原始 turns。Project-state 摘要上限为 4K tokens，固定使用 `Long-term memory`、`Current project state` 和 `Recent user-agent conversation` 三个小节。Retained tail 必须从完整 user-turn 边界开始，并至少保留最新两轮；这两轮本身过大，是唯一允许超过 7% 目标的情况。如果完整 fork 或压缩后的安全请求仍装不下，操作会明确失败并提示 `/clear` 或 `/rewind`。
+
+`/thread squash` 是选择性形式。不带参数时，它打开一次 Enter 即确认的 picker，只列出当前 context path 上的真实用户 turn。传入 turn ID 或 user-entry ID 后，它把该 turn 到当前 leaf 的区间概括为最多 2K tokens 的 `incremental` squash entry，其父节点是被选 turn 之前的 entry；随后它作为普通 agent turn 进入共享的 model/tool loop。这个 synthetic turn 有正常 turn base，因此 `/rewind` 能同时恢复 squash 前的 context path 和 workspace。Retained 或 off-path turn 不能作为目标。
+
+所有 squash checkpoint 都直接复用父 checkpoint 的 workspace tree 与 retention commit，不执行 sidecar capture、restore 或 keep-ref 更新。机器生成的 diffstat 会与模型叙事分区展示，只描述 checkpointed workspace changes。Checkpoint 还会在 reflog 中记录触发来源、重写边界、旧 context head 和摘要计数。
 
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
 `/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据——system prompt 中描述了 sidecar 的 session log、object store 与 Context Capsule 的位置和用法——然后以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。有提交的端点附带 Context Capsule，agent 对该版本的记忆已被压缩时可以查阅；当前状态端点永远没有 Capsule，agent 依赖自己的即时记忆。因为它是 agent turn，`/thread diff` 需要已配置模型。
 
-在 TUI 中直接输入 `/rewind` 会打开浮层，按时间列出最近的用户消息；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选消息之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 以整屏形式展示同一批 turn，两者走同一条恢复路径。
+在 TUI 中直接输入 `/rewind` 会打开浮层，列出用户 turn 的路径状态和时间；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选 turn 之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 不再按最初创建 turn 的 branch name 过滤，而是把历史标记为 current-path、retained、off-path 或 synthetic-squash。
+
+`/thread commit` 会保存 TUI 当时显示的 context percentage，同时记录估算 token 数、context-window 大小、provider、model 和 estimator version。切换模型后，已保存百分比仍是历史证据；`/thread show` 还可以用当前模型窗口重新估算该 checkpoint 的 context。
 
 Workspace merge 是三方合并，v1 只会应用 clean 结果。在 TUI 中，`/thread merge <ref>` 会打开 preview，让用户选择 context 策略，并在应用前要求确认。`keep-current` 保留当前 context，不调用模型；`summarize` 先展示模型生成的只读 handoff note，确认后才写入 context。Plain/非交互模式可以通过显式 `--context=keep-current|summarize` 直接执行。
 
@@ -208,25 +239,26 @@ Workspace merge 是三方合并，v1 只会应用 clean 结果。在 TUI 中，`
 ```text
 <git-common-dir>/thread/
 ├── store.git/                  独立 sidecar object database
-├── projects/<project-id>.json  一个 worktree 的 active session 与激活顺序
-├── indexes/<session-id>        私有 Git index
-├── sessions/<session-id>/
-│   ├── events.jsonl            canonical append-only Project Session log
-│   ├── session.json
-│   └── cache/                   可重建的 capsules 和 semantic diffs
-├── locks/                      project/session 进程锁
+├── indexes/<tree-id>           私有 Git index
+├── trees/<tree-id>/
+│   ├── events.jsonl            canonical append-only Session Tree log
+│   ├── tree.json
+│   └── cache/                   可重建的 Context Capsules
+├── locks/                      Session Tree 进程锁
 └── tmp/
 ```
 
-启动时，JSONL log 会 replay 为进程内 projection。残缺的最后一行会被丢弃；中间位置的损坏会停止恢复。必须同时出现的状态变化会作为一个 batch record 写入。对于 `replay=never` 工具，`tool_started` 会在副作用之前 flush；启动恢复绝不会盲目再次执行它。
+启动时，JSONL log 会 replay 为进程内 projection。当前 schema 明确为 `formatVersion: 3`。Format 2 多 session 日志、重构前日志、旧 `compaction` entry、已移除的 navigation operation，以及缺少 context-cost metadata 的 commit 都会在加载边界被拒绝；thread 不保留旧数据兼容 reader，也不原地改写旧日志。每个 worktree 只解析到一个确定性的 Session Tree ID。残缺的最后一行会被丢弃，中间位置的损坏会停止恢复。必须同时出现的状态变化会作为一个 batch record 写入。对于 `replay=never` 工具，`tool_started` 会在副作用之前 flush；启动恢复绝不会盲目再次执行它。
 
 Workspace objects 完全由独立 sidecar 拥有。按时间排列的 retention commits 仅用于让对象保持可达；Checkpoint DAG ancestry 来自 `events.jsonl`。启动 reconciliation 会修复落后于最新持久 checkpoint 的 keep ref。
 
 快照覆盖主仓库已跟踪文件和未被忽略的 untracked 文件。它排除 ignored 文件、空目录、submodule 内部、worktree 外路径、进程、数据库、网络影响和其他外部副作用。Restore 会先创建 safety checkpoint，并拒绝 ignored/out-of-scope collision。Gitlink metadata 会保留在 tree 中，但 submodule 内部内容刻意不恢复。
 
-## 上下文与压缩
+## Context path 与 squash
 
-原始 session entries 只追加。运行时 compaction 会追加更新后的 project state 和 retained tail，而不是删除旧条目。自动压缩按 context window 比例触发，以便留出发送 fork 压缩请求的空间。Context Capsules 是附着于 checkpoint 的有界、有损缓存；显式 commit 会尝试立即创建，merge 则会延迟生成缺失 Capsule。Capsule 仍使用确定性语义消息投影（排除 provider bookkeeping、hidden thinking 与重复 raw tool details）；compaction 因为直接 fork 真实对话，已不再需要投影。
+Session entries 只追加，并组成一棵单父 entry tree。`buildContext(headId)` 从选中的 leaf 沿 `parentId` 走到 `null`，反转路径后逐 entry 渲染；不存在 compaction barrier scan 或 legacy fallback。Root `project_state` squash 渲染一条“机器事实 + 模型叙事”消息，再展开其内嵌 retained messages；`incremental` squash 渲染一条 synthetic user request，不包含 retained tail。
+
+Context Capsule 是附着于 checkpoint 的有界、有损缓存；显式 commit 会尝试立即创建，merge 则会延迟生成缺失 Capsule。Capsule 仍使用确定性语义投影。Squash 不使用投影：摘要 fork 收到完整活动请求前缀，而且是只读的。
 
 项目没有独立的 project-memory 服务、检索 projection 或内置 memory tool。长期项目知识必须通过压缩后的 conversation state 延续，因此它会和 session context 的其他部分遵循相同的 branch、checkpoint、restore、diff 和 merge 边界。
 
@@ -242,11 +274,11 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 公共 API
 
-`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序；最小端到端 smoke 也是通过这种方式使用 faux provider。它的 `session`、`versions`、`capsules`、`diff` 和 `merge` 属性始终指向当前 active session runtime。`app.fsck()` 检查 project catalog、所有保留 session 的 log/keep ref 和 sidecar objects。`app.deleteProjectSession()` 只删除当前 active session 的 log、private index 和 keep ref；存在其他 session 时会恢复其中最近激活的一项，然后执行 sidecar GC。它不会删除主 worktree。
+`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序；端到端 smoke test 也是通过这种方式使用 faux provider。它的 `session`、`versions`、`capsules` 和 `merge` 属性指向当前 worktree 唯一的 Session Tree runtime。`app.fsck()` 检查这棵树的 branches、commits、checkpoints、keep ref 和 sidecar objects。
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun test` 和 `bun run build`。当前刻意保持紧凑的测试覆盖 Project Session 版本循环、多 session 创建/迁移/切换、sidecar 与 replay 安全、异步 turn 准备、模型和推理档位、Web 工具、全屏 session 更新、流式 Markdown 实例稳定性、滚轮加速度、turn 分组、重设计视觉语言的实际渲染、`/model`、`/session` 与 `/rewind` 浮层的 view 侧导航、controller screen 路由与输入提交；不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 50 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

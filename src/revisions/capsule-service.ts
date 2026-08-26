@@ -7,7 +7,7 @@ import type { SessionService } from "../session/service.js";
 const PROMPT_VERSION = "capsule-v4";
 const CAPSULE_MAX_TOKENS = 3_000;
 const CAPSULE_SYSTEM_PROMPT = [
-  "Create a point-in-time Context Capsule for one immutable checkpoint in a long-lived coding-agent project session.",
+  "Create a point-in-time Context Capsule for one immutable checkpoint in a long-lived coding-agent Session Tree.",
   "The input is the chronological, compaction-aware active conversation that the agent would carry forward from",
   "that checkpoint. It may begin with a synthetic summary of older context; treat that as prior session state, not",
   "as a new user request. Describe the working state at the end of the input, not a turn-by-turn transcript.",
