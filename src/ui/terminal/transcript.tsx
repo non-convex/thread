@@ -153,25 +153,19 @@ function MarkdownReply(props: {
 }
 
 /**
- * The one core flourish from the spec: a 1-column accent rail on the left
- * that ties a turn's thinking, tools and reply together, anchored by a small
- * label. In the terminal the rail is a left border; the growth animation is
- * dropped — a static rail costs no frames.
+ * One agent turn (thinking, tools and reply) sits on a slightly raised surface
+ * so the group reads as one unit. This replaces the earlier accent rail: the
+ * boundary of the tinted block carries the grouping, which stays legible while
+ * scrolling instead of relying on a label that leaves the viewport. A one-line
+ * label anchors the top.
  */
-function TurnRail(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
+function TurnBlock(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
   const theme = props.resources.theme;
   return (
     <box flexDirection="column" width="100%" marginBottom={1}>
-      <box
-        flexDirection="column"
-        width="100%"
-        marginLeft={1}
-        border={["left"]}
-        borderColor={theme.accentDim}
-        paddingLeft={1}
-      >
+      <box flexDirection="column" width="100%" backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
         <text height={1} wrapMode="none" fg={theme.accentDim} attributes={bold} marginBottom={1}>
-          ● {props.label}
+          {props.label}
         </text>
         {props.children}
       </box>
@@ -183,11 +177,13 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
   const theme = props.resources.theme;
   return (
     <box width="100%" flexDirection="row" justifyContent="flex-start" marginBottom={1} paddingLeft={1}>
+      {/* Outline only: the composer already owns the filled rounded box, so a
+          second filled card would collide with it and weigh the transcript down.
+          The border alone is enough to read the message as user input. */}
       <box
         flexDirection="column"
         flexShrink={1}
         maxWidth="78%"
-        backgroundColor={theme.surface}
         border={true}
         borderStyle="rounded"
         borderColor={theme.border}
@@ -257,7 +253,7 @@ function ThinkingView(props: {
           selectable={false}
         >
           {collapsible()
-            ? `${heading()} ${expanded() ? "▾" : "▸"} ${estimatedLines()} lines · click to ${expanded() ? "collapse" : "expand"}`
+            ? `${heading()} ${expanded() ? "▾" : "▸"} ${estimatedLines()} lines`
             : heading()}
         </text>
       </box>
@@ -321,6 +317,11 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
         <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
           {props.item.args ? `  ${props.item.args}` : ""}
         </text>
+        <Show when={props.item.elapsed}>
+          <text width={6} flexShrink={0} height={1} wrapMode="none" truncate={true} fg={theme.faint}>
+            {props.item.elapsed}
+          </text>
+        </Show>
       </box>
       <Show when={failed() && props.item.content}>
         <text fg={theme.error} wrapMode="word" marginLeft={2}>{props.item.content}</text>
@@ -412,7 +413,7 @@ function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadView
             {failed() ? "×" : "✓"}
           </text>
         }>
-          <SpinnerText fg={theme.accent} />
+          <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
         <text height={1} wrapMode="none" fg={theme.softText} attributes={bold}>{tool()?.name ?? "tool"}</text>
@@ -469,13 +470,13 @@ export function LiveTurnView(props: {
   resources: ThreadViewResources;
 }) {
   return (
-    <TurnRail label={props.label} resources={props.resources}>
+    <TurnBlock label={props.label} resources={props.resources}>
       {/* Live blocks are append-only. Index keeps each renderable alive while
           immutable block snapshots replace its value during streaming. */}
       <Index each={props.turn().blocks}>
         {(block) => <LiveBlockView block={block} resources={props.resources} />}
       </Index>
-    </TurnRail>
+    </TurnBlock>
   );
 }
 
@@ -488,11 +489,11 @@ function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources:
         {(user: Accessor<TranscriptItem>) => <UserMessageCard item={user()} resources={props.resources} />}
       </Show>
       <Show when={props.group.items.length > 0}>
-        <TurnRail label="thread" resources={props.resources}>
+        <TurnBlock label="thread" resources={props.resources}>
           <For each={props.group.items}>
             {(item) => <HistoryItemView item={item} resources={props.resources} />}
           </For>
-        </TurnRail>
+        </TurnBlock>
       </Show>
     </>
   );

@@ -2,6 +2,7 @@ import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { accumulateCacheHits, cacheHitPercent } from "../../utils/estimate.js";
+import { runGit } from "../../workspace/git.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
@@ -25,6 +26,12 @@ export interface TerminalMeta {
   /** Prompt-cache hit rate over this context's history, or null before any usage is reported. */
   cacheHitPercent: number | null;
   uncommitted: boolean;
+  /**
+   * Main-repository branch, or null while unknown. Reading it needs a git
+   * process, so the footer renders without it and picks it up on refresh.
+   * A detached HEAD reports its short commit instead.
+   */
+  gitBranch: string | null;
 }
 
 export interface SlashSuggestion {
@@ -94,8 +101,10 @@ export class ThreadTuiController {
       contextPercent: 0,
       cacheHitPercent: null,
       uncommitted: false,
+      gitBranch: null,
     };
     this.refreshMeta();
+    void this.refreshGitBranch();
     this.donePromise = new Promise<void>((resolve) => {
       this.resolveDone = resolve;
     });
@@ -272,6 +281,8 @@ export class ThreadTuiController {
       }
       this.replayRequested = false;
       this.refreshMeta();
+      // A turn's tools or a command may have changed the git branch.
+      void this.refreshGitBranch();
     } catch (error) {
       this.batcher.flush();
       const message = error instanceof Error ? error.message : String(error);
@@ -567,6 +578,32 @@ export class ThreadTuiController {
       .some((commit) => commit.checkpointId === head.id);
     this.state.branch = this.app.versions.currentBranch.name;
     this.state.checkpointId = head.id;
+  }
+
+  /**
+   * Reads the main-repository branch out of band. Thread branches are
+   * independent of git refs, so this is display-only context and any failure
+   * (no HEAD yet in a fresh repository, git missing) simply leaves it unset.
+   */
+  private async refreshGitBranch(): Promise<void> {
+    const previous = this.meta.gitBranch;
+    let next: string | null = null;
+    try {
+      const branch = (await runGit(["-C", this.app.rootPath, "branch", "--show-current"]))
+        .stdout.toString("utf8").trim();
+      if (branch) next = branch;
+      else {
+        const commit = (await runGit(["-C", this.app.rootPath, "rev-parse", "--short", "HEAD"]))
+          .stdout.toString("utf8").trim();
+        next = commit ? `detached ${commit}` : null;
+      }
+    } catch {
+      next = null;
+    }
+    if (next !== previous) {
+      this.meta.gitBranch = next;
+      this.notify();
+    }
   }
 
   private notify(): void {

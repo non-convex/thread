@@ -84,11 +84,11 @@ export function MergeScreen(props: {
         <For each={screen().preview.workspaceFiles}>{(file) => <text fg={props.resources.theme.softText}>{file.status.slice(0, 1).toUpperCase()}  {file.path}</text>}</For>
         <For each={screen().preview.conflicts}>{(conflict) => <text fg={props.resources.theme.error}>!  {conflict}</text>}</For>
         <SectionTitle resources={props.resources}>2  Context strategy</SectionTitle>
-        <text fg={screen().selected === "keep-current" ? props.resources.theme.accentStrong : props.resources.theme.text}>
+        <text fg={screen().selected === "keep-current" ? props.resources.theme.sparkAlt : props.resources.theme.text}>
           {screen().selected === "keep-current" ? "◉" : "○"} Keep current context
         </text>
         <text fg={props.resources.theme.muted} marginLeft={3}>Discard incoming conversation; current branch continues unchanged.</text>
-        <text fg={screen().selected === "summarize" ? props.resources.theme.accentStrong : props.resources.theme.text}>
+        <text fg={screen().selected === "summarize" ? props.resources.theme.sparkAlt : props.resources.theme.text}>
           {screen().selected === "summarize" ? "◉" : "○"} Import useful context with model
         </text>
         <text fg={props.resources.theme.muted} marginLeft={3}>Generate a concise handoff note; do not splice chat histories.</text>
@@ -159,7 +159,7 @@ export function HistoryScreen(props: {
             Restore to checkpoint {short(props.screen().items[props.screen().selected]!.baseCheckpointId)}? Press enter again.
           </text>
         </Show>
-        <Show when={props.screen().busy}><text fg={props.resources.theme.accent}>Restoring…</text></Show>
+        <Show when={props.screen().busy}><text fg={props.resources.theme.spark}>Restoring…</text></Show>
         <Show when={props.screen().error}><text fg={props.resources.theme.error}>{props.screen().error}</text></Show>
       </box>
       <ScreenFooter hint="↑/↓ select · enter restore · esc cancel" state={props.state} resources={props.resources} />

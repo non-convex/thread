@@ -133,6 +133,7 @@ test("the full-screen session updates in place while a streamed reply grows", as
     contextPercent: 4,
     cacheHitPercent: null,
     uncommitted: true,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   const setup = await testRender(
@@ -215,6 +216,7 @@ test("the composer submits multiline input and selected slash commands", async (
     contextPercent: 0,
     cacheHitPercent: null,
     uncommitted: false,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   const submitted: string[] = [];
@@ -242,7 +244,7 @@ test("the composer submits multiline input and selected slash commands", async (
   }
 });
 
-test("the session screen renders the redesign language: rail, collapsed thinking, tool elapsed, footer meter", async () => {
+test("the session screen renders the redesign language: turn block, collapsed thinking, tool elapsed, footer meter", async () => {
   const viewResources = resources();
   const now = Date.now();
   const state = createUiState("main", "checkpoint-123456789", [
@@ -259,6 +261,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     contextPercent: 42,
     cacheHitPercent: 87,
     uncommitted: true,
+    gitBranch: null,
   };
   state.busy = true;
   state.activity = "edit";
@@ -280,18 +283,19 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   try {
     await setup.flush();
     const frame = setup.captureCharFrame();
-    assert.match(frame, /● thread · reasoner/, "turn rail names the bare model");
+    assert.match(frame, /^ thread/m, "the turn block is anchored by its label");
     assert.match(frame, /◇ thought 2\.4s/, "finished thinking collapses to one timed line");
     assert.match(frame, /✓ read {2}src\/app\.ts +2\.1s/, "tool row ends with its elapsed time");
     assert.match(frame, /◇ thinking/, "committed thinking keeps its heading in the preview");
     assert.match(frame, /✓ bash {2}bun test/, "committed tools render as compact rows");
     assert.match(frame, /context main/, "footer labels the displayed version as context");
+    assert.doesNotMatch(frame, /12345678/, "footer omits the checkpoint id");
     assert.doesNotMatch(frame, /dirty/, "footer omits workspace dirty status");
     assert.match(frame, /███░░░ ctx 42%/, "footer carries the context meter");
     assert.doesNotMatch(frame, /cache 87%/, "80 columns drops the cache rate to protect the branch name");
     assert.match(frame, /❯ ask thread, \/ for commands, @ to add files/, "composer placeholder carries the merged hints");
     assert.doesNotMatch(frame, /⏎ send/, "send/newline hints stay out of the composer");
-    assert.match(frame, /⇧⇥ switch thinking level/, "footer explains the thinking-level shortcut");
+    assert.match(frame, /reasoner · high/, "footer pairs the model with its thinking level");
     assert.match(frame, /esc interrupt/, "busy status keeps the escape hint");
   } finally {
     setup.renderer.destroy();
@@ -314,6 +318,7 @@ test("a wide footer reports the prompt-cache hit rate, and an unmeasured one sho
       contextPercent: 42,
       cacheHitPercent: percent,
       uncommitted: false,
+      gitBranch: null,
     };
     const viewModel = fakeViewModel(state, meta);
     const setup = await testRender(
@@ -348,6 +353,7 @@ test("completed thinking clips to five rows and expands on mouse click", async (
     contextPercent: 0,
     cacheHitPercent: null,
     uncommitted: false,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   const setup = await testRender(
@@ -357,20 +363,20 @@ test("completed thinking clips to five rows and expands on mouse click", async (
   try {
     await setup.flush();
     let frame = setup.captureCharFrame();
-    assert.match(frame, /click to expand/, "long thinking exposes the expand affordance");
+    assert.match(frame, /▸ \d+ lines/, "long thinking exposes the expand affordance");
     assert.match(frame, /first-preview/, "the collapsed preview keeps its beginning visible");
     assert.doesNotMatch(frame, /tail-marker/, "the collapsed preview clips the long tail");
 
     await setup.mockMouse.click(4, 4);
     await setup.flush();
     frame = setup.captureCharFrame();
-    assert.match(frame, /click to collapse/, "clicking the block expands it");
+    assert.match(frame, /▾ \d+ lines/, "clicking the block expands it");
     assert.match(frame, /tail-marker/, "the expanded block renders the full content");
 
     await setup.mockMouse.click(4, 4);
     await setup.flush();
     frame = setup.captureCharFrame();
-    assert.match(frame, /click to expand/, "clicking the block again collapses it");
+    assert.match(frame, /▸ \d+ lines/, "clicking the block again collapses it");
     assert.doesNotMatch(frame, /tail-marker/, "the collapsed block hides the long tail again");
 
     state.transcript = [{ id: "think-short", kind: "thinking", content: "short thought" }];
@@ -412,6 +418,7 @@ test("the /model overlay moves its highlight view-side, without a controller rou
     contextPercent: 4,
     cacheHitPercent: null,
     uncommitted: false,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   viewModel.controller.handleScreenKey = (key) => {
@@ -466,6 +473,7 @@ test("the /rewind overlay lists user messages as rewind targets and navigates vi
     contextPercent: 4,
     cacheHitPercent: null,
     uncommitted: false,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   viewModel.controller.handleScreenKey = (key) => {
@@ -520,6 +528,7 @@ test("the /thread squash overlay confirms the selected current-path turn with on
     contextPercent: 4,
     cacheHitPercent: null,
     uncommitted: false,
+    gitBranch: null,
   };
   const viewModel = fakeViewModel(state, meta);
   let enters = 0;

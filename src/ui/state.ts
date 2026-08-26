@@ -13,6 +13,8 @@ export interface TranscriptItem {
   /** Tool items only: bare tool name and a one-line argument summary. */
   name?: string;
   args?: string;
+  /** Tool items only: wall-clock duration, so history keeps the timing a live turn shows. */
+  elapsed?: string;
 }
 
 export interface LiveTool {

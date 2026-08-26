@@ -3,7 +3,7 @@ import { createMemo, For, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../agent/compaction.js";
 import type { LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
-import { short, type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
+import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import { modelDetail, selectedWindow } from "./screens.js";
 import { wheelScrollAcceleration } from "./scroll.js";
@@ -67,8 +67,8 @@ function Footer(props: {
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>context {state().branch}</text>
-      <Show when={!narrow()}>
-        <text height={1} wrapMode="none" truncate={true} fg={theme().faint}> · {short(state().checkpointId)}</text>
+      <Show when={meta().gitBranch !== null}>
+        <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().faint}> · git {meta().gitBranch}</text>
       </Show>
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
@@ -82,7 +82,10 @@ function Footer(props: {
       <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
         <text height={1} wrapMode="none" fg={theme().muted}> · {meta().thinkingLevel}</text>
-        <text height={1} wrapMode="none" fg={theme().faint}> · ⇧⇥ switch thinking level</text>
+        {/* The keybinding is one-time teaching, so it yields space first. */}
+        <Show when={!narrow()}>
+          <text height={1} wrapMode="none" fg={theme().faint}> ⇧⇥</text>
+        </Show>
       </Show>
     </box>
   );
@@ -93,7 +96,7 @@ function Status(props: { state: Accessor<UiState>; resources: ThreadViewResource
   const theme = () => props.resources.theme;
   const noticeLevel = () => state().notice?.level;
   const color = () => state().busy
-    ? theme().accent
+    ? theme().spark
     : noticeLevel() === "error"
       ? theme().error
       : noticeLevel() === "success"
@@ -102,7 +105,7 @@ function Status(props: { state: Accessor<UiState>; resources: ThreadViewResource
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <Show when={state().busy}>
-        <SpinnerText fg={theme().accent} />
+        <SpinnerText fg={theme().spark} />
         <text width={1} height={1}> </text>
       </Show>
       <text flexGrow={1} height={1} wrapMode="none" fg={color()} truncate={true}>
@@ -139,7 +142,7 @@ function ComposerSuggestions(props: {
               height={1}
               wrapMode="none"
               truncate={true}
-              fg={index() === props.selected ? props.resources.theme.accent : props.resources.theme.text}
+              fg={index() === props.selected ? props.resources.theme.sparkAlt : props.resources.theme.text}
               attributes={index() === props.selected ? bold : 0}
             >
               {index() === props.selected ? "▸ " : ""}{suggestion.label}
@@ -203,7 +206,7 @@ function ModelPickerOverlay(props: {
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
             >
-              <text width={2} height={1} wrapMode="none" fg={theme().accent}>
+              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().accent}>
                 {selected() ? "▸ " : current() ? "● " : "  "}
               </text>
               <text
@@ -212,7 +215,7 @@ function ModelPickerOverlay(props: {
                 height={1}
                 wrapMode="none"
                 truncate={true}
-                fg={selected() || current() ? theme().accent : theme().text}
+                fg={selected() ? theme().sparkAlt : current() ? theme().accent : theme().text}
                 attributes={selected() ? bold : 0}
               >
                 {model.providerId}/{model.modelId}
@@ -233,8 +236,8 @@ function ModelPickerOverlay(props: {
       </For>
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-          <SpinnerText fg={theme().accent} />
-          <text height={1} wrapMode="none" fg={theme().accent}> switching model…</text>
+          <SpinnerText fg={theme().spark} />
+          <text height={1} wrapMode="none" fg={theme().spark}> switching model…</text>
         </box>
       </Show>
       {/* Stale errors drop as soon as the selection moves again. */}
@@ -290,7 +293,7 @@ function RewindOverlay(props: {
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
             >
-              <text width={2} height={1} wrapMode="none" fg={theme().accent}>
+              <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
                 {selected() ? "▸ " : "  "}
               </text>
               <text
@@ -316,8 +319,8 @@ function RewindOverlay(props: {
       </Show>
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-          <SpinnerText fg={theme().accent} />
-          <text height={1} wrapMode="none" fg={theme().accent}>
+          <SpinnerText fg={theme().spark} />
+          <text height={1} wrapMode="none" fg={theme().spark}>
             {props.screen().type === "thread_squash" ? " squashing…" : " rewinding…"}
           </text>
         </box>
@@ -408,7 +411,7 @@ export function SessionScreen(props: {
           <TranscriptTurnsView items={state().transcript} resources={props.resources} />
           <Show when={state().liveTurn}>
             {(live: Accessor<LiveTurn>) => (
-              <LiveTurnView turn={live} label={`thread · ${props.meta().modelName}`} resources={props.resources} />
+              <LiveTurnView turn={live} label="thread" resources={props.resources} />
             )}
           </Show>
         </scrollbox>
@@ -498,7 +501,7 @@ export function SessionScreen(props: {
           marginX={1}
           border={true}
           borderStyle="rounded"
-          borderColor={state().busy ? theme.accent : theme.borderStrong}
+          borderColor={state().busy ? theme.spark : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
           <box flexDirection="row" width="100%" paddingLeft={1}>
@@ -516,7 +519,7 @@ export function SessionScreen(props: {
               focusedTextColor={theme.text}
               backgroundColor={theme.surfaceHigh}
               focusedBackgroundColor={theme.surfaceHigh}
-              cursorColor={theme.accent}
+              cursorColor={theme.spark}
               selectionBg={theme.selection}
               selectionFg={theme.selectionText}
               keyBindings={COMPOSER_KEY_BINDINGS}

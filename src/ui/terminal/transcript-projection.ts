@@ -48,10 +48,17 @@ function toolResultSummary(name: string, args: Record<string, unknown>, content:
   return first.slice(0, 180) || target || "completed";
 }
 
+/** Wall-clock time between a tool's start record and its result entry. */
+function toolElapsed(record: ToolStartedRecord | undefined, resultTimestamp: number | undefined): string | undefined {
+  if (!record || resultTimestamp === undefined || resultTimestamp < record.timestamp) return undefined;
+  return `${((resultTimestamp - record.timestamp) / 1000).toFixed(1)}s`;
+}
+
 function messageTranscriptItems(
   entryId: string,
   message: Extract<SessionEntry, { type: "message" }>["message"],
   toolRecords: ReadonlyMap<string, ToolStartedRecord>,
+  timestamp?: number,
 ): TranscriptItem[] {
   if (message.role === "user") return [{ id: entryId, kind: "user", content: contentText(message.content) }];
   if (message.role === "assistant") {
@@ -68,6 +75,7 @@ function messageTranscriptItems(
     const name = message.toolName || record?.toolName || "tool";
     const text = contentText(message.content);
     const target = argSummary(args);
+    const elapsed = toolElapsed(record, timestamp);
     return [{
       id: entryId,
       kind: "tool",
@@ -76,6 +84,7 @@ function messageTranscriptItems(
       args: target,
       content: toolResultSummary(name, args, text),
       isError: message.isError,
+      ...(elapsed ? { elapsed } : {}),
     }];
   }
   return [];
@@ -92,7 +101,7 @@ function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, T
     return [
       squash,
       ...entry.retainedTail.flatMap((retained) =>
-        messageTranscriptItems(retained.sourceEntryId, retained.message, toolRecords)
+        messageTranscriptItems(retained.sourceEntryId, retained.message, toolRecords, retained.message.timestamp)
       ),
     ];
   }
@@ -100,7 +109,7 @@ function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, T
     return [{ id: entry.id, kind: "context_merge", label: entry.sourceRef, content: entry.content }];
   }
   if (entry.type !== "message") return [];
-  return messageTranscriptItems(entry.id, entry.message, toolRecords);
+  return messageTranscriptItems(entry.id, entry.message, toolRecords, entry.timestamp);
 }
 
 export function projectTranscript(
