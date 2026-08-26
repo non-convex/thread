@@ -168,7 +168,13 @@ For a reasoning model, press `Shift+Tab` on the session screen to cycle through 
 
 Plain mode keeps `/model` as a status command. `/model list` prints the configured/current choices, while `/model list <provider>` prints every catalog model registered under one provider. Direct `/model <provider>/<model>` switching can still select a model from the complete catalog even when it is hidden from the default picker. A switch retains the current conversation and workspace, while rebuilding the main agent loop, compactor, Context Capsule and context-merge services around the selected model. The TUI model label and context-window percentage update immediately.
 
-Model and thinking-level changes affect only the running process. They do not edit global configuration or append a message/checkpoint, so a restart again uses `--provider`/`--model`, `THREAD_PROVIDER`/`THREAD_MODEL`, and the configured defaults in normal precedence order.
+Model and thinking-level changes take effect immediately in the running process and do not edit global configuration or append a message/checkpoint. They are remembered in `~/.thread/state.json`, so a restart reuses the last selection unless `--provider`/`--model` or `THREAD_PROVIDER`/`THREAD_MODEL` overrides it.
+
+## Shell tool
+
+The built-in `bash` tool runs foreground commands in the workspace root. On Windows it prefers Git Bash, so commands behave as the tool name promises and match the POSIX shell used on other platforms. Git Bash is located from `THREAD_GIT_BASH`, then from the installation that owns `git` on `PATH`, then from the standard `%ProgramFiles%` paths — an install on another drive is therefore found. A `bash.exe` on `PATH` is deliberately ignored, because on Windows that name is normally the WSL launcher rather than Git Bash.
+
+When no Git Bash is installed, thread falls back to `pwsh` and then `powershell.exe`; both receive a UTF-8 preamble and propagate the last native exit code. Candidates are tried in order and a later one is used only when the shell itself fails to launch, never when the command runs and reports a non-zero exit code. Exit codes, stdout and stderr are kept separate, and every invocation is non-interactive with the user's profile disabled.
 
 ## Web tools
 
@@ -281,7 +287,7 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 67-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, remembered model-selection precedence and its corrupt-state and concurrent-write handling, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 69-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, Windows shell selection, remembered model-selection precedence and its corrupt-state and concurrent-write handling, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

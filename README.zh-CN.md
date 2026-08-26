@@ -168,7 +168,13 @@ thread
 
 Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置模型及当前模型，`/model list <provider>` 输出指定 provider 在完整目录中的全部模型。即使某个模型未显示在默认 picker 中，仍可用 `/model <provider>/<model>` 从完整目录直接切换。切换时会保留当前 conversation 和 workspace，同时围绕新模型重建主 agent loop、compactor、Context Capsule 和 context merge 服务。TUI 的模型标签和 context-window 百分比会立即更新。
 
-模型和推理档位都只改变当前运行进程，不会编辑全局配置，也不会追加 message/checkpoint；重启后仍会按照正常优先级使用 `--provider`/`--model`、`THREAD_PROVIDER`/`THREAD_MODEL` 以及配置中的默认值。
+模型和推理档位的切换在当前进程立即生效，不会编辑全局配置，也不会追加 message/checkpoint。选择会记录到 `~/.thread/state.json`，因此重启后沿用上次选择，除非被 `--provider`/`--model` 或 `THREAD_PROVIDER`/`THREAD_MODEL` 覆盖。
+
+## Shell 工具
+
+内置 `bash` 工具在工作区根目录执行前台命令。Windows 上优先使用 Git Bash，使命令的行为与工具名称一致，也与其他平台使用的 POSIX shell 保持一致。Git Bash 依次从 `THREAD_GIT_BASH`、PATH 上 `git` 所属的安装目录、`%ProgramFiles%` 标准路径中定位，因此装在其他盘也能找到。PATH 上的 `bash.exe` 会被刻意忽略，因为在 Windows 上该名称通常指向 WSL 启动器而非 Git Bash。
+
+未安装 Git Bash 时回退到 `pwsh`，再回退到 `powershell.exe`；两者都会注入 UTF-8 前导设置并透传最后一个原生退出码。候选按顺序尝试，只有在 shell 自身启动失败时才使用下一个，命令执行后返回非零退出码不会触发换 shell 重试。退出码、stdout 和 stderr 分开保留，所有调用均为非交互且不加载用户 profile。
 
 ## Web 工具
 
@@ -281,7 +287,7 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 67 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、模型选择记忆的优先级及其损坏状态与并发写入处理、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 69 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Windows shell 选择、模型选择记忆的优先级及其损坏状态与并发写入处理、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

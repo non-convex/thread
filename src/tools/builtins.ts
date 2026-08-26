@@ -122,7 +122,7 @@ const editTool: AgentTool<{ path: string; oldText: string; newText: string }> = 
   },
 };
 
-interface ShellInvocation {
+export interface ShellInvocation {
   command: string;
   args: readonly string[];
 }
@@ -131,6 +131,31 @@ const GIT_BASH_RELATIVE_PATHS = [
   "Git\\bin\\bash.exe",
   "Git\\usr\\bin\\bash.exe",
 ] as const;
+
+/**
+ * Git Bash locations derived from `git` on PATH. Installations outside
+ * `%ProgramFiles%` are common (a different drive, a portable checkout), and
+ * `git.exe` usually sits in `<root>\cmd` or `<root>\bin`, so its parent's parent
+ * is the install root. `bash.exe` on PATH is deliberately not consulted: on
+ * Windows that name is normally the WSL launcher, not Git Bash.
+ */
+function gitBashFromGitExecutable(): string[] {
+  const gitPath = which("git");
+  if (!gitPath) return [];
+  const root = path.dirname(path.dirname(gitPath));
+  return [path.join(root, "bin", "bash.exe"), path.join(root, "usr", "bin", "bash.exe")];
+}
+
+function which(executable: string): string | undefined {
+  const extensions = (process.env.PATHEXT ?? ".EXE").split(path.delimiter).filter(Boolean);
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${executable}${extension}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
 
 function powershellInvocation(executable: string, script: string): ShellInvocation {
   return {
@@ -154,24 +179,36 @@ function powershellScript(command: string): string {
   ].join("; ");
 }
 
+/**
+ * Git Bash candidates, most specific first: an explicit `THREAD_GIT_BASH`
+ * override, then the installation that owns `git` on PATH, then the standard
+ * `%ProgramFiles%` locations.
+ */
 function gitBashCandidates(): string[] {
   const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(
     (root): root is string => typeof root === "string" && root.length > 0,
   );
-  const candidates = roots.flatMap((root) =>
-    GIT_BASH_RELATIVE_PATHS.map((relative) => path.join(root, relative)),
-  );
+  const override = process.env.THREAD_GIT_BASH;
+  const candidates = [
+    ...(override ? [override] : []),
+    ...gitBashFromGitExecutable(),
+    ...roots.flatMap((root) => GIT_BASH_RELATIVE_PATHS.map((relative) => path.join(root, relative))),
+  ];
   return [...new Set(candidates)].filter((candidate) => existsSync(candidate));
 }
 
-function windowsShellCandidates(command: string): ShellInvocation[] {
+/**
+ * Windows shell preference: Git Bash first, so `bash` commands behave as their
+ * name promises and match the POSIX shell used on other platforms. PowerShell
+ * remains the fallback when no Git Bash is installed — pwsh before
+ * powershell.exe, since only pwsh gives UTF-8 output and native exit codes.
+ */
+export function windowsShellCandidates(command: string): ShellInvocation[] {
   const candidates: ShellInvocation[] = [];
-  // PowerShell 7 is preferred when installed: UTF-8 and native exit-code
-  // handling are much closer to the POSIX shell behaviour thread expects.
-  candidates.push(powershellInvocation("pwsh", powershellScript(command)));
   for (const bash of gitBashCandidates()) {
     candidates.push({ command: bash, args: ["-lc", command] });
   }
+  candidates.push(powershellInvocation("pwsh", powershellScript(command)));
   candidates.push(powershellInvocation("powershell.exe", powershellScript(command)));
   return candidates;
 }
