@@ -287,7 +287,7 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 69 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Windows shell 选择、模型选择记忆的优先级及其损坏状态与并发写入处理、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 65 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Windows shell 选择、模型选择记忆的优先级、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

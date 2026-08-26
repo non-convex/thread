@@ -287,7 +287,7 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 69-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, Windows shell selection, remembered model-selection precedence and its corrupt-state and concurrent-write handling, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 65-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, Windows shell selection, remembered model-selection precedence, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 
