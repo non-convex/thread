@@ -3,6 +3,7 @@ import { stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
 import { loadModelConfig } from "../config/model-config.js";
+import { loadModelState, resolveModelSelection, saveModelState } from "../config/model-state.js";
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
@@ -61,6 +62,7 @@ Usage: thread [--root <git-worktree>] [--config <file>]
 
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
+Remembered model/thinking choice: ~/.thread/state.json (delete to reset)
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to start an empty-context root branch, /model,
@@ -81,19 +83,43 @@ async function main(): Promise<void> {
   const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
   const workspace = await discoverGitWorkspace(options.rootPath);
   const loadedConfig = await loadModelConfig(options.configPath);
-  const providerId = options.provider ?? loadedConfig?.config.model?.provider;
-  const modelId = options.model ?? loadedConfig?.config.model?.id;
   const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {});
-  const model = providerId && modelId
-    ? modelCatalog.createClient(providerId, modelId)
-    : undefined;
+  // An explicit --provider/--model pair outranks the remembered choice, which in
+  // turn outranks the configured default. parseArgs already guarantees the CLI
+  // pair is either complete or absent.
+  const selection = resolveModelSelection({
+    ...(options.provider && options.model ? { cli: { provider: options.provider, id: options.model } } : {}),
+    state: await loadModelState(),
+    ...(loadedConfig ? { config: loadedConfig.config } : {}),
+  });
+  let model: ReturnType<typeof modelCatalog.createClient> | undefined;
+  if (selection.model) {
+    try {
+      model = modelCatalog.createClient(selection.model.provider, selection.model.id);
+    } catch (error) {
+      // A remembered model can disappear when the config changes. Fall back to
+      // the configured default instead of refusing to start.
+      const configured = loadedConfig?.config.model;
+      const canFallBack = configured
+        && (configured.provider !== selection.model.provider || configured.id !== selection.model.id);
+      if (!canFallBack) throw error;
+      output.write(
+        `Remembered model ${selection.model.provider}/${selection.model.id} is unavailable; ` +
+        `falling back to ${configured!.provider}/${configured!.id}\n`,
+      );
+      model = modelCatalog.createClient(configured!.provider, configured!.id);
+    }
+  }
   const app = await ThreadApp.open({
     rootPath: workspace.rootPath,
     ...(model ? { model } : {}),
     modelCatalog,
-    ...(loadedConfig?.config.defaultThinkingLevel
-      ? { thinkingLevel: loadedConfig.config.defaultThinkingLevel }
-      : {}),
+    ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+    onModelStateChange: (state) => {
+      // Fire-and-forget: losing a remembered preference must never interrupt
+      // the session, so a failed write is silently ignored.
+      void saveModelState(state).catch(() => undefined);
+    },
   });
   try {
     for (const extension of options.extensions) await loadExtension(extension, app.extensionApi, process.cwd());

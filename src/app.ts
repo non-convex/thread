@@ -11,6 +11,7 @@ import { ModelSemanticRunner } from "./agent/semantic-runner.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { ExtensionEvents } from "./extensions/events.js";
 import { DerivedCache } from "./persistence/cache.js";
+import type { ModelState } from "./config/model-state.js";
 import { CapsuleService } from "./revisions/capsule-service.js";
 import { MergeService } from "./revisions/merge-service.js";
 import { VersionService } from "./revisions/version-service.js";
@@ -29,6 +30,12 @@ export interface ThreadAppOptions {
   modelCatalog?: ModelCatalog;
   thinkingLevel?: ModelThinkingLevel;
   systemPrompt?: string;
+  /**
+   * Persists interactive `/model` and thinking-level choices so the next start
+   * reuses them. Omitted by embedders and tests, which then keep the current
+   * process-only behaviour.
+   */
+  onModelStateChange?: (state: ModelState) => void;
 }
 
 export type InputResult =
@@ -114,6 +121,7 @@ export class ThreadApp {
   private runtime: SessionRuntime;
   private readonly events: ExtensionEvents;
   private readonly modelCatalog: ModelCatalog | undefined;
+  private readonly onModelStateChange: ((state: ModelState) => void) | undefined;
   private readonly systemPrompt: string | undefined;
   private readonly commandRouter: ThreadCommandRouter;
   private currentModel: ModelClient | undefined;
@@ -133,6 +141,7 @@ export class ThreadApp {
     this.workspace = workspace;
     this.events = new ExtensionEvents();
     this.modelCatalog = options.modelCatalog;
+    this.onModelStateChange = options.onModelStateChange;
     this.systemPrompt = options.systemPrompt;
     this.tools = new ToolRegistry();
     registerBuiltinTools(this.tools);
@@ -224,7 +233,22 @@ export class ThreadApp {
     const currentIndex = levels.indexOf(this.currentThinkingLevel);
     this.preferredThinkingLevel = levels[(currentIndex + 1) % levels.length]!;
     this.configureRuntime(this.currentModel);
+    this.rememberModelState();
     return this.currentThinkingLevel;
+  }
+
+  /**
+   * Reports the current selection so the host can persist it. The preferred
+   * level is recorded rather than the clamped one, so a model that cannot reach
+   * the user's choice does not permanently narrow it.
+   */
+  private rememberModelState(): void {
+    if (!this.onModelStateChange) return;
+    const model = this.currentModel;
+    this.onModelStateChange({
+      ...(model ? { model: { provider: model.providerId, id: model.modelId } } : {}),
+      thinkingLevel: this.preferredThinkingLevel,
+    });
   }
 
   private thinkingLevelsFor(model: ModelClient | undefined): readonly ModelThinkingLevel[] {
@@ -424,6 +448,7 @@ export class ThreadApp {
       : "no model";
     const selected = this.modelCatalog.createClient(providerId, modelId);
     this.configureRuntime(selected);
+    this.rememberModelState();
     return ephemeral(`Switched model from ${previous} to ${providerId}/${modelId}`, true);
   }
 

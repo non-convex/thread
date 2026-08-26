@@ -23,6 +23,15 @@ export {
   type ModelSelectionConfig,
   type SupportedCustomApi,
 } from "./config/model-config.js";
+export {
+  DEFAULT_MODEL_STATE_FILE,
+  getModelStatePath,
+  loadModelState,
+  resolveModelSelection,
+  saveModelState,
+  type ModelState,
+  type ResolvedModelSelection,
+} from "./config/model-state.js";
 export type { ExtensionAPI } from "./extensions/api.js";
 export type {
   ThreadCommand,
