@@ -542,11 +542,15 @@ TUI 必须把它显示为 harness 生成的 squash，而不是伪装成用户真
 
 ### 6.3 两种摘要形态
 
-`project_state` 是完整项目状态，最多 4K tokens，沿用三个稳定区域：
+`project_state` 是完整项目状态，最多 4K tokens，沿用五个稳定区域：
 
 - `Long-term memory`：最多 25 条，重组后保留真正长期有效的信息；
 - `Current project state`：当前目标、已完成内容、风险和下一步；
-- `Recent user-agent conversation`：最多 10 条，按时间保留关键互动。
+- `Recent user-agent conversation`：最多 10 条，按时间保留关键互动；
+- `Lessons learned`：最多 10 条，本次工作中的失败与经验教训，日期精度，与长期记忆同样做过期删除和合并；
+- `Notes worth keeping`：最多 10 条，与项目无关但值得留心的用户相关信息，小时精度。
+
+后两个区域刻意从严录入：只记录会改变后续判断或能避免重复犯错的内容，无内容时留空，不得堆积例行结果或泛泛建议。
 
 如果活上下文起点已经有一个 `rootProjectState`，摘要器从结构字段读取它并合并更新，
 不得靠识别渲染字符串前缀来猜。

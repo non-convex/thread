@@ -81,6 +81,14 @@ test("project-state squash forks the exact prefix and creates a new root path", 
   assert.match(model.forks[0]!.instruction, /read-only summary branch/i);
   assert.match(model.forks[0]!.instruction, /Do not call or request any tool/i);
   assert.match(model.forks[0]!.instruction, /retained raw tail starts at user message #2/i);
+  // The two additional sections must survive with their bounds and their
+  // deliberately strict admission rules.
+  assert.match(model.forks[0]!.instruction, /`## Lessons learned`/);
+  assert.match(model.forks[0]!.instruction, /`## Notes worth keeping`/);
+  assert.match(model.forks[0]!.instruction, /Lessons learned contains at most 10 entries/);
+  assert.match(model.forks[0]!.instruction, /Notes worth keeping contains at most 10 entries/);
+  assert.match(model.forks[0]!.instruction, /leave the section empty rather than filling it/);
+  assert.match(model.forks[0]!.instruction, /leave the section empty when nothing qualifies/);
   assert.deepEqual(draft.retainedTail.map((item) => item.sourceEntryId), ids.slice(2));
 
   const firstTurnDraft = await compactor.createIncrementalDraft({
@@ -94,6 +102,10 @@ test("project-state squash forks the exact prefix and creates a new root path", 
   assert.equal(firstTurnDraft.summaryKind, "incremental");
   assert.equal(firstTurnDraft.summarizedMessages, built.messages.length);
   assert.match(model.forks[1]!.instruction, /selected boundary is user message #1/i);
+  // An incremental summary continues from an existing path, so it must not
+  // regenerate the project-state document or its sections.
+  assert.doesNotMatch(model.forks[1]!.instruction, /`## Lessons learned`/);
+  assert.doesNotMatch(model.forks[1]!.instruction, /`## Notes worth keeping`/);
 
   const squash = await compactor.appendDraft("main", null, leaf, draft);
   assert.deepEqual(session.pathTo(squash.id).map((entry) => entry.id), [squash.id]);

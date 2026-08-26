@@ -82,6 +82,8 @@ thread
 
 Set `THREAD_HOME` to relocate the whole user configuration directory. Use `--config <path>` or `THREAD_CONFIG` to select a different file. API keys are intentionally referenced by `apiKeyEnv`; do not put secrets in the JSON file.
 
+Interactive `/model` and `Shift+Tab` choices are remembered in `~/.thread/state.json`, so the next start reuses the model and thinking level you last selected instead of returning to the configured default. This file is a disposable cache: deleting it simply returns the next start to `config.json`, and thread never writes to `config.json` itself. Startup precedence is `--provider`/`--model` (or `THREAD_PROVIDER`/`THREAD_MODEL`) first, then the remembered choice, then the configured default. If a remembered model no longer exists — for example after editing the provider list — thread reports that and falls back to the configured default rather than refusing to start.
+
 If the thread config file does not exist, thread falls back to pi's existing global configuration:
 
 ```text
@@ -203,7 +205,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 
 `/compact` performs a root squash without adding a user turn. It **forks the exact live request prefix**—system prompt, tools, extension context and messages—and appends one read-only summary instruction. Tool definitions stay present so the prefix identity is preserved, but the instruction forbids tools and the fork runtime rejects every returned tool call without executing it. The resulting `project_state` entry becomes a new context root and expands its embedded retained tail; `buildContext()` then follows only that new root-to-leaf path. The old path is still available through its old checkpoints.
 
-Automatic squash uses the same root operation at **78% of the context window**, and again after a provider reports context overflow. The post-squash input target is 7% of the model window, including system prompt, tools, extension overhead, the bounded workspace diffstat, generated project state and retained raw turns. The project-state summary has a 4K-token ceiling and keeps the fixed `Long-term memory`, `Current project state` and `Recent user-agent conversation` sections. Retention starts at a complete user-turn boundary and keeps at least the two newest turns; those two are the only reason the 7% target may be exceeded. If the exact fork or the final safe request cannot fit, squash fails explicitly and asks for `/clear` or `/rewind`.
+Automatic squash uses the same root operation at **78% of the context window**, and again after a provider reports context overflow. The post-squash input target is 7% of the model window, including system prompt, tools, extension overhead, the bounded workspace diffstat, generated project state and retained raw turns. The project-state summary has a 4K-token ceiling and keeps the fixed `Long-term memory`, `Current project state`, `Recent user-agent conversation`, `Lessons learned` and `Notes worth keeping` sections. `Lessons learned` records at most 10 dated failures and hard-won experience from the current work; `Notes worth keeping` records at most 10 hour-stamped points about the user rather than the project. Both are maintained like long-term memory — obsolete entries dropped, overlapping ones merged — and both are deliberately admission-strict, staying empty rather than accumulating routine outcomes or generic advice. Retention starts at a complete user-turn boundary and keeps at least the two newest turns; those two are the only reason the 7% target may be exceeded. If the exact fork or the final safe request cannot fit, squash fails explicitly and asks for `/clear` or `/rewind`.
 
 `/thread squash` is the selective form. With no argument it opens a one-Enter picker containing only real user turns on the current context path. With a turn or user-entry ID, it summarizes that turn through the current leaf into a 2K-token `incremental` squash entry whose parent is the entry immediately before the selected turn. It then continues as a normal agent turn through the shared model/tool loop. The squash turn has a normal turn base, so `/rewind` restores both the pre-squash context path and workspace. Retained or off-path turns cannot be selected.
 
@@ -225,7 +227,8 @@ Global configuration and repository-attached version state are deliberately sepa
 
 ```text
 ~/.thread/
-└── config.json                 global model/provider configuration
+├── config.json                 global model/provider configuration
+└── state.json                  remembered model + thinking level (disposable)
 
 ~/.pi/agent/                    read-only fallback when config.json is absent
 ├── models.json
@@ -278,7 +281,7 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 50-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 67-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, remembered model-selection precedence and its corrupt-state and concurrent-write handling, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

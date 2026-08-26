@@ -8,7 +8,7 @@ import type { ModelClient } from "./model-client.js";
 
 const PROJECT_STATE_REQUIREMENTS = [
   "Return one concise Markdown project-state document under these headings: `## Long-term memory`,",
-  "`## Current project state`, and `## Recent user-agent conversation`.",
+  "`## Current project state`, `## Recent user-agent conversation`, `## Lessons learned`, and `## Notes worth keeping`.",
   "Long-term memory contains at most 25 independently useful, current entries in the exact form",
   "`- [YYYY-MM-DD] (memory content)`. Preserve goals, user decisions, architectural constraints, failed",
   "approaches and their reasons, external facts, and discoveries that cannot safely be recovered from files.",
@@ -18,6 +18,17 @@ const PROJECT_STATE_REQUIREMENTS = [
   "and successful checks from unrun or failed checks.",
   "Recent user-agent conversation contains at most the 10 newest material interactions, oldest first, in the exact",
   "form `- [YYYY-MM-DD HH] (interaction content)`. It is a compact decision history, not a transcript.",
+  "Lessons learned contains at most 10 entries in the exact form `- [YYYY-MM-DD] (lesson content)`, recording",
+  "failures and hard-won experience from this work that would change how a later attempt is made: what was tried,",
+  "why it did not work, and what to do instead. Maintain it like long-term memory: drop lessons that no longer apply,",
+  "merge overlapping ones, and re-evaluate rather than accumulate. Be strict — record only a lesson that would",
+  "plausibly prevent a repeated mistake, and leave the section empty rather than filling it with routine outcomes,",
+  "restatements of the project state, or generic advice.",
+  "Notes worth keeping contains at most 10 entries in the exact form `- [YYYY-MM-DD HH] (note content)`, recording",
+  "points worth remembering that are not about this project: the user's stated preferences, working style, tools,",
+  "environment, constraints, or other durable context noticed during the conversation. Apply the same strictness:",
+  "record only a point that would change how you respond later, never project work, speculation about the user, or",
+  "sensitive personal details, and leave the section empty when nothing qualifies.",
   "Preserve material tool outcomes but never copy raw logs, file contents, hidden reasoning, or routine commands.",
   "Only durable results represented by the workspace may be recovered from files; do not omit other important state.",
   "Treat later user corrections and evidence as authoritative. Do not invent facts.",
@@ -58,7 +69,7 @@ function currentTimeAnchor(now = new Date()): string {
   const month = (now.getMonth() + 1).toString().padStart(2, "0");
   const day = now.getDate().toString().padStart(2, "0");
   const hour = now.getHours().toString().padStart(2, "0");
-  return `The current local date and time is ${year}-${month}-${day} ${hour}. Keep an existing memory timestamp verbatim when its content is unchanged; use this time for entries written or revised now.`;
+  return `The current local date and time is ${year}-${month}-${day} ${hour}. Keep an existing timestamp verbatim when that entry's content is unchanged; use this time for entries written or revised now.`;
 }
 
 export interface CompactionOptions {

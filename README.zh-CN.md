@@ -82,6 +82,8 @@ thread
 
 设置 `THREAD_HOME` 可以移动整个用户配置目录。使用 `--config <path>` 或 `THREAD_CONFIG` 可以选择其他配置文件。API key 应通过 `apiKeyEnv` 引用；不要将密钥直接写入 JSON 文件。
 
+交互中通过 `/model` 和 `Shift+Tab` 做出的选择会记录在 `~/.thread/state.json`，因此下次启动会沿用上次选定的模型和推理档位，而不是回到配置里的默认值。该文件是可丢弃的缓存：删除它只会让下次启动回到 `config.json`，thread 本身从不写入 `config.json`。启动优先级为 `--provider`/`--model`（或 `THREAD_PROVIDER`/`THREAD_MODEL`）最高，其次是记录的选择，最后是配置默认值。如果记录的模型已不存在（例如修改了 provider 列表），thread 会给出提示并回退到配置默认值，而不是拒绝启动。
+
 如果 thread 配置文件不存在，thread 会回退读取 pi 已有的全局配置：
 
 ```text
@@ -203,7 +205,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `/compact` 会执行 root squash，但不添加用户 turn。它会 **fork 完整的活动请求前缀**——system prompt、tools、extension context 和 messages——并在末尾追加一条只读摘要指令。Tools 保留在请求中以维持前缀身份，但指令明确禁止工具；fork runtime 也会拒绝模型返回的任何 tool call，绝不执行。生成的 `project_state` entry 成为新的 context root，并展开它内嵌的 retained tail；此后 `buildContext()` 只遍历这条新的根到叶路径。旧路径仍可通过旧 checkpoint 恢复。
 
-自动 squash 在 context window 使用率达到 **78%** 时执行；provider 返回 context overflow 后也会走同一条 root squash 路径。压缩后 input 的目标是模型窗口的 7%，其中包括 system prompt、tools、extension 开销、受限 workspace diffstat、生成的 project state 和保留的原始 turns。Project-state 摘要上限为 4K tokens，固定使用 `Long-term memory`、`Current project state` 和 `Recent user-agent conversation` 三个小节。Retained tail 必须从完整 user-turn 边界开始，并至少保留最新两轮；这两轮本身过大，是唯一允许超过 7% 目标的情况。如果完整 fork 或压缩后的安全请求仍装不下，操作会明确失败并提示 `/clear` 或 `/rewind`。
+自动 squash 在 context window 使用率达到 **78%** 时执行；provider 返回 context overflow 后也会走同一条 root squash 路径。压缩后 input 的目标是模型窗口的 7%，其中包括 system prompt、tools、extension 开销、受限 workspace diffstat、生成的 project state 和保留的原始 turns。Project-state 摘要上限为 4K tokens，固定使用 `Long-term memory`、`Current project state`、`Recent user-agent conversation`、`Lessons learned` 和 `Notes worth keeping` 五个小节。`Lessons learned` 最多 10 条，按日期记录本次工作中的失败与经验教训；`Notes worth keeping` 最多 10 条，时间戳精确到小时，记录与项目无关但值得留心的用户相关信息。两者都按长期记忆的方式维护——过期的删除、可合并的合并——并且都刻意从严录入，宁可留空也不堆积例行结果或泛泛而谈的建议。Retained tail 必须从完整 user-turn 边界开始，并至少保留最新两轮；这两轮本身过大，是唯一允许超过 7% 目标的情况。如果完整 fork 或压缩后的安全请求仍装不下，操作会明确失败并提示 `/clear` 或 `/rewind`。
 
 `/thread squash` 是选择性形式。不带参数时，它打开一次 Enter 即确认的 picker，只列出当前 context path 上的真实用户 turn。传入 turn ID 或 user-entry ID 后，它把该 turn 到当前 leaf 的区间概括为最多 2K tokens 的 `incremental` squash entry，其父节点是被选 turn 之前的 entry；随后它作为普通 agent turn 进入共享的 model/tool loop。这个 synthetic turn 有正常 turn base，因此 `/rewind` 能同时恢复 squash 前的 context path 和 workspace。Retained 或 off-path turn 不能作为目标。
 
@@ -225,7 +227,8 @@ Workspace merge 是三方合并，v1 只会应用 clean 结果。在 TUI 中，`
 
 ```text
 ~/.thread/
-└── config.json                 全局模型/provider 配置
+├── config.json                 全局模型/provider 配置
+└── state.json                  记录的模型与推理档位（可丢弃）
 
 ~/.pi/agent/                    config.json 不存在时的只读 fallback
 ├── models.json
@@ -278,7 +281,7 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 50 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 67 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、模型选择记忆的优先级及其损坏状态与并发写入处理、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 
