@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,11 +16,11 @@ import { PiModelClient } from "../../src/agent/model-client.js";
 import {
   ThreadTuiController,
 } from "../../src/ui/terminal/controller.js";
-import { commitAll, initRepository } from "../helpers/git-fixture.js";
+import { commitAll, initRepository, removeFixture } from "../helpers/git-fixture.js";
 
 test("the TUI controller commits completed turns and routes documents outside the session screen", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-tui-controller-"));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
+  t.after(() => removeFixture(fixture));
   const root = path.join(fixture, "project");
   await initRepository(root);
   await writeFile(path.join(root, "seed.txt"), "seed\n");

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runGit } from "../../src/workspace/git.js";
 
@@ -24,4 +24,23 @@ export async function addGitlink(rootPath: string, relativePath: string): Promis
   const oid = await commitAll(nested, "nested");
   await runGit(["-C", rootPath, "update-index", "--add", "--cacheinfo", `160000,${oid},${relativePath}`]);
   return oid;
+}
+
+/**
+ * Removes a fixture directory, tolerating Windows EBUSY. Sidecar git processes
+ * may still hold a handle for a moment after a session closes, and `rm` fails
+ * outright instead of waiting; retrying briefly avoids a spurious test error
+ * without hiding a genuine failure.
+ */
+export async function removeFixture(fixturePath: string, attempts = 5): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await rm(fixturePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === attempts || (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
+  }
 }
