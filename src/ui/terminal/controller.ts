@@ -1,7 +1,7 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
-import { estimateContextTokens } from "../../utils/estimate.js";
+import { accumulateCacheHits, cacheHitPercent, estimateContextTokens } from "../../utils/estimate.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
@@ -22,6 +22,8 @@ export interface TerminalMeta {
   thinkingLevel: ModelThinkingLevel;
   supportsThinking: boolean;
   contextPercent: number;
+  /** Prompt-cache hit rate over this context's history, or null before any usage is reported. */
+  cacheHitPercent: number | null;
   uncommitted: boolean;
 }
 
@@ -90,6 +92,7 @@ export class ThreadTuiController {
       thinkingLevel: app.thinkingLevel,
       supportsThinking: app.supportsThinking,
       contextPercent: 0,
+      cacheHitPercent: null,
       uncommitted: false,
     };
     this.refreshMeta();
@@ -561,6 +564,7 @@ export class ThreadTuiController {
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
     this.meta.contextPercent = window > 0 ? Math.min(999, Math.round(tokens / window * 100)) : 0;
+    this.meta.cacheHitPercent = cacheHitPercent(accumulateCacheHits(context.messages as Message[]));
     this.meta.uncommitted = ![...this.app.session.projection.commits.values()]
       .some((commit) => commit.checkpointId === head.id);
     this.state.branch = this.app.versions.currentBranch.name;

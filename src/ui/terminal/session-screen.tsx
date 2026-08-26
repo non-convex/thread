@@ -43,6 +43,11 @@ export function contextMeter(percent: number, cells = 6): string {
 /** The meter stays quiet until the context window actually fills up. */
 const CONTEXT_WARN_PERCENT = 80;
 
+/** An em dash reads as "not measured yet", which a bare 0% would misreport. */
+export function cacheHitLabel(percent: number | null): string {
+  return percent === null ? "cache —" : `cache ${percent}%`;
+}
+
 function Footer(props: {
   state: Accessor<UiState>;
   meta: Accessor<TerminalMeta>;
@@ -65,6 +70,9 @@ function Footer(props: {
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
         <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
         <text height={1} wrapMode="none" fg={theme().muted}> ctx {meta().contextPercent}%</text>
+      </Show>
+      <Show when={!narrow()}>
+        <text height={1} wrapMode="none" fg={theme().faint}> · {cacheHitLabel(meta().cacheHitPercent)}</text>
       </Show>
       <box flexGrow={1} minWidth={1} />
       <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>

@@ -131,6 +131,7 @@ test("the full-screen session updates in place while a streamed reply grows", as
     thinkingLevel: "high",
     supportsThinking: true,
     contextPercent: 4,
+    cacheHitPercent: null,
     uncommitted: true,
   };
   const viewModel = fakeViewModel(state, meta);
@@ -212,6 +213,7 @@ test("the composer submits multiline input and selected slash commands", async (
     thinkingLevel: "off",
     supportsThinking: false,
     contextPercent: 0,
+    cacheHitPercent: null,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
@@ -255,6 +257,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     thinkingLevel: "high",
     supportsThinking: true,
     contextPercent: 42,
+    cacheHitPercent: 87,
     uncommitted: true,
   };
   state.busy = true;
@@ -285,6 +288,7 @@ test("the session screen renders the redesign language: rail, collapsed thinking
     assert.match(frame, /context main/, "footer labels the displayed version as context");
     assert.doesNotMatch(frame, /dirty/, "footer omits workspace dirty status");
     assert.match(frame, /███░░░ ctx 42%/, "footer carries the context meter");
+    assert.doesNotMatch(frame, /cache 87%/, "80 columns drops the cache rate to protect the branch name");
     assert.match(frame, /❯ ask thread, \/ for commands, @ to add files/, "composer placeholder carries the merged hints");
     assert.doesNotMatch(frame, /⏎ send/, "send/newline hints stay out of the composer");
     assert.match(frame, /⇧⇥ switch thinking level/, "footer explains the thinking-level shortcut");
@@ -292,6 +296,37 @@ test("the session screen renders the redesign language: rail, collapsed thinking
   } finally {
     setup.renderer.destroy();
     viewResources.syntaxStyle.destroy();
+  }
+});
+
+test("a wide footer reports the prompt-cache hit rate, and an unmeasured one shows a dash", async () => {
+  for (const [percent, expected] of [[87, /ctx 42% · cache 87%/], [null, /ctx 42% · cache —/]] as const) {
+    const viewResources = resources();
+    const state = createUiState("main", "checkpoint-123456789", [
+      { id: "assistant-1", kind: "assistant", content: "done" },
+    ]);
+    const meta: TerminalMeta = {
+      rootPath: process.cwd(),
+      modelLabel: "faux/reasoner",
+      modelName: "reasoner",
+      thinkingLevel: "high",
+      supportsThinking: true,
+      contextPercent: 42,
+      cacheHitPercent: percent,
+      uncommitted: false,
+    };
+    const viewModel = fakeViewModel(state, meta);
+    const setup = await testRender(
+      () => <ThreadRoot controller={viewModel.controller} resources={viewResources} />,
+      { width: 120, height: 24, screenMode: "alternate-screen", kittyKeyboard: true },
+    );
+    try {
+      await setup.flush();
+      assert.match(setup.captureCharFrame(), expected);
+    } finally {
+      setup.renderer.destroy();
+      viewResources.syntaxStyle.destroy();
+    }
   }
 });
 
@@ -311,6 +346,7 @@ test("completed thinking clips to five rows and expands on mouse click", async (
     thinkingLevel: "high",
     supportsThinking: true,
     contextPercent: 0,
+    cacheHitPercent: null,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
@@ -374,6 +410,7 @@ test("the /model overlay moves its highlight view-side, without a controller rou
     thinkingLevel: "off",
     supportsThinking: false,
     contextPercent: 4,
+    cacheHitPercent: null,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
@@ -427,6 +464,7 @@ test("the /rewind overlay lists user messages as rewind targets and navigates vi
     thinkingLevel: "off",
     supportsThinking: false,
     contextPercent: 4,
+    cacheHitPercent: null,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
@@ -480,6 +518,7 @@ test("the /thread squash overlay confirms the selected current-path turn with on
     thinkingLevel: "off",
     supportsThinking: false,
     contextPercent: 4,
+    cacheHitPercent: null,
     uncommitted: false,
   };
   const viewModel = fakeViewModel(state, meta);
