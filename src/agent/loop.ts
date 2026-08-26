@@ -694,6 +694,25 @@ export class AgentLoop {
     return formatWorkspaceDiffStat(await this.versions.workspace.diffTrees(genesis.workspaceTreeOid, toTreeOid));
   }
 
+  /**
+   * Session messages plus the prefix the model actually receives. The extension
+   * `before_context` hook is not applied, so an extension that injects context is
+   * not reflected; every caller that can await should prefer the assembled path.
+   */
+  baseContextFor(messages: Message[]): Context {
+    return { systemPrompt: this.systemPrompt, messages, tools: this.tools.modelDefinitions() };
+  }
+
+  /**
+   * Request cost as the turn loop measures it, for callers that only hold session
+   * messages. Reported so the footer and the compaction trigger read the same
+   * number: a messages-only estimate silently drops the system prompt and tool
+   * schemas, which understates occupancy exactly when no usage block exists yet.
+   */
+  estimateRequestBudget(messages: Message[]) {
+    return this.estimateCompactionBudget(this.baseContextFor(messages), messages);
+  }
+
   private estimateCompactionBudget(context: Context, sessionMessages: Message[]) {
     const estimateMarker: Message = {
       role: "user",

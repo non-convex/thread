@@ -21,7 +21,7 @@ import { ToolRegistry } from "./tools/types.js";
 import { safeUiEvent, type UiEventSink } from "./ui/events.js";
 import { discoverGitWorkspace, type GitWorkspace } from "./workspace/discovery.js";
 import { SidecarWorkspaceStore } from "./workspace/sidecar-store.js";
-import { CONTEXT_ESTIMATOR_VERSION, estimateContextTokens } from "./utils/estimate.js";
+import { CONTEXT_ESTIMATOR_VERSION } from "./utils/estimate.js";
 
 export interface ThreadAppOptions {
   rootPath: string;
@@ -197,6 +197,23 @@ export class ThreadApp {
     return this.currentModel?.reasoning === true;
   }
 
+  /**
+   * Share of the model's context window the next request would occupy, measured
+   * the same way the turn loop measures it so display and the compaction trigger
+   * agree. Without a model, or before a loop exists, there is nothing to report.
+   */
+  contextOccupancy(sessionHeadId: string | null): { percent: number; requestTokens: number } | undefined {
+    const model = this.currentModel;
+    const loop = this.loop;
+    if (!model || !loop) return undefined;
+    const messages = this.session.buildContext(sessionHeadId).messages;
+    const { requestTokens } = loop.estimateRequestBudget(messages);
+    return {
+      percent: Math.min(999, Math.round((requestTokens / model.contextWindow) * 100)),
+      requestTokens,
+    };
+  }
+
   get availableThinkingLevels(): readonly ModelThinkingLevel[] {
     return this.thinkingLevelsFor(this.currentModel);
   }
@@ -247,13 +264,15 @@ export class ThreadApp {
     versions: VersionService,
   ): SessionRuntime {
     const cache = new DerivedCache(log.cacheDir);
+    // Evaluated lazily per commit, by which time this.runtime.loop is in place,
+    // so the recorded cost matches what the footer and the compaction trigger use.
     versions.setContextCostProvider(this.currentModel
       ? () => {
-          const head = versions.head;
-          const estimatedTokens = estimateContextTokens(session.buildContext(head.sessionHeadId).messages).tokens;
+          const occupancy = this.contextOccupancy(versions.head.sessionHeadId);
+          if (!occupancy) throw new Error("Thread commit requires a configured model to record context cost");
           return {
-            percent: Math.min(999, Math.round(estimatedTokens / this.currentModel!.contextWindow * 100)),
-            estimatedTokens,
+            percent: occupancy.percent,
+            estimatedTokens: occupancy.requestTokens,
             contextWindow: this.currentModel!.contextWindow,
             providerId: this.currentModel!.providerId,
             modelId: this.currentModel!.modelId,

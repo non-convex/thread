@@ -16,7 +16,11 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
-export const CONTEXT_ESTIMATOR_VERSION = "pi-ai-estimate-v1";
+/**
+ * Bumped when a recorded percent changes meaning. v2 counts the system prompt and
+ * tool schemas, so its numbers are not comparable with a v1 record.
+ */
+export const CONTEXT_ESTIMATOR_VERSION = "pi-ai-estimate-v2";
 
 const CHARS_PER_TOKEN = 4;
 const ESTIMATED_IMAGE_CHARS = 4800;

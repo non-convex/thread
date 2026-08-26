@@ -1,5 +1,6 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
+import { COMPACTION_TRIGGER_RATIO } from "../../agent/compaction.js";
 import type { LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { short, type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
@@ -40,8 +41,11 @@ export function contextMeter(percent: number, cells = 6): string {
   return "█".repeat(filled) + "░".repeat(cells - filled);
 }
 
-/** The meter stays quiet until the context window actually fills up. */
-const CONTEXT_WARN_PERCENT = 80;
+/**
+ * Warn below the compaction trigger, not above it: at 80% an automatic squash had
+ * already fired at 78%, so the warning colour could never actually be observed.
+ */
+export const CONTEXT_WARN_PERCENT = Math.round(COMPACTION_TRIGGER_RATIO * 100) - 10;
 
 /** An em dash reads as "not measured yet", which a bare 0% would misreport. */
 export function cacheHitLabel(percent: number | null): string {

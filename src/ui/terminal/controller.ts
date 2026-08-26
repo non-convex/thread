@@ -1,7 +1,7 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
-import { accumulateCacheHits, cacheHitPercent, estimateContextTokens } from "../../utils/estimate.js";
+import { accumulateCacheHits, cacheHitPercent } from "../../utils/estimate.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
@@ -556,14 +556,12 @@ export class ThreadTuiController {
   private refreshMeta(): void {
     const head = this.app.versions.head;
     const context = this.app.session.buildContext(head.sessionHeadId);
-    const tokens = estimateContextTokens(context.messages as Message[]).tokens;
     const model = this.app.model;
-    const window = model?.contextWindow ?? 0;
     this.meta.modelLabel = model ? `${model.providerId}/${model.modelId}` : "no model";
     this.meta.modelName = model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
-    this.meta.contextPercent = window > 0 ? Math.min(999, Math.round(tokens / window * 100)) : 0;
+    this.meta.contextPercent = this.app.contextOccupancy(head.sessionHeadId)?.percent ?? 0;
     this.meta.cacheHitPercent = cacheHitPercent(accumulateCacheHits(context.messages as Message[]));
     this.meta.uncommitted = ![...this.app.session.projection.commits.values()]
       .some((commit) => commit.checkpointId === head.id);
