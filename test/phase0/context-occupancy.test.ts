@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,11 +10,11 @@ import { COMPACTION_TRIGGER_RATIO } from "../../src/agent/compaction.js";
 import { ThreadTuiController } from "../../src/ui/terminal/controller.js";
 import { CONTEXT_ESTIMATOR_VERSION, estimateContextTokens } from "../../src/utils/estimate.js";
 import { CONTEXT_WARN_PERCENT } from "../../src/ui/terminal/session-screen.js";
-import { commitAll, initRepository } from "../helpers/git-fixture.js";
+import { commitAll, initRepository, removeFixture } from "../helpers/git-fixture.js";
 
 test("the footer counts the prompt prefix the model actually receives", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-ctx-occupancy-"));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
+  t.after(() => removeFixture(fixture));
   const root = path.join(fixture, "project");
   await initRepository(root);
   await writeFile(path.join(root, "seed.txt"), "seed\n");
@@ -48,7 +48,7 @@ test("the footer counts the prompt prefix the model actually receives", async (t
 
 test("a fresh context is not reported as empty", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-ctx-fresh-"));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
+  t.after(() => removeFixture(fixture));
   const root = path.join(fixture, "project");
   await initRepository(root);
   await writeFile(path.join(root, "seed.txt"), "seed\n");
@@ -68,7 +68,7 @@ test("a fresh context is not reported as empty", async (t) => {
 
 test("without a model there is no occupancy to report", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "thread-ctx-nomodel-"));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
+  t.after(() => removeFixture(fixture));
   const root = path.join(fixture, "project");
   await initRepository(root);
   await writeFile(path.join(root, "seed.txt"), "seed\n");

@@ -16,8 +16,10 @@ import { CapsuleService } from "./revisions/capsule-service.js";
 import { MergeService } from "./revisions/merge-service.js";
 import { VersionService } from "./revisions/version-service.js";
 import { SessionLogStore } from "./session/log-store.js";
+import { SessionRecallService } from "./session/recall.js";
 import { SessionService } from "./session/service.js";
 import { registerBuiltinTools } from "./tools/builtins.js";
+import { createSessionReadTool, createSessionRecallTool } from "./tools/session-recall.js";
 import { ToolRegistry } from "./tools/types.js";
 import { safeUiEvent, type UiEventSink } from "./ui/events.js";
 import { discoverGitWorkspace, type GitWorkspace } from "./workspace/discovery.js";
@@ -75,7 +77,7 @@ function versionSystemPromptSection(log: SessionLogStore, versions: VersionServi
     "your existing tools:",
     "",
     `- Session log: ${log.eventsPath} — one JSON object per line, the canonical record of every`,
-    "  message, checkpoint, branch move and commit. Query it with grep, not by reading it whole; it",
+    "  checkpoint, branch move and commit. Query it with grep, not by reading it whole; it",
     "  grows unboundedly. Events may nest inside `batch` records",
     '  (`{"type":"batch","events":[...]}`), so unwrap matched lines with JSON parsing rather than',
     '  slicing text. Grep the quoted type string (e.g. `"type":"thread_commit_created"`): bare event',
@@ -145,6 +147,11 @@ export class ThreadApp {
     this.systemPrompt = options.systemPrompt;
     this.tools = new ToolRegistry();
     registerBuiltinTools(this.tools);
+    /* Registered here, not in buildRuntime: the SessionService outlives every runtime
+     * rebuild and re-registering a tool name throws. */
+    const recall = new SessionRecallService(session);
+    this.tools.register(createSessionRecallTool(recall));
+    this.tools.register(createSessionReadTool(recall));
     this.commands = new CommandRegistry();
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);

@@ -1,4 +1,5 @@
 import { runGit } from "../workspace/git.js";
+import { createTurnPathClassifier, turnLabel } from "../session/history-status.js";
 import { CONTEXT_ESTIMATOR_VERSION, estimateContextTokens } from "../utils/estimate.js";
 import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
@@ -9,16 +10,6 @@ function requireArgs(args: string[], count: number, usage: string): void {
 
 function short(id: string): string {
   return id.length > 18 ? id.slice(0, 18) : id;
-}
-
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((block): block is { type: string; text?: string } => typeof block === "object" && block !== null && "type" in block)
-    .map((block) => block.type === "text" ? block.text ?? "" : "")
-    .join(" ")
-    .trim();
 }
 
 const status: ThreadCommand = {
@@ -183,36 +174,19 @@ const show: ThreadCommand = {
 
 /** All turns, classified against the active entry path rather than branch labels. */
 export function buildHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
-  const activePath = context.versions.session.pathTo(context.versions.head.sessionHeadId);
-  const pathIds = new Set(activePath.map((entry) => entry.id));
-  const retainedIds = new Set(
-    activePath
-      .filter((entry) => entry.type === "squash")
-      .flatMap((entry) => entry.type === "squash" ? entry.retainedTail.map((item) => item.sourceEntryId) : []),
-  );
+  const classify = createTurnPathClassifier(context.versions.session, context.versions.head.sessionHeadId);
   return [...context.versions.projection.turns.values()]
     .sort((left, right) => right.startedAt - left.startedAt)
     .map((turn) => {
       const entry = context.versions.projection.entries.get(turn.userEntryId);
-      const synthetic = entry?.type === "squash" && entry.summaryKind === "incremental";
-      const text = entry?.type === "message"
-        ? messageText(entry.message.content)
-        : synthetic ? `session squashed from ${entry.parentId ?? "root"}` : "";
-      const status: HistoryViewItem["status"] = synthetic
-        ? "synthetic-squash"
-        : pathIds.has(turn.userEntryId)
-        ? "current-path"
-        : retainedIds.has(turn.userEntryId)
-        ? "retained"
-        : "off-path";
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
         baseCheckpointId: turn.baseCheckpointId,
-        label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
+        label: turnLabel(entry),
         outcome: turn.outcome,
         startedAt: turn.startedAt,
-        status,
+        status: classify(turn),
       };
     });
 }
