@@ -1,7 +1,7 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
-import { accumulateCacheHits, cacheHitPercent } from "../../utils/estimate.js";
+import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../utils/estimate.js";
 import { runGit } from "../../workspace/git.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
@@ -25,6 +25,14 @@ export interface TerminalMeta {
   contextPercent: number;
   /** Prompt-cache hit rate over this context's history, or null before any usage is reported. */
   cacheHitPercent: number | null;
+  /**
+   * Prompt tokens re-billed because a reusable prefix was not read from cache,
+   * accumulated since the newest prefix rewrite. Shown so a dropped cache is
+   * visible rather than silently expensive.
+   */
+  cacheMissedTokens: number;
+  /** Why the most recent counted miss happened, or null when the last turn hit. */
+  cacheMissReason: "idle" | "model-changed" | "prefix-changed" | null;
   uncommitted: boolean;
   /**
    * Main-repository branch, or null while unknown. Reading it needs a git
@@ -100,6 +108,8 @@ export class ThreadTuiController {
       supportsThinking: app.supportsThinking,
       contextPercent: 0,
       cacheHitPercent: null,
+      cacheMissedTokens: 0,
+      cacheMissReason: null,
       uncommitted: false,
       gitBranch: null,
     };
@@ -573,7 +583,10 @@ export class ThreadTuiController {
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
     this.meta.contextPercent = this.app.contextOccupancy(head.sessionHeadId)?.percent ?? 0;
-    this.meta.cacheHitPercent = cacheHitPercent(accumulateCacheHits(context.messages as Message[]));
+    const cache = scanCacheUsage(context.messages as Message[]);
+    this.meta.cacheHitPercent = cacheHitPercent(cache.hitTotals);
+    this.meta.cacheMissedTokens = cache.totals.missedTokens;
+    this.meta.cacheMissReason = latestCacheMissReason(context.messages as Message[], cache);
     this.meta.uncommitted = ![...this.app.session.projection.commits.values()]
       .some((commit) => commit.checkpointId === head.id);
     this.state.branch = this.app.versions.currentBranch.name;

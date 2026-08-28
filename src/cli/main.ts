@@ -115,6 +115,9 @@ async function main(): Promise<void> {
     ...(model ? { model } : {}),
     modelCatalog,
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+    ...(loadedConfig?.config.cacheRetention
+      ? { cacheRetention: loadedConfig.config.cacheRetention }
+      : {}),
     onModelStateChange: (state) => {
       // Fire-and-forget: losing a remembered preference must never interrupt
       // the session, so a failed write is silently ignored.

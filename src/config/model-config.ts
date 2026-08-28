@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { CacheRetention, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const DEFAULT_THREAD_HOME_NAME = ".thread";
 export const DEFAULT_MODEL_CONFIG_FILE = "config.json";
@@ -39,6 +39,13 @@ export interface CustomProviderConfig {
 export interface ThreadModelConfig {
   model?: ModelSelectionConfig;
   defaultThinkingLevel?: ModelThinkingLevel;
+  /**
+   * Prompt-cache lifetime for every model request. Omitted means the provider
+   * default (Anthropic 5-minute ephemeral). `long` trades a higher cache-write
+   * price for a 1h/24h window and only pays off when gaps between turns
+   * routinely exceed five minutes.
+   */
+  cacheRetention?: CacheRetention;
   providers: Record<string, CustomProviderConfig>;
 }
 
@@ -84,6 +91,13 @@ function thinkingLevel(value: unknown, label: string): ModelThinkingLevel {
     throw new Error(`${label} must be off, minimal, low, medium, high, xhigh, or max`);
   }
   return value as ModelThinkingLevel;
+}
+
+function cacheRetention(value: unknown, label: string): CacheRetention {
+  if (value !== "none" && value !== "short" && value !== "long") {
+    throw new Error(`${label} must be none, short, or long`);
+  }
+  return value;
 }
 
 function optionalThinkingLevelMap(value: unknown, label: string): ThinkingLevelMap | undefined {
@@ -227,7 +241,15 @@ function parseConfig(value: unknown): ThreadModelConfig {
   const defaultThinkingLevel = input.defaultThinkingLevel === undefined
     ? undefined
     : thinkingLevel(input.defaultThinkingLevel, "defaultThinkingLevel");
-  return { ...(model ? { model } : {}), ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}), providers };
+  const retention = input.cacheRetention === undefined
+    ? undefined
+    : cacheRetention(input.cacheRetention, "cacheRetention");
+  return {
+    ...(model ? { model } : {}),
+    ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
+    ...(retention ? { cacheRetention: retention } : {}),
+    providers,
+  };
 }
 
 export function getThreadHome(): string {

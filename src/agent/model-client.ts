@@ -1,6 +1,7 @@
 import {
   type Api,
   type AssistantMessage,
+  type CacheRetention,
   type Context,
   type Model,
   type ModelThinkingLevel,
@@ -33,7 +34,22 @@ export interface ModelRequestOptions {
   signal: AbortSignal;
   maxTokens?: number;
   reasoning?: ThinkingLevel;
+  /**
+   * Prompt-cache partition key. Every request that shares a prefix must send the
+   * same value: providers that key their cache on it (OpenAI `prompt_cache_key`,
+   * session-affinity headers) route a different key to a different shard, so a
+   * mismatch silently discards an otherwise reusable prefix. Defaults to
+   * {@link PiModelClient.cacheKey}; callers normally leave it unset.
+   */
   sessionId?: string;
+  /**
+   * Prompt-cache lifetime. `short` is the provider default (Anthropic 5-minute
+   * ephemeral, no OpenAI retention hint); `long` asks for 1h/24h and `none`
+   * disables caching. Long retention bills Anthropic cache writes at 2x the base
+   * input rate instead of 1.25x, so it only pays off when idle gaps between turns
+   * routinely exceed five minutes. Defaults to {@link ModelClient.cacheRetention}.
+   */
+  cacheRetention?: CacheRetention;
   /** Assistant-level transient retries; defaults to {@link DEFAULT_MODEL_MAX_RETRIES}. */
   maxRetries?: number;
   /** Backoff before the first retry; defaults to {@link DEFAULT_MODEL_RETRY_BASE_DELAY_MS}. */
@@ -52,6 +68,14 @@ export interface ModelClient {
   readonly maxOutputTokens: number;
   readonly reasoning?: boolean;
   readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
+  /**
+   * Prompt-cache partition key shared by every request this client makes, so the
+   * live turn, its summary forks and the semantic helpers all land in one shard.
+   * Set through {@link PiModelClient.withCacheKey}.
+   */
+  readonly cacheKey?: string;
+  /** Default prompt-cache lifetime for this client's requests. */
+  readonly cacheRetention?: CacheRetention | undefined;
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
   completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string>;
   /**
@@ -85,10 +109,14 @@ export class PiModelClient implements ModelClient {
   readonly maxOutputTokens: number;
   readonly reasoning: boolean;
   readonly supportedThinkingLevels: readonly ModelThinkingLevel[];
+  readonly cacheKey: string;
+  readonly cacheRetention: CacheRetention | undefined;
 
   constructor(
     private readonly models: Models,
     private readonly model: Model<Api>,
+    cacheKey?: string,
+    cacheRetention?: CacheRetention,
   ) {
     this.modelId = model.id;
     this.providerId = model.provider;
@@ -96,11 +124,36 @@ export class PiModelClient implements ModelClient {
     this.maxOutputTokens = model.maxTokens;
     this.reasoning = model.reasoning;
     this.supportedThinkingLevels = getSupportedThinkingLevels(model);
+    this.cacheKey = cacheKey ?? `thread:${this.providerId}:${this.modelId}`;
+    this.cacheRetention = cacheRetention;
+  }
+
+  /**
+   * Same model, different prompt-cache partition. Used to bind a client to one
+   * Session Tree so its turns, summary forks and capsule calls share a shard
+   * instead of colliding with another tree open on the same model.
+   */
+  withCacheKey(cacheKey: string): PiModelClient {
+    return new PiModelClient(this.models, this.model, cacheKey, this.cacheRetention);
+  }
+
+  /** Same model and partition, different cache lifetime. */
+  withCacheRetention(cacheRetention: CacheRetention | undefined): PiModelClient {
+    return new PiModelClient(this.models, this.model, this.cacheKey, cacheRetention);
+  }
+
+  /**
+   * Per-request retention wins over the client default; leaving both unset lets
+   * pi-ai apply its own resolution (which also honours `PI_CACHE_RETENTION`).
+   */
+  private resolveRetention(options: ModelRequestOptions): CacheRetention | undefined {
+    return options.cacheRetention ?? this.cacheRetention;
   }
 
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
     const maxRetries = options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES;
     const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
+    const cacheRetention = this.resolveRetention(options);
     let scheduledAttempt = 0;
     return retryAssistantCall(
       async () => {
@@ -110,7 +163,8 @@ export class PiModelClient implements ModelClient {
           ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
           // Retries are handled above so the TUI can observe every attempt.
           maxRetries: 0,
-          sessionId: options.sessionId ?? `thread:${this.providerId}:${this.modelId}`,
+          sessionId: options.sessionId ?? this.cacheKey,
+          ...(cacheRetention === undefined ? {} : { cacheRetention }),
         });
         for await (const event of stream) {
           if (event.type === "text_delta") options.onTextDelta?.(event.delta);
@@ -174,6 +228,10 @@ export class PiModelClient implements ModelClient {
             ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
             ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
             maxRetries: 0,
+            sessionId: options.sessionId ?? this.cacheKey,
+            ...(this.resolveRetention(options) === undefined
+              ? {}
+              : { cacheRetention: this.resolveRetention(options)! }),
           },
         ),
       {

@@ -437,7 +437,6 @@ export class AgentLoop {
           signal: runSignal,
           maxTokens: this.maxOutputTokens,
           ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-          sessionId: this.session.store.sessionId,
           onTextDelta: (delta) => {
             options.onTextDelta?.(delta);
             safeUiEvent(options.onUiEvent, { type: "assistant_text_delta", step: step + 1, delta });

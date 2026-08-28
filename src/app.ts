@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, CacheRetention, ThinkingLevel } from "@earendil-works/pi-ai";
 import { clearDisplayResult, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { buildHistoryItems, buildSquashItems, registerBuiltinCommands, rewindCommand } from "./commands/builtins.js";
 import { parseCommandLine } from "./commands/parser.js";
@@ -32,6 +32,13 @@ export interface ThreadAppOptions {
   modelCatalog?: ModelCatalog;
   thinkingLevel?: ModelThinkingLevel;
   systemPrompt?: string;
+  /**
+   * Prompt-cache lifetime applied to every model request. Left unset, the
+   * provider default applies (Anthropic 5-minute ephemeral); `long` is worth
+   * enabling only when idle gaps between turns routinely exceed that window,
+   * because it raises the cache-write price.
+   */
+  cacheRetention?: CacheRetention;
   /**
    * Persists interactive `/model` and thinking-level choices so the next start
    * reuses them. Omitted by embedders and tests, which then keep the current
@@ -125,6 +132,7 @@ export class ThreadApp {
   private readonly modelCatalog: ModelCatalog | undefined;
   private readonly onModelStateChange: ((state: ModelState) => void) | undefined;
   private readonly systemPrompt: string | undefined;
+  private readonly cacheRetention: CacheRetention | undefined;
   private readonly commandRouter: ThreadCommandRouter;
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
@@ -145,6 +153,7 @@ export class ThreadApp {
     this.modelCatalog = options.modelCatalog;
     this.onModelStateChange = options.onModelStateChange;
     this.systemPrompt = options.systemPrompt;
+    this.cacheRetention = options.cacheRetention;
     this.tools = new ToolRegistry();
     registerBuiltinTools(this.tools);
     /* Registered here, not in buildRuntime: the SessionService outlives every runtime
@@ -157,7 +166,7 @@ export class ThreadApp {
     this.commandRouter = new ThreadCommandRouter(this.commands);
     this.extensionApi = createExtensionAPI(this.tools, this.commands, this.events);
     this.preferredThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
-    this.currentModel = options.model;
+    this.currentModel = this.bindCacheOptions(options.model, log.sessionId);
     this.currentThinkingLevel = this.clampThinkingLevel(options.model, this.preferredThinkingLevel);
     this.runtime = this.buildRuntime(log, session, versions);
   }
@@ -283,8 +292,36 @@ export class ThreadApp {
     return this.currentThinkingLevel === "off" ? undefined : this.currentThinkingLevel;
   }
 
+  /**
+   * Binds a model client to this Session Tree's prompt-cache partition and the
+   * configured retention. One key per tree keeps the live turn, its squash forks
+   * and the capsule/merge helpers in a single shard; without it those paths fall
+   * back to different defaults and a provider that keys its cache on the value
+   * re-bills the shared prefix.
+   */
+  private bindCacheOptions(model: ModelClient | undefined, sessionId: string): ModelClient | undefined {
+    if (!model) return undefined;
+    const retention = this.cacheRetention;
+    if (model.cacheKey === sessionId && model.cacheRetention === retention) return model;
+    const rebindable = model as ModelClient & {
+      withCacheKey?: (key: string) => ModelClient;
+      withCacheRetention?: (value: CacheRetention | undefined) => ModelClient;
+    };
+    let bound = model;
+    if (typeof rebindable.withCacheKey === "function" && bound.cacheKey !== sessionId) {
+      bound = rebindable.withCacheKey(sessionId);
+    }
+    const retentionBindable = bound as ModelClient & {
+      withCacheRetention?: (value: CacheRetention | undefined) => ModelClient;
+    };
+    if (typeof retentionBindable.withCacheRetention === "function" && bound.cacheRetention !== retention) {
+      bound = retentionBindable.withCacheRetention(retention);
+    }
+    return bound;
+  }
+
   private configureRuntime(model: ModelClient | undefined): void {
-    this.currentModel = model;
+    this.currentModel = this.bindCacheOptions(model, this.runtime.log.sessionId);
     this.currentThinkingLevel = this.clampThinkingLevel(model, this.preferredThinkingLevel);
     this.runtime = this.buildRuntime(this.runtime.log, this.runtime.session, this.runtime.versions);
   }

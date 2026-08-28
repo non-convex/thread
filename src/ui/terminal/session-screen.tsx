@@ -52,6 +52,26 @@ export function cacheHitLabel(percent: number | null): string {
   return percent === null ? "cache —" : `cache ${percent}%`;
 }
 
+/**
+ * Suffixes the cache reading with why the last turn missed, so a dropped prefix
+ * is diagnosable in place: an expired TTL, a model switch, or new content spliced
+ * into the prefix. Silent when the last turn hit.
+ */
+export function cacheMissHint(
+  reason: "idle" | "model-changed" | "prefix-changed" | null,
+  missedTokens: number,
+): string {
+  if (!reason || missedTokens <= 0) return "";
+  const labels = { idle: "idle", "model-changed": "model", "prefix-changed": "prefix" } as const;
+  return ` ↓${formatTokenCount(missedTokens)} ${labels[reason]}`;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
+
 function Footer(props: {
   state: Accessor<UiState>;
   meta: Accessor<TerminalMeta>;
@@ -77,6 +97,11 @@ function Footer(props: {
       </Show>
       <Show when={!narrow()}>
         <text height={1} wrapMode="none" fg={theme().faint}> · {cacheHitLabel(meta().cacheHitPercent)}</text>
+        <Show when={cacheMissHint(meta().cacheMissReason, meta().cacheMissedTokens)}>
+          <text height={1} wrapMode="none" fg={theme().warning}>
+            {cacheMissHint(meta().cacheMissReason, meta().cacheMissedTokens)}
+          </text>
+        </Show>
       </Show>
       <box flexGrow={1} minWidth={1} />
       <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>
