@@ -1,14 +1,14 @@
 import { SyntaxStyle, createTextAttributes, type ThemeMode } from "@opentui/core";
 
 /**
- * Terminal adaptation of the OpenDesign "tech-utility" spec (brand-spec.md).
- * Hierarchy is carried by lightness steps (bg -> surface -> surface-2) instead
- * of shadows: the transcript groups a turn by tinted block rather than a rail,
- * so that one step must read as a boundary without becoming a hard edge.
+ * Warm forest palette: olive-umber neutrals, sand text, and muted orange,
+ * gold and moss pastels. Hierarchy is carried by lightness steps
+ * (bg -> surface -> surface-2) instead of shadows: the transcript groups a
+ * turn by tinted block rather than a rail, so that one step must read as a
+ * boundary without becoming a hard edge.
  *
- * The neutrals are plum-tinted and deliberately low-key, which leaves room for
- * two saturated spark colours. Sparks earn attention by being rare, so they are
- * reserved for one meaning each and never used for static decoration:
+ * Neutrals stay low-key so two sparks can earn attention by being rare. They
+ * are reserved for one meaning each and never used for static decoration:
  *
  *   spark     "happening right now" - spinners, the live composer border, cursor
  *   sparkAlt  "your selection is here" - selected rows, the current-item marker
@@ -47,66 +47,68 @@ export interface ThreadTerminalTheme {
 }
 
 const darkTheme: ThreadTerminalTheme = {
-  background: "#17111a",
+  // Olive, not coffee: a warm grey-green canvas reads calmer than brown and
+  // lets the sand text sit without halating.
+  background: "#2e332b",
   // The turn block uses the lightest step: it only has to hint at grouping, and
   // a heavier tint would compete with the composer for attention.
-  surface: "#1f1722",
-  surfaceHigh: "#2b1f2f",
-  text: "#f5eaf0",
-  softText: "#cbb8c4",
-  muted: "#9b8794",
+  surface: "#373d34",
+  surfaceHigh: "#41483e",
+  text: "#d3c9bb",
+  softText: "#b5afa0",
+  muted: "#9c9a88",
   // Lifted above muted's neighbourhood because faint also sits on the composer,
   // the most raised surface, where a darker value falls below AA-large.
-  faint: "#8d7a88",
-  // Cool blue against the plum neutrals, so thinking never reads as body text.
-  thinking: "#8fb8ff",
-  thinkingDim: "#7191c9",
-  accent: "#ff7a6b",
-  accentDim: "#c25f55",
-  accentStrong: "#ff9d91",
-  spark: "#ffd83d",
-  sparkAlt: "#7dffb0",
-  code: "#d9c4b8",
-  success: "#6ee7a0",
-  warning: "#ffb340",
-  error: "#ff4d6d",
+  faint: "#8c8a7a",
+  // Soft teal against the warm neutrals, so thinking never reads as body text.
+  thinking: "#86b0a8",
+  thinkingDim: "#6d948c",
+  accent: "#e0996f",
+  accentDim: "#bf7d58",
+  accentStrong: "#edb28c",
+  spark: "#ddbc7e",
+  sparkAlt: "#a9c083",
+  code: "#c6b28c",
+  success: "#96b374",
+  warning: "#d2a75e",
+  error: "#e07b78",
   // Borders sit above surfaceHigh, since the cards they outline are drawn on the
   // raised surfaces rather than on the base background.
-  border: "#3d2d42",
-  borderStrong: "#4f3b55",
-  selection: "#f5eaf0",
-  selectionText: "#17111a",
-  diffAdded: "#6ee7a0",
-  diffRemoved: "#ff4d6d",
+  border: "#4b5347",
+  borderStrong: "#5a6355",
+  selection: "#d3c9bb",
+  selectionText: "#2e332b",
+  diffAdded: "#96b374",
+  diffRemoved: "#e07b78",
 };
 
 const lightTheme: ThreadTerminalTheme = {
-  background: "#fdf6f8",
-  surface: "#fffbfc",
-  surfaceHigh: "#f6ebef",
-  text: "#3a2933",
-  softText: "#584452",
-  muted: "#7a6572",
-  faint: "#8f7a87",
-  thinking: "#2f5aa8",
-  thinkingDim: "#5a7cb8",
-  // Coral and gold must be pushed dark on a light background to keep contrast;
+  background: "#f7f2e7",
+  surface: "#fcf8ef",
+  surfaceHigh: "#ece5d4",
+  text: "#3f4433",
+  softText: "#5d6150",
+  muted: "#7e8271",
+  faint: "#8f9280",
+  thinking: "#3e7285",
+  thinkingDim: "#5f8794",
+  // Orange and gold must be pushed dark on cream to keep contrast;
   // gold in particular is nearly invisible at its dark-theme value.
-  accent: "#c2412f",
-  accentDim: "#cf6a5b",
-  accentStrong: "#a63424",
-  spark: "#8a6410",
-  sparkAlt: "#1c7a4a",
-  code: "#6b5344",
-  success: "#1c7a4a",
-  warning: "#8a5a10",
-  error: "#c22641",
-  border: "#e8d9de",
-  borderStrong: "#d4c1c8",
-  selection: "#3a2933",
-  selectionText: "#fdf6f8",
-  diffAdded: "#1c7a4a",
-  diffRemoved: "#c22641",
+  accent: "#b85d33",
+  accentDim: "#c97d54",
+  accentStrong: "#9d4e2a",
+  spark: "#8f6f2e",
+  sparkAlt: "#56703a",
+  code: "#7a6238",
+  success: "#4f7a3a",
+  warning: "#8a6320",
+  error: "#b34a48",
+  border: "#ddd4bd",
+  borderStrong: "#c8bda2",
+  selection: "#3f4433",
+  selectionText: "#f7f2e7",
+  diffAdded: "#4f7a3a",
+  diffRemoved: "#b34a48",
 };
 
 export const bold = createTextAttributes({ bold: true });
@@ -138,7 +140,7 @@ export function createThreadSyntaxStyle(theme: ThreadTerminalTheme): SyntaxStyle
     "markup.list": { fg: theme.muted },
     "markup.quote": { fg: theme.muted, italic: true },
     comment: { fg: theme.muted, italic: true },
-    // Inside a fenced block the coral accent is welcome: it is bounded, so the
+    // Inside a fenced block the soft orange accent is welcome: it is bounded, so the
     // colour reads as syntax rather than as emphasis leaking into prose.
     string: { fg: theme.success },
     keyword: { fg: theme.accent, bold: true },
