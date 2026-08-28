@@ -176,6 +176,10 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 未安装 Git Bash 时回退到 `pwsh`，再回退到 `powershell.exe`；两者都会注入 UTF-8 前导设置并透传最后一个原生退出码。候选按顺序尝试，只有在 shell 自身启动失败时才使用下一个，命令执行后返回非零退出码不会触发换 shell 重试。退出码、stdout 和 stderr 分开保留，所有调用均为非交互且不加载用户 profile。
 
+## Grep 工具
+
+内置 `grep` 用 ripgrep 搜索工作区文本。命中按文件分组，并让有 git 改动的文件排在前面，其次是最近修改的文件，而不是按扫盘顺序平铺。每次只返回一页（默认 20 条，最多 100 条），并带上 cursor 以便继续同一次搜索。`outputMode=files` 只返回带计数的路径，不含行文本。不搜索隐藏文件，并尊重 `.gitignore`。需要 PATH 上有 `rg`。
+
 ## Web 工具
 
 内置 `websearch` 默认通过 Exa MCP endpoint 搜索当前网络信息。设置 `THREAD_WEBSEARCH_PROVIDER=parallel` 可改用 Parallel；另一个可接受值是 `exa`。存在 `EXA_API_KEY` 或 `PARALLEL_API_KEY` 时会附加 provider 凭据；没有密钥时也可能按照 provider 自身的访问策略尝试调用。搜索接收一个 query，以及可选的结果数量（最多 20）、live-crawl 偏好、搜索深度和 context-size 上限。
@@ -283,11 +287,11 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 公共 API
 
-`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序；端到端 smoke test 也是通过这种方式使用 faux provider。它的 `session`、`versions`、`capsules` 和 `merge` 属性指向当前 worktree 唯一的 Session Tree runtime。`app.fsck()` 检查这棵树的 branches、commits、checkpoints、keep ref 和 sidecar objects。
+`ThreadApp.open()` 可以与注入的 `ModelClient` 一起嵌入其他程序。它的 `session`、`versions`、`capsules` 和 `merge` 属性指向当前 worktree 唯一的 Session Tree runtime。`app.fsck()` 检查这棵树的 branches、commits、checkpoints、keep ref 和 sidecar objects。
 
 ## 验证策略
 
-本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。当前 65 条测试覆盖 Session Tree 版本循环、`/new` 的 root-parent/current-workspace/empty-context 语义及 provenance 校验、sidecar 与 replay 安全、root 与选择性 squash、阈值压缩、stale summary 拒绝、squash 中断恢复、历史 context cost、异步 turn 准备、模型和推理档位、Windows shell 选择、模型选择记忆的优先级、Web 工具、全屏更新，以及 `/model`、`/rewind` 和 `/thread squash` 浮层。不重复测试 OpenTUI 或 `pi-ai` 依赖自身的行为。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check` 和 `bun run build`。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

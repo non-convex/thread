@@ -176,6 +176,10 @@ The built-in `bash` tool runs foreground commands in the workspace root. On Wind
 
 When no Git Bash is installed, thread falls back to `pwsh` and then `powershell.exe`; both receive a UTF-8 preamble and propagate the last native exit code. Candidates are tried in order and a later one is used only when the shell itself fails to launch, never when the command runs and reports a non-zero exit code. Exit codes, stdout and stderr are kept separate, and every invocation is non-interactive with the user's profile disabled.
 
+## Grep tool
+
+The built-in `grep` tool searches workspace text with ripgrep. Matches are grouped by file and ranked so git-changed files appear first, then recently modified files, rather than dumping hits in scan order. Each call returns one page (default 20 matches, maximum 100) and includes a cursor to continue the same search. `outputMode=files` returns ranked paths with counts and no line text. Hidden files are not searched; `.gitignore` is respected. `rg` must be on `PATH`.
+
 ## Web tools
 
 The built-in `websearch` tool searches through Exa's MCP endpoint by default. Set `THREAD_WEBSEARCH_PROVIDER=parallel` to use Parallel instead; `exa` is the other accepted value. `EXA_API_KEY` and `PARALLEL_API_KEY` add provider credentials when present, while both integrations may still be attempted without a key according to the provider's own access policy. Search accepts one query, an optional result count (maximum 20), live-crawl preference, search depth and context-size bound.
@@ -283,11 +287,11 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Public API
 
-`ThreadApp.open()` can be embedded with an injected `ModelClient`, which is also how the faux provider is used for the end-to-end smoke test. Its `session`, `versions`, `capsules` and `merge` properties refer to the worktree's single Session Tree runtime. `app.fsck()` checks that tree's branches, commits, checkpoints, keep ref and sidecar objects.
+`ThreadApp.open()` can be embedded with an injected `ModelClient`. Its `session`, `versions`, `capsules` and `merge` properties refer to the worktree's single Session Tree runtime. `app.fsck()` checks that tree's branches, commits, checkpoints, keep ref and sidecar objects.
 
 ## Verification policy
 
-`bun run check`, `bun run test` and `bun run build` are the local verification entry points. The current 65-test suite covers the Session Tree version loop, `/new` root-parent/current-workspace/empty-context semantics and provenance validation, sidecar and replay safety, root and selective squash, threshold compaction, stale-summary rejection, interrupted-squash recovery, historical context cost, asynchronous turn preparation, model/thinking behavior, Windows shell selection, remembered model-selection precedence, Web tools, full-screen updates and the `/model`, `/rewind` and `/thread squash` overlays. It does not duplicate OpenTUI or `pi-ai` dependency tests. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check` and `bun run build` are the local verification entry points. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

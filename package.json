@@ -26,8 +26,6 @@
     "build": "bun run scripts/build.ts && tsc -p tsconfig.declarations.json",
     "build:standalone": "bun run scripts/build-standalone.ts",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test test --timeout 30000",
-    "test:phase0": "bun test test/phase0 --timeout 30000",
     "start": "bun dist/thread.js",
     "dev": "bun src/cli/main.ts"
   },
