@@ -188,6 +188,18 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 
 `webfetch` follows HTTP redirects and does not currently block private, loopback or link-local destinations. Thread also has no web-specific approval policy, so do not expose it to an untrusted model in an environment where HTTP access can reach sensitive internal services.
 
+## Skills
+
+A skill is a Markdown file whose YAML frontmatter carries `name` and `description`; its body holds task-specific instructions. Thread scans one location, the user-level `~/.thread/skills` (or `$THREAD_HOME/skills`), once at startup. Project-level and third-party ecosystem directories are deliberately not scanned.
+
+A directory containing `SKILL.md` is a skill root and is not descended into, so a skill may keep scripts and reference material in subdirectories. Directories without `SKILL.md` are searched recursively; `.md` files directly in the scan root also count when they declare a description. `name` must be lowercase letters, digits and hyphens, at most 64 characters, and must match its parent directory — that last rule keeps every skill addressable by its folder and makes duplicate names impossible. `description` is required and capped at 1024 characters. A skill that fails validation is rejected rather than loaded with warnings, because an unusable name cannot be invoked reliably; `/skill` and `/thread status` list the reasons so a rejected skill is never silent.
+
+Only `name`, `description` and `location` enter the system prompt. The body is loaded on demand by the `skill` tool, which also reports the skill's base directory and samples its companion files so relative references resolve without a second call. Bodies are capped at 32 KB keeping the **head**, the opposite of `bash`: a skill states its purpose and preconditions first. Setting `disable-model-invocation: true` withholds a skill from both the prompt and the tool, leaving `/skill <name>` as the only way in.
+
+`/skill` lists what is installed. `/skill <name> [extra instructions]` expands the body into an ordinary user turn, so the session log records the text the model actually received rather than the bare command.
+
+Skills are discovered once and never rescanned mid-session: they sit in the system prompt at the very front of every request, which must stay byte-identical for the provider's prompt cache to keep hitting. Adding or editing a skill therefore takes effect on the next start.
+
 ## Version commands
 
 ```text
@@ -195,6 +207,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 /compact
 /new
 /model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
+/skill [<name> [instructions]]
 /thread status
 /thread branches
 /thread branch <name> [<from>]
@@ -223,7 +236,7 @@ Every squash checkpoint reuses its parent's workspace tree and retention commit;
 
 `HEAD`, thread branch names, full IDs and unambiguous commit/checkpoint ID prefixes are valid refs. Thread branches are independent of the main repository's Git branches: switching a thread branch never moves the main Git HEAD, index, refs or reflog.
 
-`/thread diff` is captured and re-issued to the agent as a wrapped user message instead of running through a dedicated diff service. The agent reads the version data itself with its normal tools — the sidecar session log, object store and Context Capsules are described in its system prompt — and answers as an ordinary turn, so the exchange becomes append-only session history. A bare `/thread diff` compares the last thread commit with the current state; `<from> <to>` compares two explicit versions, and `--facts` asks for deterministic facts without interpretation. Committed endpoints carry a Context Capsule the agent may consult when its own memory of that version has been compacted; the current-state endpoint never has one, so the agent relies on its live memory. Because it is an agent turn, `/thread diff` requires a configured model.
+`/thread diff` is captured and re-issued to the agent as a wrapped user message instead of running through a dedicated diff service. The agent reads the version data itself with its normal tools; the sidecar session log, object store and Context Capsule paths are briefed inside that wrapped message rather than in the system prompt, so the agent is unaware of the version machinery until a comparison is actually requested and the cached prompt prefix stays untouched. Its reply is an ordinary turn, so the exchange becomes append-only session history. A bare `/thread diff` compares the last thread commit with the current state; `<from> <to>` compares two explicit versions, and `--facts` asks for deterministic facts without interpretation. Committed endpoints carry a Context Capsule the agent may consult when its own memory of that version has been compacted; the current-state endpoint never has one, so the agent relies on its live memory. Because it is an agent turn, `/thread diff` requires a configured model.
 
 A bare `/rewind` in the TUI opens a panel listing user turns with their path status and time; arrow keys move the highlight and Enter must be pressed twice, because the second press discards everything after the selected turn. Passing an explicit ID rewinds directly. `/thread history` classifies turns as current-path, retained, off-path or synthetic-squash instead of filtering by the branch name that originally created them.
 

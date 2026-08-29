@@ -74,15 +74,7 @@ export interface ThreadTuiViewModel {
 export class ThreadTuiController {
   readonly state: UiState;
   readonly meta: TerminalMeta;
-  readonly slashSuggestions: readonly SlashSuggestion[] = [
-    { name: "clear", description: "Clear the visible transcript without changing thread context" },
-    { name: "compact", description: "Compact older context and retain recent interactions" },
-    { name: "model", description: "Open a list and choose the active model" },
-    { name: "new", description: "Start an empty-context branch from the Session Tree root" },
-    { name: "thread", description: "Thread version commands: status, history, commit, diff, merge, restore" },
-    { name: "rewind", description: "Restore to before a historical turn" },
-    { name: "exit", description: "Exit thread" },
-  ];
+  readonly slashSuggestions: readonly SlashSuggestion[];
 
   private readonly listeners = new Set<Listener>();
   private readonly batcher: UiEventBatcher;
@@ -99,6 +91,20 @@ export class ThreadTuiController {
 
   constructor(private readonly app: ThreadApp) {
     const status = app.versions.status();
+    this.slashSuggestions = [
+      { name: "clear", description: "Clear the visible transcript without changing thread context" },
+      { name: "compact", description: "Compact older context and retain recent interactions" },
+      { name: "model", description: "Open a list and choose the active model" },
+      { name: "new", description: "Start an empty-context branch from the Session Tree root" },
+      // Only offered when something is installed, so the hint never advertises an
+      // empty feature.
+      ...(app.skills.length > 0
+        ? [{ name: "skill", description: "List installed skills, or load one into this turn" }]
+        : []),
+      { name: "thread", description: "Thread version commands: status, history, commit, diff, merge, restore" },
+      { name: "rewind", description: "Restore to before a historical turn" },
+      { name: "exit", description: "Exit thread" },
+    ];
     this.state = createUiState(status.currentBranch, status.headCheckpointId, []);
     this.meta = {
       rootPath: app.rootPath,

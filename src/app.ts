@@ -18,7 +18,16 @@ import { VersionService } from "./revisions/version-service.js";
 import { SessionLogStore } from "./session/log-store.js";
 import { SessionRecallService } from "./session/recall.js";
 import { SessionService } from "./session/service.js";
+import {
+  formatSkillsSection,
+  loadSkills,
+  skillsDirectory,
+  type LoadedSkills,
+  type Skill,
+  type SkillDiagnostic,
+} from "./skills/loader.js";
 import { registerBuiltinTools } from "./tools/builtins.js";
+import { createSkillTool, formatSkillInvocation } from "./tools/skill.js";
 import { createSessionReadTool, createSessionRecallTool } from "./tools/session-recall.js";
 import { ToolRegistry } from "./tools/types.js";
 import { safeUiEvent, type UiEventSink } from "./ui/events.js";
@@ -39,6 +48,11 @@ export interface ThreadAppOptions {
    * because it raises the cache-write price.
    */
   cacheRetention?: CacheRetention;
+  /**
+   * Pre-discovered skills, bypassing the user-level scan. Embedders supply this to
+   * control what a session advertises; the CLI leaves it unset.
+   */
+  skills?: LoadedSkills;
   /**
    * Persists interactive `/model` and thinking-level choices so the next start
    * reuses them. Omitted by embedders and tests, which then keep the current
@@ -65,60 +79,50 @@ const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low",
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
 
 /**
- * Version metacognition appended to every agent system prompt. Composed once
- * per runtime build (not per request) with this tree's concrete paths, so
- * the string stays byte-stable for the lifetime of a Session Tree and prompt-cache
- * prefixes keep hitting. The agent uses this section to answer version
- * questions — including wrapped /thread diff commands — with its normal
- * atomic tools instead of a dedicated service. It also teaches the precise
- * log-query patterns (quoted type strings, batch unwrapping) and a one-call
- * reference chain so typical version questions resolve in a single tool round.
+ * Version-system briefing carried by the `/thread diff` prompt. It used to live in
+ * the system prompt, but the agent needs it only when a version comparison is
+ * actually requested, and the system prompt sits in front of every request where
+ * a byte of drift costs the whole prompt cache. Delivering it as part of the
+ * wrapped user message keeps the agent unaware of the version machinery the rest
+ * of the time and leaves the cached prefix untouched.
  */
-function versionSystemPromptSection(log: SessionLogStore, versions: VersionService): string {
+function versionBriefing(log: SessionLogStore, versions: VersionService): string[] {
   return [
-    "## Version system (thread)",
-    "",
-    "This Session Tree is versioned: every durable state change is a checkpoint that pairs a full",
-    "workspace snapshot with a conversation-context head. Thread commits name checkpoints as immutable",
-    "milestones; branches move between checkpoints. All version data is append-only and readable with",
-    "your existing tools:",
-    "",
-    `- Session log: ${log.eventsPath} — one JSON object per line, the canonical record of every`,
-    "  checkpoint, branch move and commit. Query it with grep, not by reading it whole; it",
-    "  grows unboundedly. Events may nest inside `batch` records",
-    '  (`{"type":"batch","events":[...]}`), so unwrap matched lines with JSON parsing rather than',
+    "This Session Tree is versioned: every durable state change is a checkpoint pairing a full",
+    "workspace snapshot with a conversation-context head. Thread commits name checkpoints; branches",
+    "move between them. All version data is append-only and readable with your normal tools:",
+    `- Session log: ${log.eventsPath} — one JSON object per line. Query it with grep, never by`,
+    "  reading it whole; it grows unboundedly. Events may nest inside `batch` records",
+    '  (`{"type":"batch","events":[...]}`), so unwrap matched lines by parsing JSON rather than',
     '  slicing text. Grep the quoted type string (e.g. `"type":"thread_commit_created"`): bare event',
     "  names also occur inside stored conversation messages and match falsely. Key events:",
     "  `thread_commit_created` (commit.checkpointId), `checkpoint_created` (checkpoint.id,",
     "  .parentCheckpointIds, .workspaceTreeOid, .sessionHeadId, .reason), `branch_moved` (branchName,",
-    "  newCheckpointId). Refs resolve as: HEAD (current branch head), a branch name (its latest",
-    "  branch_moved target), a thread commit id or prefix, or a checkpoint id or prefix.",
+    "  newCheckpointId). Refs resolve as: HEAD, a branch name (its latest branch_moved target), or a",
+    "  thread commit / checkpoint id or unambiguous prefix.",
     `- Sidecar object store: ${versions.workspace.storeGitDir} — an independent Git object database`,
     "  holding every snapshot. Read it with git, e.g.",
-    `  git --git-dir=${versions.workspace.storeGitDir} diff-tree -r <from-tree> <to-tree>.`,
+    `  git --git-dir=${versions.workspace.storeGitDir} diff-tree -r --stat <from-tree> <to-tree>.`,
     `- Context Capsules: ${path.join(log.cacheDir, "capsules", "<checkpointId>.json")} — a lossy`,
-    "  summary of a checkpoint's working context, generated by /thread commit and merges. Only",
-    "  committed endpoints have one; the current state never does. When a version comparison needs",
-    "  context details your own memory no longer holds (for example after compaction), read the",
-    "  capsule of the committed endpoint instead of guessing; treat it as a lossy cache, not a",
-    "  source of truth.",
-    "- The most recent `checkpoint_created` line in the log is this turn's base: a mechanical snapshot",
-    "  of the workspace exactly as the current turn began. When a task asks about \"now\" or the",
-    "  current state, diff against that tree instead of approximating the live workspace by hand.",
-    "- A last-commit-to-now workspace diff fits in one bash call: grep the quoted",
-    "  `thread_commit_created` type and read the last match commit.checkpointId; grep that id,",
-    "  unwrap, and read checkpoint.workspaceTreeOid from the event that carries the `checkpoint`",
-    "  object (the id also appears inside branch_moved and turn records); grep the quoted",
-    "  `checkpoint_created` type and read the last match checkpoint.workspaceTreeOid — this turn's",
-    "  base; then `git --git-dir=<store> diff-tree -r --stat <from-tree> <to-tree>`.",
-    "",
-    "Rules:",
-    "- Version queries are strictly read-only. Never write to the session log or the sidecar store,",
-    "  and never run git commands that create objects, refs or commits in it. Version-mutating",
-    "  operations are driven by the user through /thread commands.",
-    "- If the sidecar paths are outside the workspace root (linked worktrees), the read/grep/list",
-    "  tools cannot reach them; use bash instead.",
-  ].join("\n");
+    "  summary of a committed checkpoint's working context. Only committed endpoints have one; the",
+    "  current state never does. Read one when you need context details your own memory no longer",
+    "  holds, and treat it as a lossy cache rather than a source of truth.",
+    "- The most recent `checkpoint_created` line is this turn's base: a mechanical snapshot of the",
+    "  workspace as this turn began. Diff against that tree instead of approximating by hand.",
+    "These paths are read-only here: never write to the session log or the sidecar store, and never",
+    "run git commands that create objects, refs or commits in it. If a path lies outside the",
+    "workspace root, the read/grep/list tools cannot reach it — use bash.",
+  ];
+}
+
+/**
+ * Skills advertised to the model, or nothing when none are installed. Returned as
+ * an array so an empty skill set leaves the prompt byte-identical to a build
+ * without the feature, instead of appending a stray blank section.
+ */
+function skillsSystemPromptSection(skills: readonly Skill[]): string[] | undefined {
+  const section = formatSkillsSection(skills);
+  return section ? [section] : undefined;
 }
 
 export class ThreadApp {
@@ -134,6 +138,7 @@ export class ThreadApp {
   private readonly systemPrompt: string | undefined;
   private readonly cacheRetention: CacheRetention | undefined;
   private readonly commandRouter: ThreadCommandRouter;
+  private readonly loadedSkills: LoadedSkills;
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
   private currentThinkingLevel: ModelThinkingLevel = "off";
@@ -146,6 +151,7 @@ export class ThreadApp {
     log: SessionLogStore,
     session: SessionService,
     versions: VersionService,
+    skills: LoadedSkills,
   ) {
     this.rootPath = workspace.rootPath;
     this.workspace = workspace;
@@ -154,6 +160,7 @@ export class ThreadApp {
     this.onModelStateChange = options.onModelStateChange;
     this.systemPrompt = options.systemPrompt;
     this.cacheRetention = options.cacheRetention;
+    this.loadedSkills = skills;
     this.tools = new ToolRegistry();
     registerBuiltinTools(this.tools);
     /* Registered here, not in buildRuntime: the SessionService outlives every runtime
@@ -161,6 +168,9 @@ export class ThreadApp {
     const recall = new SessionRecallService(session);
     this.tools.register(createSessionRecallTool(recall));
     this.tools.register(createSessionReadTool(recall));
+    if (skills.skills.some((skill) => !skill.disableModelInvocation)) {
+      this.tools.register(createSkillTool(() => this.loadedSkills.skills));
+    }
     this.commands = new CommandRegistry();
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);
@@ -183,11 +193,25 @@ export class ThreadApp {
       const sidecar = new SidecarWorkspaceStore({ workspace, sessionId: log.sessionId });
       const versions = new VersionService(session, sidecar);
       await versions.initialize(workspace.rootPath);
-      return new ThreadApp(options, workspace, log, session, versions);
+      /* Discovered once here, never rescanned: the advertised skills are folded
+       * into the system prompt, which sits at the very front of every request and
+       * must stay byte-identical for the prompt cache to keep hitting. */
+      const skills = options.skills ?? await loadSkills();
+      return new ThreadApp(options, workspace, log, session, versions, skills);
     } catch (error) {
       await log?.close();
       throw error;
     }
+  }
+
+  /** Skills discovered at startup, including those hidden from the model. */
+  get skills(): readonly Skill[] {
+    return this.loadedSkills.skills;
+  }
+
+  /** Warnings raised while loading skills; empty when every skill parsed cleanly. */
+  get skillDiagnostics(): readonly SkillDiagnostic[] {
+    return this.loadedSkills.diagnostics;
   }
 
   get session(): SessionService {
@@ -320,6 +344,24 @@ export class ThreadApp {
     return bound;
   }
 
+  /**
+   * Skill inventory including entries hidden from the model, plus any load
+   * diagnostics. A skill that failed validation disappears silently otherwise,
+   * which is the hardest failure to notice.
+   */
+  private describeSkills(): string {
+    const lines: string[] = [`skills directory: ${skillsDirectory()}`];
+    if (this.loadedSkills.skills.length === 0) lines.push("(no skills installed)");
+    for (const skill of this.loadedSkills.skills) {
+      const flag = skill.disableModelInvocation ? " [manual only]" : "";
+      lines.push(`- ${skill.name}${flag}: ${skill.description}`);
+    }
+    for (const diagnostic of this.loadedSkills.diagnostics) {
+      lines.push(`${diagnostic.kind}: ${diagnostic.message} (${diagnostic.path})`);
+    }
+    return lines.join("\n");
+  }
+
   private configureRuntime(model: ModelClient | undefined): void {
     this.currentModel = this.bindCacheOptions(model, this.runtime.log.sessionId);
     this.currentThinkingLevel = this.clampThinkingLevel(model, this.preferredThinkingLevel);
@@ -352,7 +394,10 @@ export class ThreadApp {
     const semantic = this.currentModel ? new ModelSemanticRunner(this.currentModel, reasoning) : undefined;
     const capsules = new CapsuleService(session, cache, semantic);
     const merge = new MergeService(versions, session, capsules, semantic);
-    const systemPrompt = `${this.systemPrompt ?? DEFAULT_SYSTEM_PROMPT}\n\n${versionSystemPromptSection(log, versions)}`;
+    const systemPrompt = [
+      this.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      ...(skillsSystemPromptSection(this.loadedSkills.skills) ?? []),
+    ].join("\n\n");
     const loop = this.currentModel
       ? new AgentLoop(
           this.rootPath,
@@ -552,6 +597,8 @@ export class ThreadApp {
       merge: this.merge,
       capsules: this.capsules,
       model: this.currentModel,
+      skills: this.loadedSkills.skills,
+      skillDiagnostics: this.loadedSkills.diagnostics,
       signal: options.signal,
     };
     const isClearCommand = input === "/clear" || (input.startsWith("/clear") && /\s/.test(input[6] ?? ""));
@@ -573,6 +620,31 @@ export class ThreadApp {
         safeUiEvent(options.onUiEvent, { type: "command_finished", name: "model", ok: false });
         throw error;
       }
+    }
+    /* /skill is intercepted here rather than registered as a thread command: with
+     * an argument it expands into an ordinary user turn, so what the log records is
+     * the skill text the model actually received, not the bare command. */
+    const isSkillCommand = input === "/skill" || (input.startsWith("/skill") && /\s/.test(input[6] ?? ""));
+    if (isSkillCommand) {
+      const rest = input.slice("/skill".length).trim();
+      if (!rest) {
+        safeUiEvent(options.onUiEvent, { type: "command_started", name: "skill" });
+        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "skill", ok: true });
+        return { kind: "command", result: ephemeral(this.describeSkills()) };
+      }
+      const separator = rest.search(/\s/);
+      const name = separator === -1 ? rest : rest.slice(0, separator);
+      const extra = separator === -1 ? "" : rest.slice(separator + 1).trim();
+      const skill = this.loadedSkills.skills.find((candidate) => candidate.name === name);
+      if (!skill) {
+        const names = this.loadedSkills.skills.map((candidate) => candidate.name).join(", ");
+        throw new Error(`Unknown skill: ${name}. Available skills: ${names || "(none)"}`);
+      }
+      if (!this.loop) throw new Error("/skill requires a configured model");
+      return {
+        kind: "turn",
+        result: await this.loop.run(formatSkillInvocation(skill, extra || undefined), options),
+      };
     }
     const isCompactCommand = input === "/compact" || (input.startsWith("/compact") && /\s/.test(input[8] ?? ""));
     if (isCompactCommand) {
@@ -611,10 +683,10 @@ export class ThreadApp {
     }
     /* /thread diff is captured here and re-issued to the agent as a wrapped
      * user message instead of routing to a dedicated diff service: the agent
-     * reads the version data itself with its atomic tools (see the version
-     * section of its system prompt) and its reply is an ordinary append-only
-     * turn. Persisting the wrapped prompt — not the bare command — keeps the
-     * canonical log faithful to what the model actually saw. */
+     * reads the version data itself with its atomic tools, briefed by the
+     * prompt below, and its reply is an ordinary append-only turn. Persisting
+     * the wrapped prompt — not the bare command — keeps the canonical log
+     * faithful to what the model actually saw. */
     const isThreadDiffCommand = input === "/thread diff" ||
       (input.startsWith("/thread diff") && /\s/.test(input["/thread diff".length] ?? ""));
     if (isThreadDiffCommand) {
@@ -632,6 +704,8 @@ export class ThreadApp {
         "The user ran the slash command:",
         "",
         `    ${command}`,
+        "",
+        ...versionBriefing(this.runtime.log, this.versions),
         "",
         ...(refs.length === 0
           ? [

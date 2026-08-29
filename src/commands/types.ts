@@ -41,6 +41,10 @@ export interface ThreadCommandContext {
   merge: MergeService;
   capsules: CapsuleService;
   model: import("../agent/model-client.js").ModelClient | undefined;
+  /** Skill load warnings, surfaced by status so a rejected skill is not silent. */
+  skillDiagnostics?: readonly import("../skills/loader.js").SkillDiagnostic[];
+  /** Skills discovered at startup, including entries hidden from the model. */
+  skills?: readonly import("../skills/loader.js").Skill[];
   signal: AbortSignal;
 }
 

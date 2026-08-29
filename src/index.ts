@@ -41,6 +41,14 @@ export type {
   HistoryViewItem,
 } from "./commands/types.js";
 export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
+export {
+  formatSkillsSection,
+  loadSkills,
+  skillsDirectory,
+  type LoadedSkills,
+  type Skill,
+  type SkillDiagnostic,
+} from "./skills/loader.js";
 export type { UiEvent, UiEventSink } from "./ui/events.js";
 export { ThreadTerminalApp, type TerminalAppOptions, type TerminalMode } from "./ui/terminal/app.js";
 export type * from "./domain.js";

@@ -188,6 +188,18 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `webfetch` 会跟随 HTTP redirect，目前不会阻止 private、loopback 或 link-local 目标。thread 也没有 Web 专用审批策略，因此当 HTTP 访问能够到达敏感内部服务时，不应让不受信任的模型直接使用它。
 
+## Skills
+
+skill 是一个 Markdown 文件，YAML frontmatter 里带 `name` 和 `description`，正文是针对特定任务的指令。thread 只扫一个位置：用户级的 `~/.thread/skills`（或 `$THREAD_HOME/skills`），且只在启动时扫一次。项目级目录和第三方生态目录都刻意不扫。
+
+含 `SKILL.md` 的目录即为 skill 根，不再向下递归，因此 skill 可以把脚本和参考资料放在子目录里。不含 `SKILL.md` 的目录会被递归搜索；扫描根目录下的直接 `.md` 文件，只要声明了 description 也算。`name` 必须是小写字母、数字和连字符，不超过 64 字符，并且必须与父目录名一致——最后这条规则让每个 skill 都能用它所在的文件夹寻址，也使重名不可能出现。`description` 必填，上限 1024 字符。校验失败的 skill 会被拒绝加载，而不是带着警告装进去，因为不可用的名字无法被可靠调用；`/skill` 和 `/thread status` 会列出原因，被拒的 skill 不会无声消失。
+
+进入系统提示的只有 `name`、`description` 和 `location`。正文由 `skill` 工具按需加载，同时给出该 skill 的基准目录，并采样同目录文件，让相对引用不必再多跑一次调用。正文上限 32KB 且**保留头部**，与 `bash` 相反：skill 的开头先说明用途和前提条件。设置 `disable-model-invocation: true` 会让该 skill 既不进提示也不进工具，只能通过 `/skill <name>` 进入。
+
+`/skill` 列出已安装的 skill。`/skill <name> [附加指令]` 把正文展开成一次普通的用户轮次，于是会话日志记录的是模型真正收到的文本，而不是那条裸命令。
+
+skill 只发现一次，会话中途不重扫：它们位于系统提示中，处在每个请求的最前端，而那部分必须逐字节稳定，提供方的 prompt 缓存才能持续命中。因此新增或修改 skill 在下次启动时生效。
+
 ## 版本命令
 
 ```text
@@ -195,6 +207,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 /compact
 /new
 /model [all | list [<provider>] | <provider>/<model> | <provider> <model>]
+/skill [<name> [instructions]]
 /thread status
 /thread branches
 /thread branch <name> [<from>]
@@ -223,7 +236,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 `HEAD`、thread branch 名称、完整 ID，以及无歧义的 commit/checkpoint ID 前缀都是有效 ref。Thread branch 与主仓库 Git branch 相互独立：切换 thread branch 永远不会移动主 Git 的 HEAD、index、refs 或 reflog。
 
-`/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据——system prompt 中描述了 sidecar 的 session log、object store 与 Context Capsule 的位置和用法——然后以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。有提交的端点附带 Context Capsule，agent 对该版本的记忆已被压缩时可以查阅；当前状态端点永远没有 Capsule，agent 依赖自己的即时记忆。因为它是 agent turn，`/thread diff` 需要已配置模型。
+`/thread diff` 会被拦截并包装成用户消息重新发给 agent，而不是走独立的 diff 服务。agent 用它的常规工具自行读取版本数据；sidecar 的 session log、object store 与 Context Capsule 的位置和用法写在那条包装消息里，而不是在 system prompt 中——这样 agent 平时对版本机制毫无感知，只有真正请求比较时才获得这些知识，缓存的提示前缀也不受影响。它以一个普通 turn 作答，因此这次问答本身就是 append-only 的 session 历史。不带参数的 `/thread diff` 比较上一个 thread commit 与当前状态；`<from> <to>` 比较两个显式版本，`--facts` 要求只报告确定性事实、不做解读。有提交的端点附带 Context Capsule，agent 对该版本的记忆已被压缩时可以查阅；当前状态端点永远没有 Capsule，agent 依赖自己的即时记忆。因为它是 agent turn，`/thread diff` 需要已配置模型。
 
 在 TUI 中直接输入 `/rewind` 会打开浮层，列出用户 turn 的路径状态和时间；方向键移动高亮，Enter 需要连按两次，因为第二次会丢弃所选 turn 之后的全部内容。显式给出 ID 则直接回滚。`/thread history` 不再按最初创建 turn 的 branch name 过滤，而是把历史标记为 current-path、retained、off-path 或 synthetic-squash。
 

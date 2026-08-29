@@ -27,6 +27,12 @@ const status: ThreadCommand = {
         `context head: ${value.sessionHeadId ?? "(empty)"}`,
         `main Git branch: ${git.stdout.toString("utf8").trim() || "(detached/unborn)"}`,
         `branches: ${value.branchCount}; thread commits: ${value.commitCount}`,
+        ...(context.skills && context.skills.length > 0
+          ? [`skills: ${context.skills.map((skill) => skill.name).join(", ")}`]
+          : []),
+        ...(context.skillDiagnostics ?? []).map(
+          (diagnostic) => `skill ${diagnostic.kind}: ${diagnostic.message} (${diagnostic.path})`,
+        ),
         ...context.versions.warnings.map((warning) => `warning: ${warning}`),
       ].join("\n"),
     );
