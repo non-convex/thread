@@ -9,6 +9,12 @@ export interface ToolResult {
 export interface ToolContext {
   rootPath: string;
   signal: AbortSignal;
+  /**
+   * Present when an interactive front end can put a question in front of the
+   * user. Tools that need a decision stay unregistered without it, so a plain or
+   * embedded session never parks a turn waiting for input nobody can give.
+   */
+  ask?: import("../ui/ask.js").AskPresenter;
 }
 
 export interface AgentTool<TArgs = Record<string, unknown>> {

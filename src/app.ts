@@ -27,9 +27,11 @@ import {
   type SkillDiagnostic,
 } from "./skills/loader.js";
 import { registerBuiltinTools } from "./tools/builtins.js";
+import { createAskTool } from "./tools/ask.js";
 import { createSkillTool, formatSkillInvocation } from "./tools/skill.js";
 import { createSessionReadTool, createSessionRecallTool } from "./tools/session-recall.js";
 import { ToolRegistry } from "./tools/types.js";
+import type { AskPresenter } from "./ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "./ui/events.js";
 import { discoverGitWorkspace, type GitWorkspace } from "./workspace/discovery.js";
 import { SidecarWorkspaceStore } from "./workspace/sidecar-store.js";
@@ -139,6 +141,7 @@ export class ThreadApp {
   private readonly cacheRetention: CacheRetention | undefined;
   private readonly commandRouter: ThreadCommandRouter;
   private readonly loadedSkills: LoadedSkills;
+  private askPresenter: AskPresenter | undefined;
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
   private currentThinkingLevel: ModelThinkingLevel = "off";
@@ -171,6 +174,10 @@ export class ThreadApp {
     if (skills.skills.some((skill) => !skill.disableModelInvocation)) {
       this.tools.register(createSkillTool(() => this.loadedSkills.skills));
     }
+    /* Registered unconditionally, but it reports itself unavailable until a front
+     * end attaches a presenter. Registering later is not an option: the tool list
+     * is part of the cached request prefix, so it must not change mid-session. */
+    this.tools.register(createAskTool());
     this.commands = new CommandRegistry();
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);
@@ -204,7 +211,20 @@ export class ThreadApp {
     }
   }
 
+  /**
+   * Attaches the interactive question channel and returns a detach function. Only
+   * a front end that can render a choice panel should call this; without it the
+   * `ask` tool tells the model to pick a default instead of parking the turn.
+   */
+  setAskPresenter(presenter: AskPresenter | undefined): () => void {
+    this.askPresenter = presenter;
+    return () => {
+      if (this.askPresenter === presenter) this.askPresenter = undefined;
+    };
+  }
+
   /** Skills discovered at startup, including those hidden from the model. */
+
   get skills(): readonly Skill[] {
     return this.loadedSkills.skills;
   }
@@ -409,6 +429,7 @@ export class ThreadApp {
           {
             systemPrompt,
             ...(reasoning ? { reasoning } : {}),
+            askPresenter: () => this.askPresenter,
           },
         )
       : undefined;

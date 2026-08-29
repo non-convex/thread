@@ -2,12 +2,14 @@ import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../utils/estimate.js";
+import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
 import { runGit } from "../../workspace/git.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
   openEphemeralView,
   reduceUiEvent,
+  type AskScreen,
   type TranscriptItem,
   type UiScreen,
   type UiState,
@@ -52,6 +54,20 @@ export interface TerminalKey {
   ctrl: boolean;
   shift: boolean;
   meta: boolean;
+  /** Raw sequence, used to accept typed characters in the ask panel. */
+  sequence?: string;
+}
+
+/**
+ * The character a key would type, or undefined for control and navigation keys.
+ * Used by the ask panel, where any printable key starts a free-text answer.
+ */
+function printableKey(key: TerminalKey): string | undefined {
+  if (key.ctrl || key.meta) return undefined;
+  const sequence = key.sequence;
+  if (!sequence || sequence.length !== 1) return undefined;
+  const code = sequence.codePointAt(0)!;
+  return code >= 0x20 && code !== 0x7f ? sequence : undefined;
 }
 
 type Listener = () => void;
@@ -86,6 +102,9 @@ export class ThreadTuiController {
   private replayRequested = false;
   private committedIds = new Set<string>();
   private currentTurn: { userEntryId: string | undefined; input: string } | undefined;
+  private pendingAsk: { resolve: (answers: AskAnswers) => void; reject: (error: Error) => void } | undefined;
+  private askAnswers: string[][] = [];
+  private readonly detachAsk: () => void;
   private resolveDone: (() => void) | undefined;
   private readonly donePromise: Promise<void>;
 
@@ -125,6 +144,9 @@ export class ThreadTuiController {
       this.resolveDone = resolve;
     });
     this.batcher = new UiEventBatcher((event) => this.applyUiEvent(event));
+    this.detachAsk = app.setAskPresenter({
+      present: (request, signal) => this.presentAsk(request, signal),
+    });
     this.syncTranscript("reset");
   }
 
@@ -149,6 +171,11 @@ export class ThreadTuiController {
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
     this.idleExitTimer = undefined;
+    /* A parked question outlives the renderer otherwise, and its promise would
+     * keep the turn — and the process — waiting for an answer nobody can give.
+     * Aborting rather than dismissing, because the session itself is going away. */
+    this.pendingAsk?.reject(new DOMException("Aborted", "AbortError"));
+    this.detachAsk();
     this.listeners.clear();
   }
 
@@ -224,6 +251,10 @@ export class ThreadTuiController {
     const up = key.name === "up" || key.name === "k";
     const down = key.name === "down" || key.name === "j";
     const enter = key.name === "return" || key.name === "kpenter" || key.name === "linefeed";
+    /* The ask panel handles its own navigation, unlike the pickers below: it also
+     * needs space to toggle a multi-select and printable keys for a free-text
+     * answer, so selection cannot live in a view-local signal. */
+    if (screen.type === "ask") return this.handleAskKey(screen, key, { up, down, enter });
     if (screen.type === "model_picker" || screen.type === "rewind" || screen.type === "thread_squash") {
       /* Arrow-key navigation for these floating panels is handled by the
        * view (a local Solid signal, written back onto screen.selected) so it
@@ -491,6 +522,133 @@ export class ThreadTuiController {
     const screen = this.state.screen;
     if (screen.type !== "rewind") return;
     await this.advanceRestore(screen);
+  }
+
+  /**
+   * Opens the choice panel and resolves once the user commits. The panel replaces
+   * whatever overlay was open, because the parked turn is now the only thing that
+   * can make progress.
+   */
+  private presentAsk(request: AskRequest, signal: AbortSignal): Promise<AskAnswers> {
+    return new Promise<AskAnswers>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      const settle = (outcome: () => void) => {
+        signal.removeEventListener("abort", onAbort);
+        this.pendingAsk = undefined;
+        if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
+        this.notify();
+        outcome();
+      };
+      const onAbort = () => settle(() => reject(new DOMException("Aborted", "AbortError")));
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.pendingAsk = {
+        resolve: (answers) => settle(() => resolve(answers)),
+        reject: (error) => settle(() => reject(error)),
+      };
+      this.state.screen = {
+        type: "ask",
+        request,
+        questionIndex: 0,
+        chosen: request.questions.map(() => []),
+        selected: 0,
+        customText: undefined,
+      };
+      this.notify();
+    });
+  }
+
+  /**
+   * Panel keys: arrows move, space toggles a choice when multi-select is on, enter
+   * commits the current question and advances, and esc dismisses the whole request.
+   * Typing switches to a free-text answer, which is always available so the offered
+   * options never box the user in.
+   */
+  private handleAskKey(
+    screen: AskScreen,
+    key: TerminalKey,
+    keys: { up: boolean; down: boolean; enter: boolean },
+  ): boolean {
+    const question = screen.request.questions[screen.questionIndex];
+    if (!question) return true;
+    const optionCount = question.options.length;
+
+    if (screen.customText !== undefined) {
+      if (key.name === "escape") {
+        screen.customText = undefined;
+        this.notify();
+        return true;
+      }
+      if (keys.enter) {
+        const text = screen.customText.trim();
+        if (text) this.commitAskAnswer(screen, [text]);
+        return true;
+      }
+      if (key.name === "backspace") {
+        screen.customText = screen.customText.slice(0, -1);
+        this.notify();
+        return true;
+      }
+      const typed = printableKey(key);
+      if (typed) {
+        screen.customText += typed;
+        this.notify();
+      }
+      return true;
+    }
+
+    if (key.name === "escape") {
+      this.pendingAsk?.reject(new AskDismissedError());
+      return true;
+    }
+    if (keys.up || keys.down) {
+      const delta = keys.up ? -1 : 1;
+      screen.selected = (screen.selected + delta + optionCount) % optionCount;
+      this.notify();
+      return true;
+    }
+    if (key.name === "space" && question.multiple) {
+      const current = screen.chosen[screen.questionIndex] ?? [];
+      const next: number[] = current.includes(screen.selected)
+        ? current.filter((index: number) => index !== screen.selected)
+        : [...current, screen.selected];
+      screen.chosen[screen.questionIndex] = next;
+      this.notify();
+      return true;
+    }
+    if (keys.enter) {
+      const toggled: number[] = screen.chosen[screen.questionIndex] ?? [];
+      const picked = question.multiple && toggled.length > 0 ? toggled : [screen.selected];
+      this.commitAskAnswer(screen, picked.map((index: number) => question.options[index]!.label));
+      return true;
+    }
+    const typed = printableKey(key);
+    if (typed) {
+      screen.customText = typed;
+      this.notify();
+      return true;
+    }
+    return true;
+  }
+
+  /** Records one answer and either advances to the next question or resolves. */
+  private commitAskAnswer(screen: AskScreen, labels: string[]): void {
+    this.askAnswers[screen.questionIndex] = labels;
+    const next = screen.questionIndex + 1;
+    if (next < screen.request.questions.length) {
+      screen.questionIndex = next;
+      screen.selected = 0;
+      screen.customText = undefined;
+      this.notify();
+      return;
+    }
+    const answers = screen.request.questions.map(
+      (_: unknown, index: number) => this.askAnswers[index] ?? [],
+    );
+    this.askAnswers = [];
+    this.pendingAsk?.resolve(answers);
   }
 
   private async advanceSquash(): Promise<void> {

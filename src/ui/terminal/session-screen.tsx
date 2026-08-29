@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../agent/compaction.js";
-import type { LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
+import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -357,6 +357,115 @@ function RewindOverlay(props: {
   );
 }
 
+/* The agent's question panel. Options carry a description, so each choice takes
+ * two rows and the option count is capped low by the tool itself. */
+const ASK_OVERLAY_MAX_OPTIONS = 4;
+
+function AskOverlay(props: {
+  screen: Accessor<AskScreen>;
+  resources: ThreadViewResources;
+  contentWidth: Accessor<number>;
+}) {
+  const theme = () => props.resources.theme;
+  const question = () => props.screen().request.questions[props.screen().questionIndex];
+  const total = () => props.screen().request.questions.length;
+  const chosen = () => props.screen().chosen[props.screen().questionIndex] ?? [];
+  const typing = () => props.screen().customText !== undefined;
+  return (
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+        <text
+          width={Math.max(8, props.contentWidth() - 26)}
+          flexShrink={1}
+          height={1}
+          wrapMode="none"
+          truncate={true}
+          fg={theme().spark}
+          attributes={bold}
+        >
+          {question()?.header ?? "question"}
+          {total() > 1 ? `  ${props.screen().questionIndex + 1}/${total()}` : ""}
+        </text>
+        <text height={1} wrapMode="none" fg={theme().faint}>
+          {typing() ? "⏎ submit · esc back" : question()?.multiple ? "space mark · ⏎ ok" : "↑/↓ · ⏎ ok · esc"}
+        </text>
+      </box>
+      <text
+        width={props.contentWidth() - 2}
+        height={1}
+        wrapMode="none"
+        truncate={true}
+        fg={theme().text}
+      >
+        {question()?.question ?? ""}
+      </text>
+      <Show when={!typing()}>
+        <For each={question()?.options ?? []}>
+          {(option, index) => {
+            const active = () => index() === props.screen().selected;
+            const marked = () => chosen().includes(index());
+            return (
+              <box
+                flexDirection="row"
+                width={props.contentWidth() - 2}
+                height={1}
+                backgroundColor={active() ? theme().surfaceHigh : "transparent"}
+              >
+                <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
+                  {active() ? "▸ " : "  "}
+                </text>
+                <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
+                  {question()?.multiple ? (marked() ? "◉ " : "○ ") : ""}
+                </text>
+                <text
+                  width={Math.max(4, Math.floor((props.contentWidth() - 8) * 0.4))}
+                  flexShrink={0}
+                  height={1}
+                  wrapMode="none"
+                  truncate={true}
+                  fg={active() ? theme().text : theme().softText}
+                  attributes={active() ? bold : 0}
+                >
+                  {option.label}
+                </text>
+                <text
+                  flexGrow={1}
+                  flexShrink={1}
+                  height={1}
+                  wrapMode="none"
+                  truncate={true}
+                  fg={theme().faint}
+                >
+                  {option.description ? ` ${option.description}` : ""}
+                </text>
+              </box>
+            );
+          }}
+        </For>
+        <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
+          type to answer in your own words
+        </text>
+      </Show>
+      <Show when={typing()}>
+        <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+          <text width={2} height={1} wrapMode="none" fg={theme().spark}>› </text>
+          <text
+            flexGrow={1}
+            flexShrink={1}
+            height={1}
+            wrapMode="none"
+            truncate={true}
+            fg={theme().text}
+          >
+            {props.screen().customText}
+          </text>
+          <text width={1} height={1} wrapMode="none" fg={theme().spark}>▌</text>
+        </box>
+      </Show>
+    </box>
+  );
+}
+
 export function SessionScreen(props: {
   controller: ThreadTuiViewModel;
   state: Accessor<UiState>;
@@ -408,6 +517,18 @@ export function SessionScreen(props: {
     return 1 + Math.min(REWIND_OVERLAY_MAX_ROWS, rewind.items.length)
       + (rewind.type === "rewind" && rewind.confirm ? 1 : 0)
       + (rewind.busy ? 1 : 0) + (rewind.error ? 1 : 0) + 2;
+  };
+  const askScreen = (): AskScreen | undefined =>
+    state().screen.type === "ask" ? state().screen as AskScreen : undefined;
+  const askOverlayHeight = () => {
+    const ask = askScreen();
+    if (!ask) return 0;
+    const question = ask.request.questions[ask.questionIndex];
+    // header + question text + (options + hint | one input row) + border
+    const body = ask.customText !== undefined
+      ? 1
+      : Math.min(ASK_OVERLAY_MAX_OPTIONS, question?.options.length ?? 0) + 1;
+    return 2 + body + 2;
   };
   return (
     <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
@@ -504,6 +625,26 @@ export function SessionScreen(props: {
             screen={() => pathPicker() as RewindScreen | SquashScreen}
             selected={props.overlaySelected}
             navigated={props.overlayNavigated}
+            resources={props.resources}
+            contentWidth={overlayContentWidth}
+          />
+        </box>
+      </Show>
+      <Show when={askScreen() !== undefined}>
+        <box
+          position="absolute"
+          right={1}
+          bottom={controlsHeight()}
+          left={1}
+          height={askOverlayHeight()}
+          zIndex={20}
+          border={true}
+          borderStyle="rounded"
+          borderColor={theme.spark}
+          backgroundColor={theme.surface}
+        >
+          <AskOverlay
+            screen={() => askScreen() as AskScreen}
             resources={props.resources}
             contentWidth={overlayContentWidth}
           />

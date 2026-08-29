@@ -200,6 +200,14 @@ Only `name`, `description` and `location` enter the system prompt. The body is l
 
 Skills are discovered once and never rescanned mid-session: they sit in the system prompt at the very front of every request, which must stay byte-identical for the provider's prompt cache to keep hitting. Adding or editing a skill therefore takes effect on the next start.
 
+## Asking the user
+
+The built-in `ask` tool lets the agent stop mid-turn and put a decision in front of you instead of guessing. It takes 1 to 4 questions, each with 2 to 4 mutually exclusive options carrying a short label and the trade-off behind it, and `multiple` when several answers make sense together. The turn parks while the panel is open — that is the point, the loop stops rather than proceeding on a guess — and resumes with the chosen labels as an ordinary tool result, so compaction, rewind and branching need no special case for it.
+
+The panel walks the questions in order: arrows move, space marks a choice when multi-select is on, enter commits and advances, and typing any printable character switches to a free-text answer. A free-text option is always available, so the offered choices can never box you in; the tool description therefore forbids the model from writing its own catch-all option. Escape dismisses the whole request without aborting the turn, and the model is told to pick what it would recommend and continue rather than ask again.
+
+Only an interactive terminal attaches the question channel. The tool stays registered either way, because the tool list is part of the cached request prefix and must not change mid-session, but without a front end it reports that nobody can answer and tells the model to state an assumption and proceed — which is the right behaviour for plain and embedded use. Interrupting the turn while a question is open aborts it normally, and closing the session rejects anything still parked rather than leaving the turn waiting forever.
+
 ## Version commands
 
 ```text

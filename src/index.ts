@@ -42,6 +42,16 @@ export type {
 } from "./commands/types.js";
 export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
 export {
+  ASK_MAX_QUESTIONS,
+  AskDismissedError,
+  AskService,
+  type AskAnswers,
+  type AskOption,
+  type AskPresenter,
+  type AskQuestion,
+  type AskRequest,
+} from "./ui/ask.js";
+export {
   formatSkillsSection,
   loadSkills,
   skillsDirectory,

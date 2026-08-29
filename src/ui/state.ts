@@ -1,6 +1,7 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
 import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
+import type { AskRequest } from "./ask.js";
 import type { ToolResult } from "../tools/types.js";
 import type { UiEvent } from "./events.js";
 
@@ -76,12 +77,30 @@ export interface SquashScreen {
   error: string | undefined;
 }
 
+/**
+ * The `ask` tool's choice panel. Unlike the other overlays this one is opened by
+ * the agent rather than the user, and the turn is parked until it closes.
+ */
+export interface AskScreen {
+  type: "ask";
+  request: AskRequest;
+  /** Index of the question being answered; questions are walked in order. */
+  questionIndex: number;
+  /** Selected option per question, by option index. Multi-select keeps several. */
+  chosen: number[][];
+  /** Written by the view on every arrow key; the controller only reads it. */
+  selected: number;
+  /** True while the user is typing their own answer for the current question. */
+  customText: string | undefined;
+}
+
 export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
   | RewindScreen
   | SquashScreen
+  | AskScreen
   | {
       type: "merge";
       preview: MergePreview;

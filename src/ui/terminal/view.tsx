@@ -136,6 +136,13 @@ export function ThreadRoot(props: {
       return;
     }
     if (key.name === "escape") {
+      /* The ask panel owns escape: a parked question should be dismissable
+       * without aborting the whole turn, which is what interrupt() would do. */
+      if (screen().type === "ask") {
+        key.preventDefault();
+        props.controller.handleScreenKey(key);
+        return;
+      }
       if (props.controller.interrupt()) {
         key.preventDefault();
         return;
@@ -150,6 +157,13 @@ export function ThreadRoot(props: {
       return;
     }
     const activeScreen = screen();
+    /* The ask panel consumes every key: it needs printable characters for a
+     * free-text answer, so nothing may fall through to the composer. */
+    if (activeScreen.type === "ask") {
+      key.preventDefault();
+      props.controller.handleScreenKey(key);
+      return;
+    }
     if (activeScreen.type === "model_picker" || activeScreen.type === "rewind" || activeScreen.type === "thread_squash") {
       // The picker/path-action panels float over the session screen: selection
       // keys move the view-side signal (no notify — that is what flickered),
@@ -226,7 +240,7 @@ export function ThreadRoot(props: {
       <Switch>
         {/* The model picker and path-action panels are overlays on
             the session screen, not separate screens, so they all route here. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind" || screen().type === "thread_squash"}>
+        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind" || screen().type === "thread_squash" || screen().type === "ask"}>
           <SessionScreen
             controller={props.controller}
             state={state}

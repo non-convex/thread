@@ -12,6 +12,7 @@ import type { ExtensionEvents } from "../extensions/events.js";
 import type { VersionService } from "../revisions/version-service.js";
 import { squashMessage, type BuiltSessionContext, type SessionService } from "../session/service.js";
 import type { AgentTool, ToolRegistry, ToolResult } from "../tools/types.js";
+import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import { createId } from "../utils/id.js";
 import { estimateContextTokens } from "../utils/estimate.js";
@@ -31,6 +32,12 @@ export interface AgentLoopOptions {
   systemPrompt?: string;
   maxOutputTokens?: number;
   reasoning?: ThinkingLevel;
+  /**
+   * Resolves the interactive question channel at call time. Read per tool call
+   * rather than captured, because a front end attaches and detaches over a
+   * runtime's life while the loop instance stays put.
+   */
+  askPresenter?: () => AskPresenter | undefined;
 }
 
 export interface RunTurnOptions {
@@ -58,6 +65,7 @@ export class AgentLoop {
   private readonly systemPrompt: string;
   private readonly maxOutputTokens: number;
   private readonly reasoning: ThinkingLevel | undefined;
+  private readonly askPresenter: (() => AskPresenter | undefined) | undefined;
   private readonly compactor: ContextCompactor;
 
   constructor(
@@ -74,6 +82,7 @@ export class AgentLoop {
       options.maxOutputTokens ??
       Math.min(model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(model.contextWindow * 0.2)));
     this.reasoning = options.reasoning;
+    this.askPresenter = options.askPresenter;
     this.compactor = new ContextCompactor(session, model, {
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
@@ -791,8 +800,17 @@ export class AgentLoop {
         result = { content: transformed.denyReason ?? `Tool ${call.name} was denied`, isError: true };
       } else {
         try {
-          result = await tool!.execute(args, { rootPath: this.rootPath, signal });
+          const ask = this.askPresenter?.();
+          result = await tool!.execute(args, {
+            rootPath: this.rootPath,
+            signal,
+            ...(ask ? { ask } : {}),
+          });
         } catch (error) {
+          /* An abort is the turn ending, not a tool failing: swallowing it into a
+           * result would let the loop continue past a cancelled turn. Every other
+           * error stays a tool result, so one broken tool cannot end the turn. */
+          if (error instanceof Error && error.name === "AbortError") throw error;
           result = { content: error instanceof Error ? error.message : String(error), isError: true };
         }
       }
