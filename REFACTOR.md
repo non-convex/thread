@@ -139,7 +139,7 @@ squash(parentId = null)
 这个 entry 内部包含：
 
 - 完整的项目状态摘要；
-- checkpointed workspace diffstat；
+- ~~checkpointed workspace diffstat~~（已移除，见 6.5）；
 - 原样保留的最近消息 `retainedTail`。
 
 后续普通消息再依次追加到它后面：
@@ -578,6 +578,11 @@ TUI 必须把它显示为 harness 生成的 squash，而不是伪装成用户真
 
 ### 6.5 workspace diffstat：事实先于叙事
 
+> **该节已被推翻（后续实现）。** squash entry 不再携带 `workspaceDiffStat`，字段、生成代码
+> 和相关预算扣项全部移除。理由：文件级改动量是最容易重新获得的信息——工作区就在那里，
+> sidecar 里有每个快照——为它在每一轮的前缀里长期占位不划算，而 agent 需要时可以自行
+> 对着工作区事实核查。下面的论证保留为决策记录。
+
 每一次 squash 都生成 `workspaceDiffStat`，包括 `/compact`、自动压缩和 `/thread squash`。
 
 它不是直接拼接不受限的 `git --stat` 输出，而是从 sidecar 的结构化 tree diff 生成稳定、
@@ -614,15 +619,14 @@ diffstat 只证明 checkpointed workspace 的文件级变化，不证明改动�
 预算顺序如下：
 
 1. 计算 system、tools、包装消息和输出安全余量；
-2. 生成或预估受限 diffstat 的实际 token 成本；
-3. 为摘要保留上限；
-4. 在剩余预算中，从最近完整用户回合向前扩展 retained tail；
-5. 至少保留两个最近用户回合；若上下文本来不足以压缩，则 no-op。
+2. 为摘要保留上限；
+3. 在剩余预算中，从最近完整用户回合向前扩展 retained tail；
+4. 至少保留两个最近用户回合；若上下文本来不足以压缩，则 no-op。
 
-压缩后约 7% context window 是目标，不是无条件硬不变量。以下情况可以超过目标：
+压缩后固定 17K tokens 是目标，不是无条件硬不变量。以下情况可以超过目标：
 
 - 两个最小完整回合本身已经较大；
-- 固定摘要上限、diffstat 和请求开销在小窗口模型中占比更高。
+- 固定摘要上限和请求开销在小窗口模型中占比更高。
 
 实现必须区分：
 
@@ -1054,8 +1058,7 @@ provider；移动到新位置的 retained messages 不能假定继续命中原�
 - 模型返回 tool call 时没有工具被执行，并得到明确失败；
 - fork 装不下时明确提示 `/clear` 或 `/rewind`；
 - retained tail 从用户回合边界开始，不拆 toolCall/toolResult；
-- 7% 预算可满足时落在目标内；超过时只能来自文档允许的最小完整 tail 例外；
-- diffstat 的实际大小进入预算计算。
+- 17K 预算可满足时落在目标内；超过时只能来自文档允许的最小完整 tail 例外；
 
 ### 15.5 workspace 与 sidecar
 
@@ -1094,7 +1097,7 @@ provider；移动到新位置的 retained messages 不能假定继续命中原�
 - diffstat 最多 100 个文件、8 KiB，并保留总量与截断标记；
 - `/compact` 的摘要上限为 4K tokens，`/thread squash` 的增量摘要上限为 2K tokens；
 - `/thread squash` 选择器一次 Enter 确认；
-- 7% 是可行时的压缩目标，完整最小 tail 是唯一允许的预算例外；
+- 固定 17K 是可行时的压缩目标，完整最小 tail 是唯一允许的预算例外；
 - 自动 squash 在开放 turn 的安全边界运行，不伪称全局 idle；
 - squash checkpoint 复用 snapshot，但 global retention tip 独立维护、不得倒退；
 - 不修改 `MergeService`，不增加 agent squash tool。

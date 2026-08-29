@@ -1,7 +1,6 @@
 import { type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "../domain.js";
 import type { BuiltSessionContext, MessageOrigin, SessionService } from "../session/service.js";
-import type { WorkspaceFileDiff } from "../workspace/sidecar-store.js";
 import { estimateContextTokens } from "../utils/estimate.js";
 import { createId } from "../utils/id.js";
 import type { ModelClient } from "./model-client.js";
@@ -58,10 +57,16 @@ const READ_ONLY_FORK_RULE = [
 ].join(" ");
 
 export const CONTEXT_SAFETY_TOKENS = 4_096;
-export const POST_COMPACTION_CONTEXT_RATIO = 0.07;
+/**
+ * Target request size right after a squash, as a fixed token count rather than a
+ * share of the window. A ratio made the post-squash context swing with the model:
+ * the same project state got a cramped tail on a small window and a needlessly
+ * fat one on a large window, even though what is worth carrying forward does not
+ * depend on the model in use. On a window too small to hold this much, the target
+ * falls back to a third of the window so the arithmetic stays sane.
+ */
+export const POST_COMPACTION_CONTEXT_TOKENS = 17_000;
 export const COMPACTION_TRIGGER_RATIO = 0.78;
-export const WORKSPACE_DIFF_MAX_FILES = 100;
-export const WORKSPACE_DIFF_MAX_BYTES = 8 * 1024;
 const PROMPT_WRAPPER_TOKENS = 128;
 
 function currentTimeAnchor(now = new Date()): string {
@@ -94,7 +99,6 @@ export interface CompactionRequestBudget {
 export interface RootSquashDraft {
   summaryKind: "project_state";
   summary: string;
-  workspaceDiffStat: string;
   retainedTail: Array<{ sourceEntryId: string; message: Message }>;
   requestTokensBefore: number;
   summarizedMessages: number;
@@ -107,7 +111,6 @@ export interface RootSquashDraft {
 export interface IncrementalSquashDraft {
   summaryKind: "incremental";
   summary: string;
-  workspaceDiffStat: string;
   retainedTail: [];
   requestTokensBefore: number;
   summarizedMessages: number;
@@ -122,41 +125,6 @@ interface RootPartition {
   retainedStartUserOrdinal: number;
   summarizedEntries: number;
   summarizedTurns: number;
-}
-
-function jsonPath(path: string): string {
-  return JSON.stringify(path);
-}
-
-function diffLine(file: WorkspaceFileDiff): string {
-  const change = file.binary ? "binary" : `+${file.additions ?? 0} -${file.deletions ?? 0}`;
-  const target = file.status === "renamed" && file.oldPath
-    ? `${jsonPath(file.oldPath)} -> ${jsonPath(file.path)}`
-    : jsonPath(file.path);
-  return `${file.status.padEnd(8)} ${change.padEnd(18)} ${target}`;
-}
-
-/** Stable, prompt-safe, bounded machine facts for a checkpointed tree diff. */
-export function formatWorkspaceDiffStat(files: readonly WorkspaceFileDiff[]): string {
-  const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
-  const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
-  const binaryFiles = files.filter((file) => file.binary).length;
-  const header = `total: ${files.length} file(s), +${additions} -${deletions}, ${binaryFiles} binary`;
-  if (files.length === 0) return `${header}\n(no changed files)`;
-
-  const selected: string[] = [];
-  const candidateFiles = files.slice(0, WORKSPACE_DIFF_MAX_FILES);
-  for (const file of candidateFiles) {
-    const candidate = [...selected, diffLine(file)];
-    const omitted = files.length - candidate.length;
-    const footer = omitted > 0 ? `[truncated: ${omitted} file(s) omitted]` : "";
-    const output = [header, ...candidate, footer].filter(Boolean).join("\n");
-    if (Buffer.byteLength(output, "utf8") > WORKSPACE_DIFF_MAX_BYTES) break;
-    selected.push(candidate.at(-1)!);
-  }
-  const omitted = files.length - selected.length;
-  const footer = omitted > 0 ? `[truncated: ${omitted} file(s) omitted]` : "";
-  return [header, ...selected, footer].filter(Boolean).join("\n");
 }
 
 export class ContextCompactor {
@@ -183,9 +151,17 @@ export class ContextCompactor {
     return requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
   }
 
-  retainedTailBudget(overheadTokens: number, workspaceDiffTokens = 0): number {
-    const target = Math.floor(this.model.contextWindow * POST_COMPACTION_CONTEXT_RATIO);
-    return Math.max(0, target - overheadTokens - workspaceDiffTokens - this.maxSummaryTokens - PROMPT_WRAPPER_TOKENS);
+  /**
+   * Tokens left for verbatim retained turns once the squash message and the
+   * request overhead (system prompt, tool schemas, injected context) come out of
+   * the post-squash target.
+   */
+  retainedTailBudget(overheadTokens: number): number {
+    const target = Math.min(
+      POST_COMPACTION_CONTEXT_TOKENS,
+      Math.floor(this.model.contextWindow / 3),
+    );
+    return Math.max(0, target - overheadTokens - this.maxSummaryTokens - PROMPT_WRAPPER_TOKENS);
   }
 
   canCompact(built: BuiltSessionContext, retainedTailBudgetTokens: number): boolean {
@@ -196,7 +172,6 @@ export class ContextCompactor {
     built: BuiltSessionContext;
     requestTokensBefore: number;
     retainedTailBudgetTokens: number;
-    workspaceDiffStat: string;
     signal: AbortSignal;
     forkContext: Context;
   }): Promise<RootSquashDraft | undefined> {
@@ -220,7 +195,6 @@ export class ContextCompactor {
     return {
       summaryKind: "project_state",
       summary,
-      workspaceDiffStat: options.workspaceDiffStat,
       retainedTail: partition.retainedTail,
       requestTokensBefore: options.requestTokensBefore,
       summarizedMessages: partition.toSummarize.length,
@@ -235,7 +209,6 @@ export class ContextCompactor {
     built: BuiltSessionContext;
     selectedUserEntryId: string;
     requestTokensBefore: number;
-    workspaceDiffStat: string;
     signal: AbortSignal;
     forkContext: Context;
   }): Promise<IncrementalSquashDraft> {
@@ -270,7 +243,6 @@ export class ContextCompactor {
     return {
       summaryKind: "incremental",
       summary,
-      workspaceDiffStat: options.workspaceDiffStat,
       retainedTail: [],
       requestTokensBefore: options.requestTokensBefore,
       summarizedMessages: options.built.messages.length - selectedIndex,
@@ -297,7 +269,6 @@ export class ContextCompactor {
         type: "squash",
         summaryKind: draft.summaryKind,
         summary: draft.summary,
-        workspaceDiffStat: draft.workspaceDiffStat,
         retainedTail: structuredClone(draft.retainedTail),
         requestTokensBefore: draft.requestTokensBefore,
       },

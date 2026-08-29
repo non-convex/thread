@@ -34,7 +34,6 @@ export type SessionEntry =
       type: "squash";
       summaryKind: "project_state" | "incremental";
       summary: string;
-      workspaceDiffStat: string;
       retainedTail: Array<{ sourceEntryId: string; message: Message }>;
       requestTokensBefore: number;
     })

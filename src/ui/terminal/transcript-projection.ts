@@ -96,7 +96,7 @@ function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, T
       id: entry.id,
       kind: "squash",
       label: entry.summaryKind === "project_state" ? "project state" : "selected turn",
-      content: `[Checkpointed workspace changes]\n${entry.workspaceDiffStat}\n\n[Narrative]\n${entry.summary}`,
+      content: entry.summary,
     };
     return [
       squash,

@@ -81,7 +81,7 @@ export class SessionProjection {
           if (!["project_state", "incremental"].includes(event.entry.summaryKind)) {
             throw new SessionCorruptionError(`Squash ${event.entry.id} has an unsupported summary kind`);
           }
-          if (typeof event.entry.summary !== "string" || typeof event.entry.workspaceDiffStat !== "string") {
+          if (typeof event.entry.summary !== "string") {
             throw new SessionCorruptionError(`Squash ${event.entry.id} has invalid summary content`);
           }
           if (!Number.isFinite(event.entry.requestTokensBefore) || event.entry.requestTokensBefore < 0) {

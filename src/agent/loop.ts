@@ -19,7 +19,6 @@ import { estimateContextTokens } from "../utils/estimate.js";
 import {
   CONTEXT_SAFETY_TOKENS,
   ContextCompactor,
-  formatWorkspaceDiffStat,
   type RootSquashDraft,
 } from "./compaction.js";
 import type { ModelClient } from "./model-client.js";
@@ -105,11 +104,7 @@ export class AgentLoop {
       } satisfies Context,
     })).context;
     const budget = this.estimateCompactionBudget(manualContext, built.messages);
-    const workspaceDiffStat = await this.projectWorkspaceDiffStat(this.versions.head.workspaceTreeOid);
-    const diffTokens = estimateContextTokens([
-      { role: "user", content: workspaceDiffStat, timestamp: Number.MAX_SAFE_INTEGER },
-    ]).tokens;
-    const retainedTailBudget = this.compactor.retainedTailBudget(budget.overheadTokens, diffTokens);
+    const retainedTailBudget = this.compactor.retainedTailBudget(budget.overheadTokens);
     if (!this.compactor.canCompact(built, retainedTailBudget)) return { compacted: false };
 
     await this.session.appendRecord(
@@ -143,7 +138,6 @@ export class AgentLoop {
         built,
         requestTokensBefore: budget.requestTokens,
         retainedTailBudgetTokens: retainedTailBudget,
-        workspaceDiffStat,
         signal: options.signal,
         forkContext: manualContext,
       });
@@ -215,7 +209,6 @@ export class AgentLoop {
       built: assembled.built,
       selectedUserEntryId: selectedEntry.id,
       requestTokensBefore: budget.requestTokens,
-      workspaceDiffStat: "",
       signal: options.signal,
       forkContext: assembled.context,
     });
@@ -224,11 +217,6 @@ export class AgentLoop {
     const pendingBase = this.versions.startTurnBaseCapture();
     void pendingBase.completion.catch(() => undefined);
     const turnBase = await pendingBase.completion;
-    this.validateFrozenState(branchName, turnBase.id, sourceHeadId);
-    const selectedBase = this.versions.getCheckpoint(selectedTurn.baseCheckpointId);
-    draft.workspaceDiffStat = formatWorkspaceDiffStat(
-      await this.versions.workspace.diffTrees(selectedBase.workspaceTreeOid, turnBase.workspaceTreeOid),
-    );
     this.validateFrozenState(branchName, turnBase.id, sourceHeadId);
 
     const operationId = createId("operation");
@@ -243,7 +231,6 @@ export class AgentLoop {
       type: "squash",
       summaryKind: "incremental",
       summary: draft.summary,
-      workspaceDiffStat: draft.workspaceDiffStat,
       retainedTail: [],
       requestTokensBefore: draft.requestTokensBefore,
     });
@@ -602,12 +589,7 @@ export class AgentLoop {
   ): Promise<boolean> {
     const sourceHeadId = this.session.projection.lanes.get(branchName) ?? null;
     const checkpointId = this.versions.currentBranch.headCheckpointId;
-    const checkpoint = this.versions.getCheckpoint(checkpointId);
-    const workspaceDiffStat = await this.projectWorkspaceDiffStat(checkpoint.workspaceTreeOid);
-    const diffTokens = estimateContextTokens([
-      { role: "user", content: workspaceDiffStat, timestamp: Number.MAX_SAFE_INTEGER },
-    ]).tokens;
-    const retainedTailBudget = this.compactor.retainedTailBudget(budget.overheadTokens, diffTokens);
+    const retainedTailBudget = this.compactor.retainedTailBudget(budget.overheadTokens);
     if (!this.compactor.canCompact(assembled.built, retainedTailBudget)) return false;
 
     observer.started(trigger);
@@ -627,7 +609,6 @@ export class AgentLoop {
         built: assembled.built,
         requestTokensBefore: budget.requestTokens,
         retainedTailBudgetTokens: retainedTailBudget,
-        workspaceDiffStat,
         signal,
         forkContext: assembled.context,
       });
@@ -678,7 +659,6 @@ export class AgentLoop {
       type: "squash",
       summaryKind: "project_state",
       summary: draft.summary,
-      workspaceDiffStat: draft.workspaceDiffStat,
       retainedTail: draft.retainedTail,
       requestTokensBefore: draft.requestTokensBefore,
     });
@@ -694,14 +674,6 @@ export class AgentLoop {
         "Squashed context still cannot fit safely in the current model window without splitting the minimum retained turns; use /clear or /rewind",
       );
     }
-  }
-
-  private async projectWorkspaceDiffStat(toTreeOid: string): Promise<string> {
-    const genesis = [...this.session.projection.checkpoints.values()].find(
-      (checkpoint) => checkpoint.parentCheckpointIds.length === 0,
-    );
-    if (!genesis) throw new Error("Session Tree has no genesis checkpoint");
-    return formatWorkspaceDiffStat(await this.versions.workspace.diffTrees(genesis.workspaceTreeOid, toTreeOid));
   }
 
   /**

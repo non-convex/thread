@@ -52,19 +52,19 @@ function contextMergeMessage(entry: Extract<SessionEntry, { type: "context_merge
   };
 }
 
+/**
+ * The squash entry as the model sees it: the narrative summary only. Workspace
+ * facts are deliberately absent — the agent verifies those against the live
+ * workspace and the sidecar when it needs them, rather than carrying a snapshot
+ * of file churn in the prefix of every later turn.
+ */
 export function squashMessage(entry: Extract<SessionEntry, { type: "squash" }>): Message {
   const heading = entry.summaryKind === "project_state"
     ? "[Summary of earlier project-session context]"
     : "[Session history squashed from the selected user turn; workspace preserved]";
   return {
     role: "user",
-    content: [
-      heading,
-      "[Checkpointed workspace changes]",
-      entry.workspaceDiffStat || "No checkpointed workspace changes.",
-      "[Narrative project state]",
-      entry.summary,
-    ].join("\n"),
+    content: [heading, entry.summary].join("\n"),
     timestamp: entry.timestamp,
   };
 }
