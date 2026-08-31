@@ -1,6 +1,5 @@
 import { runGit } from "../workspace/git.js";
 import { createTurnPathClassifier, turnLabel } from "../session/history-status.js";
-import { CONTEXT_ESTIMATOR_VERSION, estimateContextTokens } from "../utils/estimate.js";
 import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
 
@@ -159,21 +158,7 @@ const show: ThreadCommand = {
       (commit) => commit.checkpointId === checkpoint.id,
     );
     const capsule = await context.capsules.read(checkpoint.id);
-    const currentModelContextCost = context.model
-      ? (() => {
-          const estimatedTokens = estimateContextTokens(
-            context.versions.session.buildContext(checkpoint.sessionHeadId).messages,
-          ).tokens;
-          return {
-            percent: Math.min(999, Math.round(estimatedTokens / context.model.contextWindow * 100)),
-            estimatedTokens,
-            contextWindow: context.model.contextWindow,
-            providerId: context.model.providerId,
-            modelId: context.model.modelId,
-            estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
-          };
-        })()
-      : undefined;
+    const currentModelContextCost = context.contextCost?.(checkpoint.sessionHeadId);
     return ephemeral(JSON.stringify({ ref, checkpoint, commits, capsule, currentModelContextCost }, null, 2));
   },
 };
@@ -232,18 +217,7 @@ const commit: ThreadCommand = {
   async execute(args, context) {
     requireArgs(args, 1, "commit <message>");
     if (!context.model) throw new Error("/thread commit requires a configured model to record context cost");
-    const head = context.versions.head;
-    const estimatedTokens = estimateContextTokens(
-      context.versions.session.buildContext(head.sessionHeadId).messages,
-    ).tokens;
-    const created = await context.versions.createCommit(args.join(" "), {
-      percent: Math.min(999, Math.round(estimatedTokens / context.model.contextWindow * 100)),
-      estimatedTokens,
-      contextWindow: context.model.contextWindow,
-      providerId: context.model.providerId,
-      modelId: context.model.modelId,
-      estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
-    });
+    const created = await context.versions.createCommit(args.join(" "));
     const checkpoint = context.versions.getCheckpoint(created.checkpointId);
     const capsule = await context.capsules.generate(checkpoint, "commit", context.signal);
     return ephemeral(

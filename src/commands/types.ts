@@ -3,6 +3,7 @@ import type { CapsuleService } from "../revisions/capsule-service.js";
 import type { MergeService } from "../revisions/merge-service.js";
 import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
 import type { VersionService } from "../revisions/version-service.js";
+import type { CommitContextCost } from "../domain.js";
 
 export interface HistoryViewItem {
   turnId: string;
@@ -41,6 +42,8 @@ export interface ThreadCommandContext {
   merge: MergeService;
   capsules: CapsuleService;
   model: import("../agent/model-client.js").ModelClient | undefined;
+  /** Cost of sending the selected context through the active model runtime. */
+  contextCost?: (sessionHeadId: string | null) => CommitContextCost | undefined;
   /** Skill load warnings, surfaced by status so a rejected skill is not silent. */
   skillDiagnostics?: readonly import("../skills/loader.js").SkillDiagnostic[];
   /** Skills discovered at startup, including entries hidden from the model. */

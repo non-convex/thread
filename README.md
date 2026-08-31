@@ -192,7 +192,7 @@ The built-in `webfetch` tool retrieves one HTTP(S) URL as Markdown, plain text o
 
 A skill is a Markdown file whose YAML frontmatter carries `name` and `description`; its body holds task-specific instructions. Thread scans one location, the user-level `~/.thread/skills` (or `$THREAD_HOME/skills`), once at startup. Project-level and third-party ecosystem directories are deliberately not scanned.
 
-A directory containing `SKILL.md` is a skill root and is not descended into, so a skill may keep scripts and reference material in subdirectories. Directories without `SKILL.md` are searched recursively; `.md` files directly in the scan root also count when they declare a description. `name` must be lowercase letters, digits and hyphens, at most 64 characters, and must match its parent directory — that last rule keeps every skill addressable by its folder and makes duplicate names impossible. `description` is required and capped at 1024 characters. A skill that fails validation is rejected rather than loaded with warnings, because an unusable name cannot be invoked reliably; `/skill` and `/thread status` list the reasons so a rejected skill is never silent.
+A directory containing `SKILL.md` is a skill root and is not descended into, so a skill may keep scripts and reference material in subdirectories. Directories without `SKILL.md` are searched recursively; `.md` files directly in the scan root also count when they declare a description. `name` must be lowercase letters, digits and hyphens and at most 64 characters. For a directory skill it must match the parent directory; for a standalone `.md` file it must match the filename without `.md`. This keeps every skill addressable by its path and makes duplicate names impossible. `description` is required and capped at 1024 characters. A skill that fails validation is rejected rather than loaded with warnings, because an unusable name cannot be invoked reliably; `/skill` and `/thread status` list the reasons so a rejected skill is never silent.
 
 Only `name`, `description` and `location` enter the system prompt. The body is loaded on demand by the `skill` tool, which also reports the skill's base directory and samples its companion files so relative references resolve without a second call. Bodies are capped at 32 KB keeping the **head**, the opposite of `bash`: a skill states its purpose and preconditions first. Setting `disable-model-invocation: true` withholds a skill from both the prompt and the tool, leaving `/skill <name>` as the only way in.
 
@@ -312,7 +312,7 @@ See [examples/extension.mjs](examples/extension.mjs). Core tool and command name
 
 ## Verification policy
 
-`bun run check` and `bun run build` are the local verification entry points. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
+`bun run check`, `bun run test` and `bun run build` are the local verification entry points. Tagged releases compile on native x64/Arm64 Windows, Linux and macOS runners.
 
 ## External projects and attribution
 

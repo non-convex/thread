@@ -192,7 +192,7 @@ Plain 模式中的 `/model` 仍用于查看状态。`/model list` 输出配置�
 
 skill 是一个 Markdown 文件，YAML frontmatter 里带 `name` 和 `description`，正文是针对特定任务的指令。thread 只扫一个位置：用户级的 `~/.thread/skills`（或 `$THREAD_HOME/skills`），且只在启动时扫一次。项目级目录和第三方生态目录都刻意不扫。
 
-含 `SKILL.md` 的目录即为 skill 根，不再向下递归，因此 skill 可以把脚本和参考资料放在子目录里。不含 `SKILL.md` 的目录会被递归搜索；扫描根目录下的直接 `.md` 文件，只要声明了 description 也算。`name` 必须是小写字母、数字和连字符，不超过 64 字符，并且必须与父目录名一致——最后这条规则让每个 skill 都能用它所在的文件夹寻址，也使重名不可能出现。`description` 必填，上限 1024 字符。校验失败的 skill 会被拒绝加载，而不是带着警告装进去，因为不可用的名字无法被可靠调用；`/skill` 和 `/thread status` 会列出原因，被拒的 skill 不会无声消失。
+含 `SKILL.md` 的目录即为 skill 根，不再向下递归，因此 skill 可以把脚本和参考资料放在子目录里。不含 `SKILL.md` 的目录会被递归搜索；扫描根目录下的直接 `.md` 文件，只要声明了 description 也算。`name` 必须是小写字母、数字和连字符，不超过 64 字符。目录形式的 skill，其名称必须与父目录一致；直接放在扫描根目录的单个 `.md` 文件，其名称必须与去掉 `.md` 后的文件名一致。这样两种形式都能按所在路径稳定寻址，也使重名不可能出现。`description` 必填，上限 1024 字符。校验失败的 skill 会被拒绝加载，而不是带着警告装进去，因为不可用的名字无法被可靠调用；`/skill` 和 `/thread status` 会列出原因，被拒的 skill 不会无声消失。
 
 进入系统提示的只有 `name`、`description` 和 `location`。正文由 `skill` 工具按需加载，同时给出该 skill 的基准目录，并采样同目录文件，让相对引用不必再多跑一次调用。正文上限 32KB 且**保留头部**，与 `bash` 相反：skill 的开头先说明用途和前提条件。设置 `disable-model-invocation: true` 会让该 skill 既不进提示也不进工具，只能通过 `/skill <name>` 进入。
 
@@ -312,7 +312,7 @@ bun start -- --root . --extension .\examples\extension.mjs
 
 ## 验证策略
 
-本地验证入口是 `bun run check` 和 `bun run build`。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
+本地验证入口是 `bun run check`、`bun run test` 和 `bun run build`。带 tag 的版本会分别在 Windows、Linux、macOS 的原生 x64/Arm64 runner 上编译。
 
 ## 外部项目与归属说明
 

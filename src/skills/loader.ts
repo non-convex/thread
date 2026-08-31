@@ -91,13 +91,17 @@ function unquote(value: string): string | undefined {
 }
 
 /**
- * Validates against the Agent Skills spec. Matching the parent directory name is
- * enforced too: it keeps one skill per directory addressable by that directory,
- * so a renamed folder cannot silently shadow another skill's name.
+ * Validates against the Agent Skills spec. Directory skills are addressed by
+ * their parent directory; loose files are addressed by their filename stem.
  */
-function validate(name: string, description: string | undefined, parentDirName: string): string[] {
+function validate(
+  name: string,
+  description: string | undefined,
+  expectedName: string,
+  sourceKind: "directory" | "file",
+): string[] {
   const errors: string[] = [];
-  if (name !== parentDirName) errors.push(`name "${name}" does not match its directory "${parentDirName}"`);
+  if (name !== expectedName) errors.push(`name "${name}" does not match its ${sourceKind} "${expectedName}"`);
   if (name.length > MAX_NAME_LENGTH) errors.push(`name exceeds ${MAX_NAME_LENGTH} characters`);
   if (!/^[a-z0-9-]+$/.test(name)) errors.push("name must use lowercase letters, digits and hyphens only");
   if (name.startsWith("-") || name.endsWith("-")) errors.push("name must not start or end with a hyphen");
@@ -135,9 +139,11 @@ async function loadSkillFile(filePath: string): Promise<{ skill?: Skill; diagnos
   if (!declared && (!description || !description.trim())) return { diagnostics };
 
   const baseDir = path.dirname(filePath);
-  const parentDirName = path.basename(baseDir);
-  const name = parsed.frontmatter.name?.trim() || parentDirName;
-  const errors = validate(name, description, parentDirName);
+  const expectedName = declared
+    ? path.basename(baseDir)
+    : path.basename(filePath, path.extname(filePath));
+  const name = parsed.frontmatter.name?.trim() || expectedName;
+  const errors = validate(name, description, expectedName, declared ? "directory" : "file");
   for (const message of errors) diagnostics.push({ kind: "invalid", message, path: filePath });
   /* Rejected rather than loaded-with-warnings: the name is how the model and the
    * slash command address a skill, so an invalid one is not reliably callable, and

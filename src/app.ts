@@ -12,6 +12,7 @@ import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { ExtensionEvents } from "./extensions/events.js";
 import { DerivedCache } from "./persistence/cache.js";
 import type { ModelState } from "./config/model-state.js";
+import type { CommitContextCost } from "./domain.js";
 import { CapsuleService } from "./revisions/capsule-service.js";
 import { MergeService } from "./revisions/merge-service.js";
 import { VersionService } from "./revisions/version-service.js";
@@ -272,6 +273,12 @@ export class ThreadApp {
    * agree. Without a model, or before a loop exists, there is nothing to report.
    */
   contextOccupancy(sessionHeadId: string | null): { percent: number; requestTokens: number } | undefined {
+    const cost = this.contextCost(sessionHeadId);
+    return cost ? { percent: cost.percent, requestTokens: cost.estimatedTokens } : undefined;
+  }
+
+  /** Complete context-cost record shared by commands and persisted commits. */
+  private contextCost(sessionHeadId: string | null): CommitContextCost | undefined {
     const model = this.currentModel;
     const loop = this.loop;
     if (!model || !loop) return undefined;
@@ -279,7 +286,11 @@ export class ThreadApp {
     const { requestTokens } = loop.estimateRequestBudget(messages);
     return {
       percent: Math.min(999, Math.round((requestTokens / model.contextWindow) * 100)),
-      requestTokens,
+      estimatedTokens: requestTokens,
+      contextWindow: model.contextWindow,
+      providerId: model.providerId,
+      modelId: model.modelId,
+      estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
     };
   }
 
@@ -398,16 +409,9 @@ export class ThreadApp {
     // so the recorded cost matches what the footer and the compaction trigger use.
     versions.setContextCostProvider(this.currentModel
       ? () => {
-          const occupancy = this.contextOccupancy(versions.head.sessionHeadId);
-          if (!occupancy) throw new Error("Thread commit requires a configured model to record context cost");
-          return {
-            percent: occupancy.percent,
-            estimatedTokens: occupancy.requestTokens,
-            contextWindow: this.currentModel!.contextWindow,
-            providerId: this.currentModel!.providerId,
-            modelId: this.currentModel!.modelId,
-            estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
-          };
+          const cost = this.contextCost(versions.head.sessionHeadId);
+          if (!cost) throw new Error("Thread commit requires a configured model to record context cost");
+          return cost;
         }
       : undefined);
     const reasoning = this.requestReasoning();
@@ -618,6 +622,7 @@ export class ThreadApp {
       merge: this.merge,
       capsules: this.capsules,
       model: this.currentModel,
+      contextCost: (sessionHeadId: string | null) => this.contextCost(sessionHeadId),
       skills: this.loadedSkills.skills,
       skillDiagnostics: this.loadedSkills.diagnostics,
       signal: options.signal,
