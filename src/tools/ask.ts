@@ -8,6 +8,7 @@ import {
   createAskRequest,
   type AskQuestion,
 } from "../ui/ask.js";
+import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 const optionSchema = Type.Object({
@@ -61,6 +62,11 @@ export function createAskTool(): AgentTool<{ questions: AskQuestion[] }> {
     /* Nothing outside the conversation changes, and the answer is durable as this
      * call's result, so a recovered session reads it back instead of re-asking. */
     replay: "safe",
+    execution: {
+      effect: "interactive",
+      mode: "sequential",
+      resources: () => singletonResource("interactive", "user", "write"),
+    },
     async execute(args, context) {
       if (!context.ask) {
         return {

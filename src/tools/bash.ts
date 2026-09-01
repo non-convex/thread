@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { runProcess, type ProcessResult } from "../utils/process.js";
+import { claim, entireWorkspaceClaim } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
@@ -126,6 +127,11 @@ export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
     timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: BASH_MAX_TIMEOUT_MS })),
   }),
   replay: "never",
+  execution: {
+    effect: "process",
+    mode: "sequential",
+    resources: () => [entireWorkspaceClaim("write"), claim("process", "foreground", "write")],
+  },
   async execute(args, context) {
     const timeoutMs = args.timeoutMs ?? BASH_DEFAULT_TIMEOUT_MS;
     const timeout = AbortSignal.timeout(timeoutMs);

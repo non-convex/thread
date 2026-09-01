@@ -1,6 +1,7 @@
 import { Parser } from "htmlparser2";
 import TurndownService from "turndown";
 import { Type } from "@earendil-works/pi-ai";
+import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 export const WEB_SEARCH_DEFAULT_RESULTS = 8;
@@ -182,6 +183,11 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
       ),
     }),
     replay: "never",
+    execution: {
+      effect: "read",
+      mode: "parallel",
+      resources: (args) => singletonResource("network", `search:${args.query.trim()}`, "read"),
+    },
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();
@@ -297,6 +303,11 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
       ),
     }),
     replay: "never",
+    execution: {
+      effect: "read",
+      mode: "parallel",
+      resources: (args) => singletonResource("network", args.url.trim(), "read"),
+    },
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();

@@ -55,6 +55,8 @@ show the user message and create a runtime-only planned turn
 
 An interrupted or failed turn stays in history but does not advance the live tip. At startup, any turn left running is marked `interrupted`; tools are never automatically repeated.
 
+Tool scheduling is effect- and resource-aware. Read effects may start as soon as a complete streamed call and its tool-start fact are durable. Write, process, and interactive effects wait for the complete assistant response to be durable. Independent resources run concurrently; overlapping read/write resources and explicitly sequential tools retain assistant source order. Completion events follow real completion order, while tool-result messages are committed in assistant source order before the next model request.
+
 The TUI projects the submitted user message immediately. A planned turn is runtime-only and exists just long enough to let the first model request overlap the workspace scan; it becomes a factual Session Tree turn only after the content-addressed workspace-state ID is known. Session Tree records then enter the in-memory projection synchronously and are written by one ordered background queue. Tool execution and final turn completion are durability barriers.
 
 Workspace states are content-addressed manifests and blobs stored under `~/.thread/projects/<project-id>/workspace-states`. They include ignored files and empty directories. `.git`, `.thread`, Thread's own state path, paths outside the project, processes, databases, network effects, and other external state are excluded. Additional project-relative exclusions can be supplied through `ThreadAppOptions.workspaceExcludedPaths`.

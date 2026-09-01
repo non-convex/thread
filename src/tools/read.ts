@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { Type } from "@earendil-works/pi-ai";
+import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -186,6 +187,11 @@ export const readTool: AgentTool<ReadArgs> = {
     ),
   }),
   replay: "safe",
+  execution: {
+    effect: "read",
+    mode: "parallel",
+    resources: async (args, context) => [await workspacePathClaim(context.rootPath, args.path, "read")],
+  },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

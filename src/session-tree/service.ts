@@ -36,6 +36,12 @@ export interface PlannedTurn {
   startedAt: number;
 }
 
+/** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
+export interface PlannedMessageEntry {
+  id: string;
+  turnId: string;
+}
+
 function messageText(message: Message): string {
   if (typeof message.content === "string") return message.content;
   return message.content
@@ -178,36 +184,41 @@ export class SessionTreeService {
     return structuredClone(turn);
   }
 
-  async appendMessage(turnId: string, message: Message, flush = false): Promise<MessageEntry> {
-    const turn = this.runningTurn(turnId);
+  planMessageEntry(turnId: string): PlannedMessageEntry {
+    return { id: createId("entry"), turnId };
+  }
+
+  async appendMessage(
+    input: { turnId: string; message: Message; entryId?: string },
+    flush = false,
+  ): Promise<MessageEntry> {
+    const turn = this.runningTurn(input.turnId);
     const entries = this.projection.entriesByTurn.get(turn.id)!;
     const entry: MessageEntry = {
-      id: createId("entry"),
+      id: input.entryId ?? createId("entry"),
       sessionId: turn.sessionId,
       turnId: turn.id,
       ordinal: entries.length,
-      timestamp: message.timestamp,
+      timestamp: input.message.timestamp,
       type: "message",
-      message: structuredClone(message),
+      message: structuredClone(input.message),
     };
     await this.repository.append(() => ({ type: "entry_appended", entry }), flush);
     return structuredClone(entry);
   }
 
   async appendToolExecution(
-    turnId: string,
-    values: Omit<ToolExecutionEntry, "id" | "sessionId" | "turnId" | "ordinal" | "timestamp" | "type">,
+    input: Omit<ToolExecutionEntry, "id" | "sessionId" | "ordinal" | "timestamp" | "type">,
   ): Promise<ToolExecutionEntry> {
-    const turn = this.runningTurn(turnId);
+    const turn = this.runningTurn(input.turnId);
     const entries = this.projection.entriesByTurn.get(turn.id)!;
     const entry: ToolExecutionEntry = {
       id: createId("entry"),
       sessionId: turn.sessionId,
-      turnId: turn.id,
       ordinal: entries.length,
       timestamp: Date.now(),
       type: "tool_execution",
-      ...structuredClone(values),
+      ...structuredClone(input),
     };
     await this.repository.append(() => ({ type: "entry_appended", entry }), true);
     return structuredClone(entry);

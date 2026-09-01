@@ -55,6 +55,8 @@ bun run dev --root /path/to/project
 
 失败或中断的 turn 会保留在历史中，但不会推进 live tip。启动时遗留的 running turn 会被标记为 `interrupted`，已开始的工具绝不会自动重跑。
 
+工具调度同时考虑 effect 和资源冲突。只读 effect 在完整 tool call 流出且工具开始事实可靠落盘后即可启动；写入、进程和交互 effect 会等待完整 assistant 响应可靠落盘。资源互不冲突时并行执行，读写资源重叠或工具明确声明 sequential 时则保持 assistant 源顺序。完成事件按真实完成顺序发出，tool-result 消息仍按 assistant 源顺序提交；全部完成后才发起下一次模型请求。
+
 TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时，用来让首次模型请求与工作区扫描重叠；只有内容寻址的 workspace state ID 就绪后，它才成为 Session Tree 中的事实 Turn。随后记录同步进入内存投影，再由单一有序队列在后台写盘；工具执行和 turn 最终完成仍是必须等待的 durability barrier。
 
 工作区状态使用内容寻址的 manifest 与 blob，位于 `~/.thread/projects/<project-id>/workspace-states`。默认包含 ignored 文件和空目录；排除 `.git`、`.thread`、Thread 自身状态目录、项目外路径、进程、数据库、网络副作用及其他外部状态。嵌入方可通过 `ThreadAppOptions.workspaceExcludedPaths` 增加项目相对排除项。

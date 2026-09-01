@@ -1,6 +1,7 @@
 import { lstat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
+import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
@@ -27,6 +28,13 @@ const writeTool: AgentTool<{ path: string; content: string }> = {
     content: Type.String({ description: "Full file contents." }),
   }),
   replay: "never",
+  execution: {
+    effect: "write",
+    mode: "parallel",
+    resources: async (args, context) => [
+      await workspacePathClaim(context.rootPath, args.path, "write", { forWrite: true }),
+    ],
+  },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

@@ -1,5 +1,6 @@
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
+import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -58,6 +59,13 @@ export const editTool: AgentTool<EditArgs> = {
     newText: Type.String({ description: "Replacement text. Empty string deletes the match." }),
   }),
   replay: "never",
+  execution: {
+    effect: "write",
+    mode: "parallel",
+    resources: async (args, context) => [
+      await workspacePathClaim(context.rootPath, args.path, "write", { forWrite: true }),
+    ],
+  },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

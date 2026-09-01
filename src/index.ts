@@ -52,6 +52,16 @@ export type {
   HistoryViewItem,
 } from "./commands/types.js";
 export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
+export type {
+  ToolEffect,
+  ToolExecutionMode,
+  ToolExecutionPolicy,
+  ToolPlanningContext,
+  ToolResourceAccess,
+  ToolResourceClaim,
+  ToolResourceScope,
+} from "./tools/execution.js";
+export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./tools/execution.js";
 export {
   ASK_MAX_QUESTIONS,
   AskDismissedError,

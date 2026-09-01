@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { Skill } from "../skills/loader.js";
+import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 /**
@@ -61,6 +62,11 @@ export function createSkillTool(skills: () => readonly Skill[]): AgentTool<{ nam
       name: Type.String({ description: "Skill name exactly as listed in available_skills." }),
     }),
     replay: "safe",
+    execution: {
+      effect: "read",
+      mode: "parallel",
+      resources: (args) => singletonResource("skills", args.name.trim(), "read"),
+    },
     async execute(args, context) {
       context.signal.throwIfAborted();
       const requested = args.name.trim();

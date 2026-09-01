@@ -2,6 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { ProcessError, runProcess } from "../utils/process.js";
+import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -482,6 +483,13 @@ export const grepTool: AgentTool<GrepArgs> = {
     ),
   }),
   replay: "safe",
+  execution: {
+    effect: "read",
+    mode: "parallel",
+    resources: async (args, context) => [
+      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", { scope: "subtree" }),
+    ],
+  },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

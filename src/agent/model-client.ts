@@ -11,6 +11,7 @@ import {
   getSupportedThinkingLevels,
   retryAssistantCall,
   type ThinkingLevel,
+  type ToolCall,
 } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
@@ -59,6 +60,8 @@ export interface ModelRequestOptions {
   onRetryFinished?: ModelRetryCallbacks["onRetryFinished"];
   onTextDelta?: (delta: string) => void;
   onThinkingDelta?: (delta: string) => void;
+  /** Called when a streamed tool block has complete arguments, before the assistant response itself finishes. */
+  onToolCallComplete?: (call: ToolCall, contentIndex: number) => void | Promise<void>;
 }
 
 export interface ModelClient {
@@ -169,6 +172,9 @@ export class PiModelClient implements ModelClient {
         for await (const event of stream) {
           if (event.type === "text_delta") options.onTextDelta?.(event.delta);
           if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
+          if (event.type === "toolcall_end") {
+            await options.onToolCallComplete?.(structuredClone(event.toolCall), event.contentIndex);
+          }
         }
         return stream.result();
       },

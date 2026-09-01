@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
+import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -79,6 +80,13 @@ export const listTool: AgentTool<ListArgs> = {
     ),
   }),
   replay: "safe",
+  execution: {
+    effect: "read",
+    mode: "parallel",
+    resources: async (args, context) => [
+      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", { scope: "subtree" }),
+    ],
+  },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { SessionSearchResult, SessionSearchService, SessionTurnDetail } from "../session-tree/search.js";
+import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 const STALENESS_NOTICE = "Historical Session Tree evidence; verify the current workspace when correctness depends on it.";
@@ -60,6 +61,11 @@ export function createSessionSearchTool(search: SessionSearchService): AgentTool
       limit: Type.Optional(Type.Number({ description: `Maximum turns to return (default ${DEFAULT_LIMIT}).` })),
     }),
     replay: "safe",
+    execution: {
+      effect: "read",
+      mode: "parallel",
+      resources: () => singletonResource("session-tree", "*", "read", "subtree"),
+    },
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();
@@ -94,6 +100,11 @@ export function createSessionReadTool(search: SessionSearchService): AgentTool<{
       after: Type.Optional(Type.Number({ description: "Include up to 10 later turns when the selected turn is on its Session's saved live path." })),
     }),
     replay: "safe",
+    execution: {
+      effect: "read",
+      mode: "parallel",
+      resources: (args) => singletonResource("session-tree", args.turnId, "read"),
+    },
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();

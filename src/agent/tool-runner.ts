@@ -1,10 +1,48 @@
-import { type Message, type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
+import type { Message, ToolCall } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { SessionTreeService } from "../session-tree/service.js";
-import type { AgentTool, ToolRegistry, ToolResult } from "../tools/types.js";
+import {
+  validateToolResourceClaims,
+  type ToolExecutionPolicy,
+  type ToolResourceClaim,
+} from "../tools/execution.js";
+import type { AgentTool, ToolContext, ToolRegistry, ToolResult } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 
+export interface PreparedToolCall {
+  turnId: string;
+  assistantEntryId: string;
+  contentIndex: number;
+  toolIndex: number;
+  call: ToolCall;
+  args: Record<string, unknown>;
+  replay: AgentTool["replay"];
+  policy: ToolExecutionPolicy<Record<string, unknown>>;
+  resources: readonly ToolResourceClaim[];
+  tool?: AgentTool;
+  immediateResult?: ToolResult;
+}
+
+const immediatePolicy: ToolExecutionPolicy<Record<string, unknown>> = {
+  effect: "read",
+  mode: "parallel",
+  resources: () => [],
+};
+
+function errorResult(error: unknown): ToolResult {
+  return { content: error instanceof Error ? error.message : String(error), isError: true };
+}
+
+/**
+ * Owns one tool invocation's lifecycle but not batch scheduling.
+ *
+ * prepare() performs all sequential preflight work and durably records the call.
+ * execute() begins only when ToolScheduler grants it a lane. It returns a
+ * model-facing result without persisting it; the batch commits result messages
+ * later in assistant source order.
+ */
 export class ToolRunner {
   constructor(
     private readonly rootPath: string,
@@ -14,100 +52,146 @@ export class ToolRunner {
     private readonly askPresenter?: () => AskPresenter | undefined,
   ) {}
 
-  async run(
-    turnId: string,
-    assistantEntryId: string,
-    toolIndex: number,
-    call: ToolCall,
-    signal: AbortSignal,
-    onUiEvent?: UiEventSink,
-  ): Promise<Message> {
-    const tool = this.tools.get(call.name);
-    let args = call.arguments as Record<string, unknown>;
-    let result: ToolResult | undefined;
+  async prepare(input: {
+    turnId: string;
+    assistantEntryId: string;
+    contentIndex: number;
+    toolIndex: number;
+    call: ToolCall;
+    signal: AbortSignal;
+  }): Promise<PreparedToolCall> {
+    input.signal.throwIfAborted();
+    const tool = this.tools.get(input.call.name);
+    let args = input.call.arguments as Record<string, unknown>;
+    let immediateResult: ToolResult | undefined;
     let replay: AgentTool["replay"] = "never";
+
     if (!tool) {
-      result = { content: `Unknown tool: ${call.name}`, isError: true };
+      immediateResult = { content: `Unknown tool: ${input.call.name}`, isError: true };
     } else {
       replay = tool.replay;
       try {
         args = validateToolArguments(
           { name: tool.name, description: tool.description, parameters: tool.parameters },
-          call,
+          input.call,
         ) as Record<string, unknown>;
       } catch (error) {
-        result = { content: error instanceof Error ? error.message : String(error), isError: true };
+        immediateResult = errorResult(error);
       }
     }
-    const transformed = await this.extensions.emit("before_tool_call", { toolName: call.name, args });
+
+    const transformed = await this.extensions.emit("before_tool_call", {
+      toolName: input.call.name,
+      args,
+    });
     args = transformed.args;
-    if (tool && !result && !transformed.denied) {
+    if (transformed.denied) {
+      immediateResult = { content: transformed.denyReason ?? `Tool ${input.call.name} was denied`, isError: true };
+    } else if (tool && !immediateResult) {
       try {
         args = validateToolArguments(
           { name: tool.name, description: tool.description, parameters: tool.parameters },
-          { ...call, arguments: args },
+          { ...input.call, arguments: args },
         ) as Record<string, unknown>;
       } catch (error) {
-        result = { content: error instanceof Error ? error.message : String(error), isError: true };
+        immediateResult = errorResult(error);
       }
     }
-    await this.tree.appendToolExecution(turnId, {
-      assistantEntryId,
-      toolIndex,
-      toolCallId: call.id,
-      toolName: call.name,
+
+    let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
+    let resources: readonly ToolResourceClaim[] = [];
+    if (!policy || immediateResult) {
+      policy = immediatePolicy;
+    } else {
+      try {
+        resources = validateToolResourceClaims(
+          await policy.resources(args, { rootPath: this.rootPath, signal: input.signal }),
+        );
+      } catch (error) {
+        immediateResult = errorResult(error);
+        policy = immediatePolicy;
+      }
+    }
+
+    // appendToolExecution is the side-effect durability barrier. The scheduler
+    // cannot call execute() until this factual record has reached the log.
+    await this.tree.appendToolExecution({
+      turnId: input.turnId,
+      assistantEntryId: input.assistantEntryId,
+      toolIndex: input.toolIndex,
+      toolCallId: input.call.id,
+      toolName: input.call.name,
       effectiveArgs: args,
       replay,
     });
-    safeUiEvent(onUiEvent, { type: "tool_started", id: call.id, name: call.name, args });
-    if (!result) {
-      if (transformed.denied) {
-        result = { content: transformed.denyReason ?? `Tool ${call.name} was denied`, isError: true };
-      } else {
-        try {
-          const ask = this.askPresenter?.();
-          result = await tool!.execute(args, {
-            rootPath: this.rootPath,
-            signal,
-            ...(ask ? { ask } : {}),
-          });
-        } catch (error) {
-          if (error instanceof Error && error.name === "AbortError") throw error;
-          result = { content: error instanceof Error ? error.message : String(error), isError: true };
-        }
+
+    return {
+      turnId: input.turnId,
+      assistantEntryId: input.assistantEntryId,
+      contentIndex: input.contentIndex,
+      toolIndex: input.toolIndex,
+      call: input.call,
+      args,
+      replay,
+      policy,
+      resources,
+      ...(tool ? { tool } : {}),
+      ...(immediateResult ? { immediateResult } : {}),
+    };
+  }
+
+  async execute(prepared: PreparedToolCall, signal: AbortSignal, ui?: UiEventSink): Promise<Message> {
+    signal.throwIfAborted();
+    safeUiEvent(ui, {
+      type: "tool_started",
+      id: prepared.call.id,
+      name: prepared.call.name,
+      args: prepared.args,
+    });
+
+    let result = prepared.immediateResult;
+    if (!result && prepared.tool) {
+      const ask = this.askPresenter?.();
+      const context: ToolContext = {
+        rootPath: this.rootPath,
+        signal,
+        ...(ask ? { ask } : {}),
+      };
+      try {
+        result = await prepared.tool.execute(prepared.args, context);
+      } catch (error) {
+        if (signal.aborted || (error as Error).name === "AbortError") throw error;
+        result = errorResult(error);
       }
     }
-    let visible: { toolName: string; raw: ToolResult; modelContent: string };
+    const settled = result ?? { content: `Unknown tool: ${prepared.call.name}`, isError: true };
+    let modelContent = settled.content;
     try {
-      visible = await this.extensions.emit("tool_result", {
-        toolName: call.name,
-        raw: structuredClone(result),
-        modelContent: result.content,
+      const visible = await this.extensions.emit("tool_result", {
+        toolName: prepared.call.name,
+        raw: structuredClone(settled),
+        modelContent,
       });
+      modelContent = visible.modelContent;
     } catch (error) {
-      visible = {
-        toolName: call.name,
-        raw: structuredClone(result),
-        modelContent: `${result.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`,
-      };
+      modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
     }
-    safeUiEvent(onUiEvent, {
+    safeUiEvent(ui, {
       type: "tool_finished",
-      id: call.id,
-      name: call.name,
-      result: structuredClone(result),
-      isError: result.isError,
+      id: prepared.call.id,
+      name: prepared.call.name,
+      result: structuredClone(settled),
+      isError: settled.isError,
     });
-    const message: Message = {
+
+    return {
       role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [{ type: "text", text: visible.modelContent }],
-      details: { raw: result },
-      isError: result.isError,
+      toolCallId: prepared.call.id,
+      toolName: prepared.call.name,
+      content: [{ type: "text", text: modelContent }],
+      details: { raw: settled },
+      isError: settled.isError,
       timestamp: Date.now(),
     };
-    await this.tree.appendMessage(turnId, message);
-    return message;
   }
 }
