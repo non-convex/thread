@@ -1,5 +1,5 @@
 import { MouseButton } from "@opentui/core";
-import { createMemo, createSignal, For, Index, Show, type Accessor, type JSX } from "solid-js";
+import { createMemo, createSignal, For, Index, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
 import type { LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, dimItalic, italic } from "./theme.js";
 import { projectLiveUser } from "./transcript-projection.js";
@@ -329,26 +329,33 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
   );
 }
 
+function CompactionInfo(props: { content: string; resources: ThreadViewResources }) {
+  return (
+    <box flexDirection="row" width="100%" height={1} marginBottom={1}>
+      <text width={2} height={1} wrapMode="none" fg={props.resources.theme.spark}>◇</text>
+      <text height={1} wrapMode="none" fg={props.resources.theme.muted} attributes={dim}>{props.content}</text>
+    </box>
+  );
+}
+
 function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const item = () => props.item;
   return (
-    <Show
-      when={item().kind === "tool"}
-      fallback={
-        <Show
-          when={item().kind === "thinking"}
-          fallback={
-            <box flexDirection="column" width="100%" marginBottom={1}>
-              <MarkdownReply id={`history-markdown-${item().id}`} content={item().content} resources={props.resources} />
-            </box>
-          }
-        >
-          <ThinkingView content={() => item().content} resources={props.resources} />
-        </Show>
-      }
-    >
-      <HistoryToolItem item={item()} resources={props.resources} />
-    </Show>
+    <Switch fallback={
+      <box flexDirection="column" width="100%" marginBottom={1}>
+        <MarkdownReply id={`history-markdown-${item().id}`} content={item().content} resources={props.resources} />
+      </box>
+    }>
+      <Match when={item().kind === "tool"}>
+        <HistoryToolItem item={item()} resources={props.resources} />
+      </Match>
+      <Match when={item().kind === "thinking"}>
+        <ThinkingView content={() => item().content} resources={props.resources} />
+      </Match>
+      <Match when={item().kind === "compaction"}>
+        <CompactionInfo content={item().content} resources={props.resources} />
+      </Match>
+    </Switch>
   );
 }
 
@@ -423,33 +430,31 @@ function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadView
 function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
   const block = props.block;
   return (
-    <Show
-      when={block().kind === "thinking"}
-      fallback={
-        <Show
-          when={block().kind === "tool"}
-          fallback={
-            <box flexDirection="column" width="100%" marginBottom={1}>
-              <markdown
-                id={`live-markdown-${block().id}`}
-                content={normalizeMarkdownForTerminal(block().content)}
-                width="100%"
-                syntaxStyle={props.resources.syntaxStyle}
-                fg={props.resources.theme.text}
-                conceal={true}
-                streaming={block().streaming ?? false}
-                internalBlockMode="top-level"
-                maxWidth={180}
-              />
-            </box>
-          }
-        >
-          <LiveToolView block={block} resources={props.resources} />
-        </Show>
-      }
-    >
-      <LiveThinkingView block={block} resources={props.resources} />
-    </Show>
+    <Switch fallback={
+      <box flexDirection="column" width="100%" marginBottom={1}>
+        <markdown
+          id={`live-markdown-${block().id}`}
+          content={normalizeMarkdownForTerminal(block().content)}
+          width="100%"
+          syntaxStyle={props.resources.syntaxStyle}
+          fg={props.resources.theme.text}
+          conceal={true}
+          streaming={block().streaming ?? false}
+          internalBlockMode="top-level"
+          maxWidth={180}
+        />
+      </box>
+    }>
+      <Match when={block().kind === "thinking"}>
+        <LiveThinkingView block={block} resources={props.resources} />
+      </Match>
+      <Match when={block().kind === "tool"}>
+        <LiveToolView block={block} resources={props.resources} />
+      </Match>
+      <Match when={block().kind === "compaction"}>
+        <CompactionInfo content={block().content} resources={props.resources} />
+      </Match>
+    </Switch>
   );
 }
 

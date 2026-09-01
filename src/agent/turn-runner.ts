@@ -61,9 +61,12 @@ export class TurnRunner {
       let assembled = step === 1
         ? await this.assemblePlanned(prepared, planned)
         : await this.assemble(planned.id);
-      const budget = contextBudget(assembled.context, assembled.built.messages, this.maxOutputTokens);
+      const budget = this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
+      // Automatic compaction is inline at a model-step boundary. It appends a
+      // checkpoint to this running turn, rebuilds its live context, then starts
+      // the same pending step without finishing or replacing the turn.
       if (budget.requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO) &&
-          this.compaction.needsCompaction(assembled.built, budget.overheadTokens)) {
+          this.compaction.needsCompaction(assembled.built, budget.overheadTokens, planned.id)) {
         const compacted = await this.compactBuilt(assembled, options, {
           reason: "threshold",
           turnId: planned.id,
@@ -72,6 +75,9 @@ export class TurnRunner {
         });
         if (compacted.compacted) {
           assembled = await this.assemble(planned.id);
+          if (options.onUiEvent) {
+            this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
+          }
         }
       }
       safeUiEvent(options.onUiEvent, { type: "assistant_started", step });
@@ -126,6 +132,15 @@ export class TurnRunner {
         // The full assistant message is the release barrier for mutations and
         // interactive/process tools. Read effects may already be in flight.
         await this.tree.appendMessage({ turnId: planned.id, message: response, entryId: assistantEntry.id }, true);
+        const continuedContextMessages = [...assembled.context.messages, response];
+        const continuedSessionMessages = [...assembled.built.messages, response];
+        if (options.onUiEvent) {
+          this.reportContextUsage(
+            { ...assembled.context, messages: continuedContextMessages },
+            continuedSessionMessages,
+            options.onUiEvent,
+          );
+        }
 
         if (response.stopReason === "error" && isContextOverflow(response, this.model.contextWindow)) {
           await toolBatch.cancel(new Error("Context-overflow response cannot continue tool execution"));
@@ -153,6 +168,15 @@ export class TurnRunner {
         const results = await toolBatch.orderedResults();
         for (const result of results) {
           await this.tree.appendMessage({ turnId: planned.id, message: result });
+          continuedContextMessages.push(result);
+          continuedSessionMessages.push(result);
+        }
+        if (options.onUiEvent) {
+          this.reportContextUsage(
+            { ...assembled.context, messages: continuedContextMessages },
+            continuedSessionMessages,
+            options.onUiEvent,
+          );
         }
       } catch (error) {
         await toolBatch.cancel(error);
@@ -224,13 +248,14 @@ export class TurnRunner {
       this.maxOutputTokens,
     );
     if (invocation.reason !== "manual" &&
-        !this.compaction.needsCompaction(assembled.built, budget.overheadTokens)) {
+        !this.compaction.needsCompaction(assembled.built, budget.overheadTokens, invocation.turnId)) {
       return { compacted: false };
     }
     safeUiEvent(options.onUiEvent, { type: "compaction_started", reason: invocation.reason });
     try {
       const result = await this.compaction.compact({
         built: assembled.built,
+        context: assembled.context,
         turnId: invocation.turnId,
         reason: invocation.reason,
         signal: options.signal,
@@ -238,11 +263,29 @@ export class TurnRunner {
         tokensBefore: budget.requestTokens,
         ...(invocation.appendAfter ? { appendAfter: invocation.appendAfter } : {}),
       });
-      safeUiEvent(options.onUiEvent, { type: "compaction_finished", ok: true });
+      safeUiEvent(options.onUiEvent, {
+        type: "compaction_finished",
+        reason: invocation.reason,
+        ok: true,
+        ...(result.compacted ? { entryId: result.entryId } : {}),
+      });
       return result;
     } catch (error) {
-      safeUiEvent(options.onUiEvent, { type: "compaction_finished", ok: false });
+      safeUiEvent(options.onUiEvent, { type: "compaction_finished", reason: invocation.reason, ok: false });
       throw error;
     }
+  }
+
+  private reportContextUsage(
+    context: Context,
+    sessionMessages: readonly Message[],
+    sink: UiEventSink | undefined,
+  ): ContextBudget {
+    const budget = contextBudget(context, sessionMessages, this.maxOutputTokens);
+    safeUiEvent(sink, {
+      type: "context_updated",
+      percent: Math.min(999, Math.round((budget.requestTokens / this.model.contextWindow) * 100)),
+    });
+    return budget;
   }
 }

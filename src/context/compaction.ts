@@ -1,22 +1,18 @@
 import {
   contentText,
+  type Context,
   type Message,
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../agent/model-client.js";
 import type { CompactionReason, RetainedTurn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
-import { createId } from "../utils/id.js";
 import { estimateMessageTokens } from "../utils/estimate.js";
 import type { BuiltContext } from "./builder.js";
 
-const SUMMARY_SYSTEM_PROMPT = [
-  "You are a context summarization assistant.",
-  "Do not continue the conversation or answer its questions.",
-  "Return only a structured checkpoint summary for another coding agent.",
-].join(" ");
+const SUMMARY_INSTRUCTION = `Create a concise project-state checkpoint from all preceding messages.
 
-const SUMMARY_INSTRUCTION = `Create a concise project-state checkpoint from the conversation.
+Do not continue the conversation, answer its questions, or call tools. Return only the checkpoint. If a previous derived checkpoint is present, preserve its still-valid information, incorporate subsequent progress and decisions, remove resolved blockers, and update next steps.
 
 Use this structure:
 
@@ -32,11 +28,6 @@ Use this structure:
 
 Preserve exact paths, identifiers, commands, errors, user corrections, validation evidence, failed approaches and their reasons. Do not invent facts or copy routine logs.`;
 
-const UPDATE_INSTRUCTION = `Update the previous checkpoint using the new conversation.
-
-Preserve still-valid information from the previous checkpoint, incorporate new progress and decisions, remove resolved blockers, and update next steps. Use the same structure as the previous checkpoint. Do not invent facts or continue the conversation.`;
-
-const TOOL_RESULT_MAX_CHARS = 2_000;
 export const COMPACTION_TARGET_TOKENS = 20_000;
 export const COMPACTION_SUMMARY_RESERVE_TOKENS = 4_000;
 export const COMPACTION_MIN_RETAINED_TURNS = 2;
@@ -53,52 +44,17 @@ export type CompactionResult =
 
 interface CompactionPreparation {
   summarizedTurnCount: number;
-  messagesToSummarize: Message[];
+  summarizedMessageCount: number;
   retainedTurns: RetainedTurn[];
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "undefined";
-  } catch {
-    return "[unserializable]";
-  }
-}
-
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
-}
-
-function serializeConversation(messages: readonly Message[]): string {
-  const parts: string[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const text = contentText(message.content, "");
-      if (text) parts.push(`[User]: ${text}`);
-      continue;
-    }
-    if (message.role === "toolResult") {
-      const text = contentText(message.content, "");
-      if (text) parts.push(`[Tool result]: ${truncate(text, TOOL_RESULT_MAX_CHARS)}`);
-      continue;
-    }
-    const text = contentText(message.content, "");
-    if (text) parts.push(`[Assistant]: ${text}`);
-    const calls = message.content
-      .filter((block) => block.type === "toolCall")
-      .map((block) => block.type === "toolCall"
-        ? `${block.name}(${safeJsonStringify(block.arguments)})`
-        : "");
-    if (calls.length > 0) parts.push(`[Assistant tool calls]: ${calls.join("; ")}`);
-  }
-  return parts.join("\n\n");
 }
 
 function turnTokens(turn: RetainedTurn): number {
   return turn.messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
 }
 
+// A trigger may fire between model steps, but the cut itself only moves across
+// RetainedTurn values. The newest value can be an unfinished active turn; it is
+// kept whole together with at least one preceding turn.
 function retainedStartIndex(
   turns: readonly RetainedTurn[],
   systemTokens: number,
@@ -128,8 +84,59 @@ function prepareCompaction(
   if (retainedStart === undefined) return undefined;
   return {
     summarizedTurnCount: retainedStart,
-    messagesToSummarize: turns.slice(0, retainedStart).flatMap((turn) => structuredClone(turn.messages)),
+    summarizedMessageCount: turns
+      .slice(0, retainedStart)
+      .reduce((total, turn) => total + turn.messages.length, 0),
     retainedTurns: structuredClone(turns.slice(retainedStart)),
+  };
+}
+
+function messageFingerprint(message: Message): string {
+  try {
+    const serialized = JSON.stringify(message);
+    if (serialized === undefined) throw new Error();
+    return serialized;
+  } catch {
+    throw new Error("Session message cannot be compared after before_context transformation");
+  }
+}
+
+function locateSessionMessages(contextMessages: readonly Message[], sessionMessages: readonly Message[]): number {
+  if (contextMessages === sessionMessages) return 0;
+  const contextFingerprints = contextMessages.map(messageFingerprint);
+  const sessionFingerprints = sessionMessages.map(messageFingerprint);
+  const matches: number[] = [];
+
+  for (let start = 0; start <= contextMessages.length - sessionMessages.length; start++) {
+    if (sessionFingerprints.every((fingerprint, offset) => contextFingerprints[start + offset] === fingerprint)) {
+      matches.push(start);
+    }
+  }
+  if (matches.length === 1) return matches[0]!;
+  throw new Error(
+    "before_context must preserve Session Tree messages as one contiguous sequence for cache-preserving compaction",
+  );
+}
+
+function compactionContext(
+  built: BuiltContext,
+  context: Context,
+  summarizedMessageCount: number,
+): Context {
+  const previousSummaryCount = built.latestCompaction ? 1 : 0;
+  const expectedSessionMessages = previousSummaryCount + built.compactableTurns
+    .reduce((total, turn) => total + turn.messages.length, 0);
+  if (built.messages.length !== expectedSessionMessages) {
+    throw new Error("Built context does not match its full-turn compaction projection");
+  }
+  const sessionStart = locateSessionMessages(context.messages, built.messages);
+  const boundary = sessionStart + previousSummaryCount + summarizedMessageCount;
+  return {
+    ...context,
+    messages: [
+      ...context.messages.slice(0, boundary),
+      { role: "user", content: SUMMARY_INSTRUCTION, timestamp: Date.now() },
+    ],
   };
 }
 
@@ -140,12 +147,14 @@ export class ContextCompactionService {
     private readonly reasoning?: ThinkingLevel,
   ) {}
 
-  needsCompaction(built: BuiltContext, systemTokens: number): boolean {
-    return retainedStartIndex(built.compactableTurns, systemTokens) !== undefined;
+  needsCompaction(built: BuiltContext, systemTokens: number, targetTurnId: string): boolean {
+    return built.compactableTurns.at(-1)?.turnId === targetTurnId &&
+      retainedStartIndex(built.compactableTurns, systemTokens) !== undefined;
   }
 
   async compact(options: {
     built: BuiltContext;
+    context: Context;
     turnId: string;
     reason: CompactionReason;
     signal: AbortSignal;
@@ -153,25 +162,33 @@ export class ContextCompactionService {
     tokensBefore: number;
     appendAfter?: Promise<unknown>;
   }): Promise<CompactionResult> {
+    const newestTurn = options.built.compactableTurns.at(-1);
+    if (newestTurn && newestTurn.turnId !== options.turnId) {
+      throw new Error(`Compaction target ${options.turnId} is not the newest full-turn boundary`);
+    }
     const preparation = prepareCompaction(options.built.compactableTurns, options.systemTokens);
     if (!preparation) return { compacted: false };
 
-    const conversation = serializeConversation(preparation.messagesToSummarize);
-    const previousSummary = options.built.latestCompaction?.summary;
-    const prompt = [
-      `<conversation>\n${conversation}\n</conversation>`,
-      ...(previousSummary ? [`<previous-summary>\n${previousSummary}\n</previous-summary>`] : []),
-      previousSummary ? UPDATE_INSTRUCTION : SUMMARY_INSTRUCTION,
-    ].join("\n\n");
     const maxTokens = Math.min(COMPACTION_SUMMARY_RESERVE_TOKENS, this.model.maxOutputTokens);
-    const summary = await this.model.completeText(SUMMARY_SYSTEM_PROMPT, prompt, {
-      signal: options.signal,
-      maxTokens,
-      cacheRetention: "none",
-      sessionId: createId("compaction"),
-      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-    });
-    if (!summary.trim()) throw new Error("Compaction produced an empty summary");
+    const response = await this.model.stream(
+      compactionContext(options.built, options.context, preparation.summarizedMessageCount),
+      {
+        signal: options.signal,
+        maxTokens,
+        ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+      },
+    );
+    if (response.stopReason === "aborted") {
+      throw new DOMException(response.errorMessage ?? "Compaction aborted", "AbortError");
+    }
+    if (response.stopReason === "error") {
+      throw new Error(response.errorMessage ?? "Compaction model request failed");
+    }
+    if (response.stopReason === "toolUse" || response.content.some((block) => block.type === "toolCall")) {
+      throw new Error("Compaction model attempted to call a tool");
+    }
+    const summary = contentText(response.content, "").trim();
+    if (!summary) throw new Error("Compaction produced an empty summary");
 
     options.signal.throwIfAborted();
     await options.appendAfter;

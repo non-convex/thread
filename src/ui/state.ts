@@ -6,7 +6,7 @@ import type { UiEvent } from "./events.js";
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool";
+  kind: "user" | "assistant" | "thinking" | "tool" | "compaction";
   content: string;
   label?: string;
   isError?: boolean;
@@ -27,7 +27,7 @@ export interface LiveTool {
 
 export interface LiveBlock {
   id: string;
-  kind: "thinking" | "assistant" | "tool";
+  kind: "thinking" | "assistant" | "tool" | "compaction";
   content: string;
   streaming?: boolean;
   tool?: LiveTool;
@@ -220,6 +220,8 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "model_retry_started":
       state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts}`;
       return;
+    case "context_updated":
+      return;
     case "tool_started": {
       if (!state.liveTurn) return;
       const closed = endStreaming(state.liveTurn);
@@ -246,11 +248,27 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       }
       return;
     case "compaction_started":
+      if (state.liveTurn) state.liveTurn = endStreaming(state.liveTurn);
       state.activity = `compacting context · ${event.reason}`;
       return;
-    case "compaction_finished":
-      state.activity = event.ok ? "context compacted" : "compaction failed";
+    case "compaction_finished": {
+      state.activity = event.ok ? (event.entryId ? "context compacted" : "context unchanged") : "compaction failed";
+      if (event.ok && event.entryId && state.liveTurn) {
+        const closed = endStreaming(state.liveTurn);
+        state.liveTurn = {
+          ...closed,
+          blocks: [
+            ...closed.blocks,
+            {
+              id: `compaction:${event.entryId}`,
+              kind: "compaction",
+              content: `context compacted · ${event.reason}`,
+            },
+          ],
+        };
+      }
       return;
+    }
     case "turn_finished":
       state.busy = false;
       state.activity = undefined;

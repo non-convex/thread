@@ -27,7 +27,15 @@ export function projectTranscript(entries: readonly SessionEntry[]): TranscriptI
   for (const entry of entries) if (entry.type === "tool_execution") tools.set(entry.toolCallId, entry);
   const output: TranscriptItem[] = [];
   for (const entry of entries) {
-    if (entry.type === "tool_execution" || entry.type === "compaction") continue;
+    if (entry.type === "tool_execution") continue;
+    if (entry.type === "compaction") {
+      output.push({
+        id: entry.id,
+        kind: "compaction",
+        content: `context compacted · ${entry.reason}`,
+      });
+      continue;
+    }
     const message = entry.message;
     if (message.role === "user") {
       output.push({ id: entry.id, kind: "user", content: textContent(message.content) });

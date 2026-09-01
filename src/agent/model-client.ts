@@ -83,7 +83,6 @@ export interface ModelClient {
   /** Default prompt-cache lifetime for this client's requests. */
   readonly cacheRetention?: CacheRetention | undefined;
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
-  completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string>;
 }
 
 export interface ModelDescriptor {
@@ -200,43 +199,6 @@ export class PiModelClient implements ModelClient {
         },
       },
     );
-  }
-
-  async completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string> {
-    const message = await retryAssistantCall(
-      async () =>
-        this.models.completeSimple(
-          this.model,
-          {
-            systemPrompt,
-            messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-          },
-          {
-            signal: options.signal,
-            ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-            ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
-            maxRetries: 0,
-            sessionId: options.sessionId ?? this.cacheKey,
-            ...(this.resolveRetention(options) === undefined
-              ? {}
-              : { cacheRetention: this.resolveRetention(options)! }),
-          },
-        ),
-      {
-        enabled: true,
-        maxRetries: options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES,
-        baseDelayMs: options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS,
-      },
-      options.signal,
-    );
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
-      throw new Error(message.errorMessage ?? `Semantic model stopped with ${message.stopReason}`);
-    }
-    return message.content
-      .filter((block) => block.type === "text")
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("\n")
-      .trim();
   }
 }
 

@@ -233,6 +233,7 @@ export class ThreadTuiController {
 
   private applyUiEvent(event: UiEvent): void {
     reduceUiEvent(this.state, event);
+    if (event.type === "context_updated") this.meta.contextPercent = event.percent;
     this.notify();
   }
 
