@@ -1,83 +1,193 @@
-import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
+import {
+  contentText,
+  type Message,
+  type ThinkingLevel,
+} from "@earendil-works/pi-ai";
 import type { ModelClient } from "../agent/model-client.js";
-import { COMPACTION_CACHE_FORMAT, ContextCache, pathFingerprint } from "./cache.js";
-import type { ContextBuilder, ContextTurn } from "./builder.js";
+import type { CompactionReason, RetainedTurn } from "../session-tree/model.js";
+import type { SessionTreeService } from "../session-tree/service.js";
+import { createId } from "../utils/id.js";
+import { estimateMessageTokens } from "../utils/estimate.js";
+import type { BuiltContext } from "./builder.js";
 
-const SUMMARY_INSTRUCTION = [
-  "Compact the earlier conversation prefix into a concise project-state summary for a continuing coding agent.",
-  "Preserve the active goal, user decisions and corrections, architectural constraints, implemented results,",
-  "validation evidence, failed approaches and reasons, unresolved risks, and the exact next useful action.",
-  "Do not copy raw logs, hidden reasoning, or routine tool output. Do not invent facts.",
-  "The original Session Tree remains stored and searchable; this summary is only a removable context cache.",
-  "Return only the summary body and do not request tools.",
+const SUMMARY_SYSTEM_PROMPT = [
+  "You are a context summarization assistant.",
+  "Do not continue the conversation or answer its questions.",
+  "Return only a structured checkpoint summary for another coding agent.",
 ].join(" ");
 
-export interface CompactionResult {
-  compacted: boolean;
-  summarizedTurns?: number;
-  retainedTurns?: number;
-  summarizedMessages?: number;
+const SUMMARY_INSTRUCTION = `Create a concise project-state checkpoint from the conversation.
+
+Use this structure:
+
+## Goal
+## Constraints and preferences
+## Progress
+### Done
+### In progress
+### Blocked
+## Key decisions
+## Next steps
+## Critical context
+
+Preserve exact paths, identifiers, commands, errors, user corrections, validation evidence, failed approaches and their reasons. Do not invent facts or copy routine logs.`;
+
+const UPDATE_INSTRUCTION = `Update the previous checkpoint using the new conversation.
+
+Preserve still-valid information from the previous checkpoint, incorporate new progress and decisions, remove resolved blockers, and update next steps. Use the same structure as the previous checkpoint. Do not invent facts or continue the conversation.`;
+
+const TOOL_RESULT_MAX_CHARS = 2_000;
+export const COMPACTION_TARGET_TOKENS = 20_000;
+export const COMPACTION_SUMMARY_RESERVE_TOKENS = 4_000;
+export const COMPACTION_MIN_RETAINED_TURNS = 2;
+
+export type CompactionResult =
+  | { compacted: false }
+  | {
+      compacted: true;
+      entryId: string;
+      summarizedTurns: number;
+      retainedTurns: number;
+      tokensBefore: number;
+    };
+
+interface CompactionPreparation {
+  summarizedTurnCount: number;
+  messagesToSummarize: Message[];
+  retainedTurns: RetainedTurn[];
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "undefined";
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
+}
+
+function serializeConversation(messages: readonly Message[]): string {
+  const parts: string[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      const text = contentText(message.content, "");
+      if (text) parts.push(`[User]: ${text}`);
+      continue;
+    }
+    if (message.role === "toolResult") {
+      const text = contentText(message.content, "");
+      if (text) parts.push(`[Tool result]: ${truncate(text, TOOL_RESULT_MAX_CHARS)}`);
+      continue;
+    }
+    const text = contentText(message.content, "");
+    if (text) parts.push(`[Assistant]: ${text}`);
+    const calls = message.content
+      .filter((block) => block.type === "toolCall")
+      .map((block) => block.type === "toolCall"
+        ? `${block.name}(${safeJsonStringify(block.arguments)})`
+        : "");
+    if (calls.length > 0) parts.push(`[Assistant tool calls]: ${calls.join("; ")}`);
+  }
+  return parts.join("\n\n");
+}
+
+function turnTokens(turn: RetainedTurn): number {
+  return turn.messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+function retainedStartIndex(
+  turns: readonly RetainedTurn[],
+  systemTokens: number,
+): number | undefined {
+  if (turns.length <= COMPACTION_MIN_RETAINED_TURNS) return undefined;
+  const retainedBudget = Math.max(
+    0,
+    COMPACTION_TARGET_TOKENS - COMPACTION_SUMMARY_RESERVE_TOKENS - systemTokens,
+  );
+  let retainedStart = turns.length - COMPACTION_MIN_RETAINED_TURNS;
+  let retainedTokens = turns.slice(retainedStart).reduce((total, turn) => total + turnTokens(turn), 0);
+
+  for (let index = retainedStart - 1; index >= 0; index--) {
+    const nextTokens = turnTokens(turns[index]!);
+    if (retainedTokens + nextTokens > retainedBudget) break;
+    retainedStart = index;
+    retainedTokens += nextTokens;
+  }
+  return retainedStart === 0 ? undefined : retainedStart;
+}
+
+function prepareCompaction(
+  turns: readonly RetainedTurn[],
+  systemTokens: number,
+): CompactionPreparation | undefined {
+  const retainedStart = retainedStartIndex(turns, systemTokens);
+  if (retainedStart === undefined) return undefined;
+  return {
+    summarizedTurnCount: retainedStart,
+    messagesToSummarize: turns.slice(0, retainedStart).flatMap((turn) => structuredClone(turn.messages)),
+    retainedTurns: structuredClone(turns.slice(retainedStart)),
+  };
 }
 
 export class ContextCompactionService {
   constructor(
-    private readonly builder: ContextBuilder,
-    private readonly cache: ContextCache,
+    private readonly tree: SessionTreeService,
     private readonly model: ModelClient,
     private readonly reasoning?: ThinkingLevel,
-    private readonly retainTurns = 2,
   ) {}
 
-  needsCompaction(turns: readonly ContextTurn[], existingThroughTurnId?: string): boolean {
-    const completed = turns.filter((turn) => turn.status === "completed");
-    if (completed.length <= this.retainTurns) return false;
-    const nextThrough = completed[completed.length - this.retainTurns - 1]!.id;
-    return nextThrough !== existingThroughTurnId;
+  needsCompaction(built: BuiltContext, systemTokens: number): boolean {
+    return retainedStartIndex(built.compactableTurns, systemTokens) !== undefined;
   }
 
   async compact(options: {
-    turns: readonly ContextTurn[];
-    fullContext: Context;
+    built: BuiltContext;
+    turnId: string;
+    reason: CompactionReason;
     signal: AbortSignal;
-    maxTokens?: number;
+    systemTokens: number;
+    tokensBefore: number;
+    appendAfter?: Promise<unknown>;
   }): Promise<CompactionResult> {
-    const completedPrefix = options.turns.filter((turn) => turn.status === "completed");
-    if (completedPrefix.length <= this.retainTurns) return { compacted: false };
-    const boundary = completedPrefix.length - this.retainTurns;
-    const through = completedPrefix[boundary - 1]!;
-    const throughIndex = options.turns.findIndex((turn) => turn.id === through.id);
-    if (throughIndex < 0) throw new Error("Compaction boundary is not on the current path");
-    const summarizedTurns = options.turns.slice(0, throughIndex + 1);
-    const retainedTurns = options.turns.slice(throughIndex + 1);
-    const summarizedMessages = this.builder.rawMessages(summarizedTurns);
-    const promptContext: Context = options.fullContext;
-    const maxTokens = Math.min(options.maxTokens ?? 4_000, this.model.maxOutputTokens);
-    const instruction = [
-      SUMMARY_INSTRUCTION,
-      `The newest ${retainedTurns.length} turn(s) remain verbatim after this summary.`,
-      "Do not summarize or duplicate those retained turns; summarize only the material before their boundary.",
-    ].join(" ");
-    const summary = await this.model.forkComplete(promptContext, instruction, {
+    const preparation = prepareCompaction(options.built.compactableTurns, options.systemTokens);
+    if (!preparation) return { compacted: false };
+
+    const conversation = serializeConversation(preparation.messagesToSummarize);
+    const previousSummary = options.built.latestCompaction?.summary;
+    const prompt = [
+      `<conversation>\n${conversation}\n</conversation>`,
+      ...(previousSummary ? [`<previous-summary>\n${previousSummary}\n</previous-summary>`] : []),
+      previousSummary ? UPDATE_INSTRUCTION : SUMMARY_INSTRUCTION,
+    ].join("\n\n");
+    const maxTokens = Math.min(COMPACTION_SUMMARY_RESERVE_TOKENS, this.model.maxOutputTokens);
+    const summary = await this.model.completeText(SUMMARY_SYSTEM_PROMPT, prompt, {
       signal: options.signal,
       maxTokens,
+      cacheRetention: "none",
+      sessionId: createId("compaction"),
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
     if (!summary.trim()) throw new Error("Compaction produced an empty summary");
-    const sessionId = through.sessionId;
-    await this.cache.write({
-      format: COMPACTION_CACHE_FORMAT,
-      formatVersion: 1,
-      sessionId,
-      throughTurnId: through.id,
-      pathFingerprint: pathFingerprint(summarizedTurns.map((turn) => turn.id)),
-      summary: summary.trim(),
-      createdAt: Date.now(),
+
+    options.signal.throwIfAborted();
+    await options.appendAfter;
+    const entry = await this.tree.appendCompaction({
+      turnId: options.turnId,
+      summary,
+      retainedTurns: preparation.retainedTurns,
+      tokensBefore: options.tokensBefore,
+      reason: options.reason,
     });
     return {
       compacted: true,
-      summarizedTurns: summarizedTurns.length,
-      retainedTurns: retainedTurns.length,
-      summarizedMessages: summarizedMessages.length,
+      entryId: entry.id,
+      summarizedTurns: preparation.summarizedTurnCount,
+      retainedTurns: preparation.retainedTurns.length,
+      tokensBefore: options.tokensBefore,
     };
   }
 }

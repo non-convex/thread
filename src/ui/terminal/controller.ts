@@ -80,7 +80,7 @@ export class ThreadTuiController {
   constructor(private readonly app: ThreadApp) {
     this.slashSuggestions = [
       { name: "clear", description: "Clear the visible transcript" },
-      { name: "compact", description: "Regenerate the current path's context cache" },
+      { name: "compact", description: "Append a compaction checkpoint to the current path" },
       { name: "model", description: "Choose the active model" },
       { name: "new", description: "Create an empty Session from the project Root" },
       { name: "session", description: "List or resume root Sessions" },
@@ -357,7 +357,7 @@ export class ThreadTuiController {
   }
 
   private activeMessages(): Message[] {
-    return this.app.sessionTree.livePath().flatMap((turn) => this.app.sessionTree.messagesForTurn(turn.id));
+    return this.app.liveContextMessages();
   }
 
   private syncTranscript(): void {

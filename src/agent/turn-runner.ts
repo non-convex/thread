@@ -6,7 +6,7 @@ import {
   isContextOverflow,
 } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
-import { COMPACTION_TRIGGER_RATIO, contextBudget } from "../context/budget.js";
+import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
 import type { ContextCompactionService, CompactionResult } from "../context/compaction.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { Turn } from "../session-tree/model.js";
@@ -23,6 +23,13 @@ export interface RunTurnOptions {
   onUiEvent?: UiEventSink;
 }
 
+interface CompactionInvocation {
+  reason: "manual" | "threshold" | "overflow";
+  turnId: string;
+  appendAfter?: Promise<unknown>;
+  budget?: ContextBudget;
+}
+
 export class TurnRunner {
   constructor(
     private readonly model: ModelClient,
@@ -37,7 +44,7 @@ export class TurnRunner {
     private readonly reasoning?: ThinkingLevel,
   ) {}
 
-  prepareCurrent(): Promise<BuiltContext> {
+  prepareCurrent(): BuiltContext {
     return this.builder.build();
   }
 
@@ -54,15 +61,17 @@ export class TurnRunner {
       let assembled = step === 1
         ? await this.assemblePlanned(prepared, planned)
         : await this.assemble(planned.id);
-      let budget = contextBudget(assembled.context, assembled.built.messages, this.maxOutputTokens);
+      const budget = contextBudget(assembled.context, assembled.built.messages, this.maxOutputTokens);
       if (budget.requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO) &&
-          this.compaction.needsCompaction(assembled.built.turns, assembled.built.compactedThroughTurnId)) {
-        const compacted = await this.compactBuilt(assembled, options, "threshold");
+          this.compaction.needsCompaction(assembled.built, budget.overheadTokens)) {
+        const compacted = await this.compactBuilt(assembled, options, {
+          reason: "threshold",
+          turnId: planned.id,
+          appendAfter: turnReady,
+          budget,
+        });
         if (compacted.compacted) {
-          assembled = step === 1
-            ? await this.assemblePlanned(await this.builder.build(), planned)
-            : await this.assemble(planned.id);
-          budget = contextBudget(assembled.context, assembled.built.messages, this.maxOutputTokens);
+          assembled = await this.assemble(planned.id);
         }
       }
       safeUiEvent(options.onUiEvent, { type: "assistant_started", step });
@@ -123,8 +132,12 @@ export class TurnRunner {
           if (overflowRecoveryUsed) throw new Error("Context overflow remained after compaction; use /rewind or /new");
           overflowRecoveryUsed = true;
           const overflowContext = await this.assemble(planned.id);
-          const recovered = await this.compactBuilt(overflowContext, options, "overflow");
-          if (!recovered.compacted) throw new Error("Context overflow cannot be compacted without dropping the retained turn tail");
+          const recovered = await this.compactBuilt(overflowContext, options, {
+            reason: "overflow",
+            turnId: planned.id,
+            appendAfter: turnReady,
+          });
+          if (!recovered.compacted) throw new Error("Context overflow cannot be compacted while retaining the newest two turns");
           continue;
         }
         if (response.stopReason === "aborted") {
@@ -151,9 +164,11 @@ export class TurnRunner {
 
   async compactActive(options: RunTurnOptions): Promise<CompactionResult> {
     this.tree.requireIdle();
-    const built = await this.builder.build();
+    const turnId = this.tree.activeLiveTip;
+    if (!turnId) return { compacted: false };
+    const built = this.builder.build();
     const context = await this.extendContext(built, `compact_${Date.now()}`);
-    return this.compactBuilt({ built, context }, options, "manual");
+    return this.compactBuilt({ built, context }, options, { reason: "manual", turnId });
   }
 
   baseContextFor(messages: Message[]): Context {
@@ -165,7 +180,7 @@ export class TurnRunner {
   }
 
   private async assemble(turnId: string): Promise<{ built: BuiltContext; context: Context }> {
-    const built = await this.builder.build(turnId);
+    const built = this.builder.build(turnId);
     return { built, context: await this.extendContext(built, turnId) };
   }
 
@@ -180,12 +195,11 @@ export class TurnRunner {
     };
     const built: BuiltContext = {
       messages: [...prepared.messages, userMessage],
-      turns: [...prepared.turns, {
-        id: planned.id,
-        sessionId: planned.sessionId,
-        status: "running",
-      }],
-      ...(prepared.compactedThroughTurnId ? { compactedThroughTurnId: prepared.compactedThroughTurnId } : {}),
+      compactableTurns: [
+        ...prepared.compactableTurns,
+        { turnId: planned.id, messages: [userMessage] },
+      ],
+      ...(prepared.latestCompaction ? { latestCompaction: prepared.latestCompaction } : {}),
     };
     return { built, context: await this.extendContext(built, planned.id) };
   }
@@ -202,18 +216,27 @@ export class TurnRunner {
   private async compactBuilt(
     assembled: { built: BuiltContext; context: Context },
     options: RunTurnOptions,
-    reason: "manual" | "threshold" | "overflow",
+    invocation: CompactionInvocation,
   ): Promise<CompactionResult> {
-    if (reason !== "manual" &&
-        !this.compaction.needsCompaction(assembled.built.turns, assembled.built.compactedThroughTurnId)) {
+    const budget = invocation.budget ?? contextBudget(
+      assembled.context,
+      assembled.built.messages,
+      this.maxOutputTokens,
+    );
+    if (invocation.reason !== "manual" &&
+        !this.compaction.needsCompaction(assembled.built, budget.overheadTokens)) {
       return { compacted: false };
     }
-    safeUiEvent(options.onUiEvent, { type: "compaction_started", reason });
+    safeUiEvent(options.onUiEvent, { type: "compaction_started", reason: invocation.reason });
     try {
       const result = await this.compaction.compact({
-        turns: assembled.built.turns,
-        fullContext: assembled.context,
+        built: assembled.built,
+        turnId: invocation.turnId,
+        reason: invocation.reason,
         signal: options.signal,
+        systemTokens: budget.overheadTokens,
+        tokensBefore: budget.requestTokens,
+        ...(invocation.appendAfter ? { appendAfter: invocation.appendAfter } : {}),
       });
       safeUiEvent(options.onUiEvent, { type: "compaction_finished", ok: true });
       return result;

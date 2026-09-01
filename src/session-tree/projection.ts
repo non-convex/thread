@@ -98,14 +98,17 @@ export class SessionTreeProjection {
       case "entry_appended": {
         const entry = event.entry;
         assertUnused(this.entries, entry.id, "entry");
-        if (entry.type !== "message" && entry.type !== "tool_execution") {
+        if (entry.type !== "message" && entry.type !== "tool_execution" && entry.type !== "compaction") {
           throw new SessionTreeCorruptionError(`Unknown entry type: ${String((entry as { type?: unknown }).type)}`);
         }
         const turn = this.turns.get(entry.turnId);
         if (!turn || turn.sessionId !== entry.sessionId) {
           throw new SessionTreeCorruptionError(`Entry ${entry.id} has no matching turn`);
         }
-        if (turn.status !== "running") throw new SessionTreeCorruptionError(`Entry ${entry.id} was appended to a closed turn`);
+        const appendsToLiveTip = turn.status === "completed" && this.liveTips.get(turn.sessionId) === turn.id;
+        if (turn.status !== "running" && (entry.type !== "compaction" || !appendsToLiveTip)) {
+          throw new SessionTreeCorruptionError(`Entry ${entry.id} was appended to a closed turn`);
+        }
         const turnEntries = this.entriesByTurn.get(turn.id)!;
         if (entry.ordinal !== turnEntries.length) {
           throw new SessionTreeCorruptionError(`Entry ${entry.id} has ordinal ${entry.ordinal}; expected ${turnEntries.length}`);
@@ -113,6 +116,21 @@ export class SessionTreeProjection {
         if (entry.ordinal === 0 && (entry.type !== "message" || entry.message.role !== "user" ||
             entry.id !== turn.userEntryId)) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not begin with its user entry`);
+        }
+        if (entry.type === "compaction") {
+          const retainedTurnsValid = Array.isArray(entry.retainedTurns) && entry.retainedTurns.length >= 2 &&
+            entry.retainedTurns[entry.retainedTurns.length - 1]?.turnId === turn.id &&
+            entry.retainedTurns.every((retained, index) => {
+              if (!retained || typeof retained.turnId !== "string" || !Array.isArray(retained.messages)) return false;
+              const source = this.turns.get(retained.turnId);
+              if (!source || source.sessionId !== turn.sessionId) return false;
+              return index === 0 || source.parentTurnId === entry.retainedTurns[index - 1]!.turnId;
+            });
+          if (!entry.summary.trim() || !retainedTurnsValid ||
+              !Number.isFinite(entry.tokensBefore) || entry.tokensBefore < 0 ||
+              !["manual", "threshold", "overflow"].includes(entry.reason)) {
+            throw new SessionTreeCorruptionError(`Invalid compaction entry: ${entry.id}`);
+          }
         }
         const cloned = structuredClone(entry);
         this.entries.set(entry.id, cloned);

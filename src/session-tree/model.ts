@@ -56,7 +56,22 @@ export interface ToolExecutionEntry extends EntryBase {
   replay: "safe" | "never";
 }
 
-export type SessionEntry = MessageEntry | ToolExecutionEntry;
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
+export interface RetainedTurn {
+  turnId: string;
+  messages: Message[];
+}
+
+export interface CompactionEntry extends EntryBase {
+  type: "compaction";
+  summary: string;
+  retainedTurns: RetainedTurn[];
+  tokensBefore: number;
+  reason: CompactionReason;
+}
+
+export type SessionEntry = MessageEntry | ToolExecutionEntry | CompactionEntry;
 
 export type SessionTreeEvent =
   | { type: "tree_created"; tree: SessionTree }

@@ -1,4 +1,4 @@
-import type { CacheRetention, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { CacheRetention, Message, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRuntime, type TurnResult } from "../agent/runtime.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../agent/messages.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
@@ -16,7 +16,6 @@ import {
 } from "../commands/types.js";
 import type { ModelState } from "../config/model-state.js";
 import { ContextBuilder } from "../context/builder.js";
-import { ContextCache } from "../context/cache.js";
 import { ContextCompactionService } from "../context/compaction.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
 import { ExtensionEvents } from "../extensions/events.js";
@@ -76,7 +75,6 @@ export class ThreadApp {
   readonly commands = new CommandRegistry();
   readonly extensionApi: ExtensionAPI;
   private readonly repository: SessionTreeRepository;
-  private readonly contextCache: ContextCache;
   private readonly contextBuilder: ContextBuilder;
   private readonly events = new ExtensionEvents();
   private readonly commandRouter: ThreadCommandRouter;
@@ -97,7 +95,6 @@ export class ThreadApp {
     repository: SessionTreeRepository;
     tree: SessionTreeService;
     workspace: WorkspaceStateService;
-    cache: ContextCache;
     builder: ContextBuilder;
     search: SessionSearchService;
     skills: LoadedSkills;
@@ -107,7 +104,6 @@ export class ThreadApp {
     this.repository = values.repository;
     this.sessionTree = values.tree;
     this.workspaceState = values.workspace;
-    this.contextCache = values.cache;
     this.contextBuilder = values.builder;
     this.search = values.search;
     this.loadedSkills = values.skills;
@@ -142,11 +138,10 @@ export class ThreadApp {
       });
       await workspaceRepository.initialize();
       const workspace = new WorkspaceStateService(workspaceRepository);
-      const cache = new ContextCache(repository.cachePath);
-      const builder = new ContextBuilder(tree, cache);
+      const builder = new ContextBuilder(tree);
       const search = new SessionSearchService(tree);
       const skills = options.skills ?? await loadSkills();
-      return new ThreadApp(options, { project, repository, tree, workspace, cache, builder, search, skills });
+      return new ThreadApp(options, { project, repository, tree, workspace, builder, search, skills });
     } catch (error) {
       await repository?.close();
       throw error;
@@ -191,13 +186,16 @@ export class ThreadApp {
 
   contextOccupancy(tipTurnId: string | null = this.sessionTree.activeLiveTip): { percent: number; requestTokens: number } | undefined {
     if (!this.currentModel || !this.runtime) return undefined;
-    const turns = tipTurnId ? this.sessionTree.pathToTurn(tipTurnId) : [];
-    const messages = turns.flatMap((turn) => this.sessionTree.messagesForTurn(turn.id));
+    const messages = this.contextBuilder.build(tipTurnId ?? undefined).messages;
     const { requestTokens } = this.runtime.estimateRequestBudget(messages);
     return {
       percent: Math.min(999, Math.round((requestTokens / this.currentModel.contextWindow) * 100)),
       requestTokens,
     };
+  }
+
+  liveContextMessages(): Message[] {
+    return this.contextBuilder.build().messages;
   }
 
   cycleThinkingLevel(): ModelThinkingLevel | undefined {
@@ -256,8 +254,7 @@ export class ThreadApp {
     const skills = formatSkillsSection(this.loadedSkills.skills);
     const systemPrompt = [this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT, skills].filter(Boolean).join("\n\n");
     const compaction = new ContextCompactionService(
-      this.contextBuilder,
-      this.contextCache,
+      this.sessionTree,
       this.currentModel,
       reasoning,
     );
@@ -413,8 +410,8 @@ export class ThreadApp {
         const result = await new Compact(this.runtime).execute(options);
         safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
         return { kind: "command", result: ephemeral(result.compacted
-          ? `Context cache regenerated: ${result.summarizedTurns} turn(s) summarized; ${result.retainedTurns} retained`
-          : "Nothing to compact; too few completed turns", result.compacted) };
+          ? `Compaction entry appended: ${result.summarizedTurns} turn(s) summarized; ${result.retainedTurns} retained`
+          : "Nothing to compact without removing one of the newest two complete turns", result.compacted) };
       } catch (error) {
         safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: false });
         throw error;
@@ -483,7 +480,7 @@ export class ThreadApp {
   }
 
   rewindTo(turnIdOrUserEntryId: string) {
-    return new Rewind(this.sessionTree, this.workspaceState, this.contextCache).execute(turnIdOrUserEntryId);
+    return new Rewind(this.sessionTree, this.workspaceState).execute(turnIdOrUserEntryId);
   }
 
   async fsck(): Promise<string[]> {

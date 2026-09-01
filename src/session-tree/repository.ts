@@ -19,7 +19,6 @@ export class SessionTreeRepository {
   readonly projection = new SessionTreeProjection();
   readonly treePath: string;
   readonly eventsPath: string;
-  readonly cachePath: string;
   private readonly lockPath: string;
   private eventsHandle: FileHandle | undefined;
   private lockHandle: FileHandle | undefined;
@@ -29,14 +28,12 @@ export class SessionTreeRepository {
   private constructor(readonly project: Project) {
     this.treePath = path.join(project.statePath, "session-tree");
     this.eventsPath = path.join(this.treePath, "events.jsonl");
-    this.cachePath = path.join(this.treePath, "cache");
     this.lockPath = path.join(project.statePath, "session-tree.lock");
   }
 
   static async open(project: Project): Promise<SessionTreeRepository> {
     const repository = new SessionTreeRepository(project);
     await mkdir(repository.treePath, { recursive: true });
-    await mkdir(repository.cachePath, { recursive: true });
     await repository.acquireLock();
     try {
       await repository.load();

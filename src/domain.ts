@@ -6,6 +6,9 @@ export type {
   SessionEntry,
   MessageEntry,
   ToolExecutionEntry,
+  CompactionEntry,
+  CompactionReason,
+  RetainedTurn,
   SessionTreeEvent,
   SessionTreeRecord,
 } from "./session-tree/model.js";

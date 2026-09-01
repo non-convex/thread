@@ -49,6 +49,7 @@ function entryText(entry: SessionEntry, all = true): string {
   if (entry.type === "tool_execution") {
     return all ? `[tool started ${entry.toolName}] ${JSON.stringify(entry.effectiveArgs)}` : "";
   }
+  if (entry.type === "compaction") return "";
   return blockText(entry.message, all, all).join("\n");
 }
 
@@ -115,6 +116,7 @@ export class SessionSearchService {
     const lines: string[] = [];
     const omitted = new Set<string>();
     for (const entry of this.tree.entriesForTurn(turn.id)) {
+      if (entry.type === "compaction") continue;
       if (entry.type === "tool_execution") {
         if (options.toolCalls) lines.push(`[tool call ${entry.toolName}] ${JSON.stringify(entry.effectiveArgs)}`);
         else omitted.add("tool calls");

@@ -1,58 +1,69 @@
 import type { Message } from "@earendil-works/pi-ai";
-import type { Turn } from "../session-tree/model.js";
+import type { CompactionEntry, RetainedTurn, SessionEntry } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
-import { ContextCache, pathFingerprint } from "./cache.js";
 
 export interface BuiltContext {
   messages: Message[];
-  turns: ContextTurn[];
-  compactedThroughTurnId?: string;
+  compactableTurns: RetainedTurn[];
+  latestCompaction?: CompactionEntry;
 }
 
-export type ContextTurn = Pick<Turn, "id" | "sessionId" | "status">;
-
-function summaryMessage(summary: string, timestamp: number): Message {
+function summaryMessage(entry: CompactionEntry): Message {
   return {
     role: "user",
-    content: `[Derived project-state summary; original Session Tree history remains authoritative]\n\n${summary}`,
-    timestamp,
+    content: `[Derived project-state summary; original Session Tree history remains authoritative]\n\n${entry.summary}`,
+    timestamp: entry.timestamp,
   };
 }
 
-export class ContextBuilder {
-  constructor(
-    private readonly tree: SessionTreeService,
-    private readonly cache: ContextCache,
-  ) {}
+function flattenTurns(turns: readonly RetainedTurn[]): Message[] {
+  return turns.flatMap((turn) => structuredClone(turn.messages));
+}
 
-  async build(tipTurnId?: string): Promise<BuiltContext> {
+function appendEntryMessages(turns: RetainedTurn[], entries: readonly SessionEntry[]): void {
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const last = turns[turns.length - 1];
+    if (!last || last.turnId !== entry.turnId) {
+      turns.push({ turnId: entry.turnId, messages: [structuredClone(entry.message)] });
+    } else {
+      last.messages.push(structuredClone(entry.message));
+    }
+  }
+}
+
+/**
+ * Live context is rebuilt from the current Session Tree path on every request.
+ * The newest compaction entry replaces only the entries before it; the original
+ * entries remain in the tree for rewind, branching, history, and search.
+ */
+export class ContextBuilder {
+  constructor(private readonly tree: SessionTreeService) {}
+
+  build(tipTurnId?: string): BuiltContext {
     const turns = tipTurnId ? this.tree.pathToTurn(tipTurnId) : this.tree.livePath();
-    const sessionId = tipTurnId
-      ? this.tree.projection.turns.get(tipTurnId)?.sessionId
-      : this.tree.activeSession.id;
-    if (!sessionId) throw new Error(`Unknown context tip: ${tipTurnId}`);
-    const cached = await this.cache.read(sessionId);
-    let start = 0;
-    const messages: Message[] = [];
-    let compactedThroughTurnId: string | undefined;
-    if (cached) {
-      const throughIndex = turns.findIndex((turn) => turn.id === cached.throughTurnId);
-      const prefix = throughIndex >= 0 ? turns.slice(0, throughIndex + 1).map((turn) => turn.id) : [];
-      if (throughIndex >= 0 && pathFingerprint(prefix) === cached.pathFingerprint) {
-        messages.push(summaryMessage(cached.summary, cached.createdAt));
-        start = throughIndex + 1;
-        compactedThroughTurnId = cached.throughTurnId;
+    const entries = turns.flatMap((turn) => this.tree.entriesForTurn(turn.id));
+    let compactionIndex = -1;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      if (entries[index]!.type === "compaction") {
+        compactionIndex = index;
+        break;
       }
     }
-    for (const turn of turns.slice(start)) messages.push(...this.tree.messagesForTurn(turn.id));
-    return {
-      messages,
-      turns,
-      ...(compactedThroughTurnId ? { compactedThroughTurnId } : {}),
-    };
-  }
 
-  rawMessages(turns: readonly ContextTurn[]): Message[] {
-    return turns.flatMap((turn) => this.tree.messagesForTurn(turn.id));
+    if (compactionIndex < 0) {
+      const compactableTurns: RetainedTurn[] = [];
+      appendEntryMessages(compactableTurns, entries);
+      return { messages: flattenTurns(compactableTurns), compactableTurns };
+    }
+
+    const latestCompaction = entries[compactionIndex] as CompactionEntry;
+    const compactableTurns = structuredClone(latestCompaction.retainedTurns);
+    appendEntryMessages(compactableTurns, entries.slice(compactionIndex + 1));
+    return {
+      messages: [summaryMessage(latestCompaction), ...flattenTurns(compactableTurns)],
+      compactableTurns,
+      latestCompaction: structuredClone(latestCompaction),
+    };
   }
 }

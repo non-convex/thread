@@ -83,16 +83,16 @@ TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时
 
 1. 校验并恢复该 turn 的工作区状态；
 2. 将当前 Session 的 live tip 移到该 turn 的父 turn；
-3. 失效旧路径对应的派生上下文压缩；
+3. 从新路径重新构建 live context，旧路径上的 compaction entry 会自然退出；
 4. 所选 turn 及其后续历史继续保存在 Session Tree 中。
 
 下一条用户消息会自然产生新的子路径。工作区状态缺失或损坏时，rewind 会在移动 live tip 之前明确失败。
 
 ### Context compaction
 
-Compaction 是可删除缓存，不是历史节点。`/compact` 摘要较早的路径前缀，并逐字保留最近 turn。模型窗口达到 78%，或 provider 报告 overflow 时，也会使用同一缓存机制。
+Compaction 是追加写入 Session Tree 的一种 entry，保存摘要、逐字保留的完整 turn 后缀、压缩前 token 估算和触发原因。`/compact` 会把它追加到当前 live tip；模型窗口达到 78%，或 provider 报告 overflow 时，也会追加同一种 entry。
 
-删除 compaction cache 不会删除或改写 Session、Turn 或 Entry，完整上下文仍可由 Session Tree 重建。
+生成摘要前，Thread 会先估算实际的 system/tool 开销，并固定为摘要预留 4K token；然后在 `system + summary + retained turns ≈ 20K` 的预算内，从最新 turn 向前保留尽可能多的完整 turn，同时无论是否超预算都至少保留最近两个 turn。每次模型请求都会重新遍历当前路径的 entries 来构建 live context。路径存在 compaction 时，只投影最新一条，形成 `summary + retained turns + 该 entry 之后追加的消息`。更早的原始 entry 不会被删除或改写，因此 rewind、分支、历史和搜索仍使用完整 Session Tree。
 
 ## 命令
 
@@ -141,13 +141,12 @@ project.json
 session-tree/
   tree.json
   events.jsonl
-  cache/compaction/
 workspace-states/
   states/
   blobs/
 ```
 
-Session Tree 使用只追加 JSONL。Projection、搜索结果、标题、token 统计和 compaction summary 都是派生数据。运行时只接受当前 `thread-project-v1`、`thread-session-tree-v1` 与 `thread-workspace-state-v1` 格式；旧数据不读取、不迁移、不升级，也不会被部分解释。
+Session Tree 使用只追加 JSONL，消息、工具事实、turn、live-tip 变化和 compaction entry 都持久化在其中；Projection、搜索结果、标题和 token 统计可以据此重建。运行时只接受当前 `thread-project-v1`、`thread-session-tree-v1` 与 `thread-workspace-state-v1` 格式；旧数据不读取、不迁移、不升级，也不会被部分解释。
 
 ## 配置
 
@@ -169,7 +168,7 @@ bun run build
 src/project/          项目身份与生命周期
 src/session-tree/     Session、Turn、Entry、路径、历史与搜索
 src/workspace-state/  捕获、完整性校验与 rewind 恢复
-src/context/          live-path 输入、预算与 compaction cache
+src/context/          live-path 投影、预算与 compaction entry
 src/agent/            模型/工具 turn runtime 与中断处理
 src/app/              composition 与应用用例
 src/commands/         命令接口

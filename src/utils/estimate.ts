@@ -186,7 +186,7 @@ export function scanCacheUsage(messages: readonly Message[]): CacheScan {
 }
 
 /**
- * A compaction summary is injected as a user message ahead of the retained tail, so
+ * A compaction summary is injected as a user message ahead of the retained turn suffix, so
  * the prefix it replaces is gone and the next request cannot reuse it.
  */
 function isPrefixRewrite(message: Message): boolean {

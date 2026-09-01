@@ -3,8 +3,11 @@ import { createId, stableId } from "../utils/id.js";
 import { livePath, pathToTurn } from "./live-path.js";
 import {
   SESSION_TREE_FORMAT,
+  type CompactionEntry,
+  type CompactionReason,
   type MessageEntry,
   type ProjectSession,
+  type RetainedTurn,
   type SessionEntry,
   type SessionTree,
   type ToolExecutionEntry,
@@ -221,6 +224,36 @@ export class SessionTreeService {
       ...structuredClone(input),
     };
     await this.repository.append(() => ({ type: "entry_appended", entry }), true);
+    return structuredClone(entry);
+  }
+
+  async appendCompaction(input: {
+    turnId: string;
+    summary: string;
+    retainedTurns: RetainedTurn[];
+    tokensBefore: number;
+    reason: CompactionReason;
+  }): Promise<CompactionEntry> {
+    const turn = this.projection.turns.get(input.turnId);
+    if (!turn) throw new Error(`Unknown compaction turn: ${input.turnId}`);
+    const appendsToLiveTip = turn.status === "completed" && this.projection.liveTips.get(turn.sessionId) === turn.id;
+    if (turn.status !== "running" && !appendsToLiveTip) {
+      throw new Error(`Compaction target is not the running turn or current live tip: ${turn.id}`);
+    }
+    const entries = this.projection.entriesByTurn.get(turn.id)!;
+    const entry: CompactionEntry = {
+      id: createId("entry"),
+      sessionId: turn.sessionId,
+      turnId: turn.id,
+      ordinal: entries.length,
+      timestamp: Date.now(),
+      type: "compaction",
+      summary: input.summary.trim(),
+      retainedTurns: structuredClone(input.retainedTurns),
+      tokensBefore: input.tokensBefore,
+      reason: input.reason,
+    };
+    await this.repository.append(() => ({ type: "entry_appended", entry }));
     return structuredClone(entry);
   }
 

@@ -76,8 +76,7 @@ export interface ModelClient {
   readonly reasoning?: boolean;
   readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
   /**
-   * Prompt-cache partition key shared by every request this client makes, so the
-   * live turn, its summary forks and the semantic helpers all land in one shard.
+   * Prompt-cache partition key shared by ordinary requests made by this client.
    * Set through {@link PiModelClient.withCacheKey}.
    */
   readonly cacheKey?: string;
@@ -85,13 +84,6 @@ export interface ModelClient {
   readonly cacheRetention?: CacheRetention | undefined;
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
   completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string>;
-  /**
-   * Fork the live conversation: reuse its exact prefix (system prompt plus
-   * messages) and append one instruction as the newest user message. The reply
-   * is returned to the caller instead of entering the agent loop, so the prefix
-   * stays byte-identical and keeps hitting the provider's prompt cache.
-   */
-  forkComplete(context: Context, instruction: string, options: ModelRequestOptions): Promise<string>;
 }
 
 export interface ModelDescriptor {
@@ -148,9 +140,8 @@ export class PiModelClient implements ModelClient {
   }
 
   /**
-   * Same model, different prompt-cache partition. Used to bind a client to one
-   * Session Tree so its turns and summary forks share a shard
-   * instead of colliding with another tree open on the same model.
+   * Same model, different prompt-cache partition. Used to keep one Session
+   * Tree's ordinary requests from colliding with another tree on the same model.
    */
   withCacheKey(cacheKey: string): PiModelClient {
     return new PiModelClient(this.models, this.model, cacheKey, this.cacheRetention);
@@ -209,31 +200,6 @@ export class PiModelClient implements ModelClient {
         },
       },
     );
-  }
-
-  async forkComplete(context: Context, instruction: string, options: ModelRequestOptions): Promise<string> {
-    /* The fork keeps the live prefix intact and only appends the instruction,
-     * so the provider's cached prefix still matches. Tools stay in the request
-     * to preserve that prefix, but this method never executes a tool call. */
-    const forked: Context = {
-      ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
-      messages: [...context.messages, { role: "user", content: instruction, timestamp: Date.now() }],
-      ...(context.tools === undefined ? {} : { tools: context.tools }),
-    };
-    const message = await this.stream(forked, options);
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
-      throw new Error(message.errorMessage ?? `Forked request stopped with ${message.stopReason}`);
-    }
-    if (message.stopReason === "toolUse" || message.content.some((block) => block.type === "toolCall")) {
-      throw new Error("Forked summary requested a tool; summary forks are read-only and tools were not executed");
-    }
-    const text = message.content
-      .filter((block) => block.type === "text")
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("\n")
-      .trim();
-    if (!text) throw new Error("Forked request returned no text");
-    return text;
   }
 
   async completeText(systemPrompt: string, prompt: string, options: ModelRequestOptions): Promise<string> {

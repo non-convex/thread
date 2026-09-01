@@ -8,7 +8,13 @@ export { SessionSearchService } from "./session-tree/search.js";
 export { WorkspaceStateService } from "./workspace-state/service.js";
 export { WorkspaceStateRepository } from "./workspace-state/repository.js";
 export { ContextBuilder, type BuiltContext } from "./context/builder.js";
-export { ContextCache, type CompactionCacheEntry } from "./context/cache.js";
+export {
+  ContextCompactionService,
+  COMPACTION_MIN_RETAINED_TURNS,
+  COMPACTION_SUMMARY_RESERVE_TOKENS,
+  COMPACTION_TARGET_TOKENS,
+  type CompactionResult,
+} from "./context/compaction.js";
 export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
 export {
   createBuiltinModelClient,

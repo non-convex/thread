@@ -83,16 +83,16 @@ Workspace states are content-addressed manifests and blobs stored under `~/.thre
 
 1. Verify and restore that turn's workspace state.
 2. Move the active Session's live tip to the selected turn's parent.
-3. Invalidate derived context compaction for the old path.
+3. Rebuild live context from the new path; off-path compaction entries stop applying naturally.
 4. Keep the selected turn and all later turns in the Session Tree.
 
 The next user message naturally creates a new child path. A missing or corrupt workspace state causes rewind to fail before the live tip moves.
 
 ### Context compaction
 
-Compaction is a removable cache, not history. `/compact` summarizes an older prefix while retaining recent turns verbatim. Automatic compaction uses the same cache at 78% of the model window and after a provider reports overflow.
+Compaction is an append-only Session Tree entry. It stores a summary, a verbatim suffix of complete turns, the pre-compaction token estimate, and the trigger reason. `/compact` appends one to the current live tip; automatic compaction appends the same entry type at 78% of the model window and after a provider reports overflow.
 
-Deleting the compaction cache does not remove or rewrite any Session, Turn, or Entry. The full context can be rebuilt from the Session Tree.
+Before generating a summary, Thread estimates the actual system/tool overhead and reserves 4K tokens for the summary. It then retains the largest suffix of whole turns that keeps `system + summary + retained turns` near 20K tokens, while always retaining at least the newest two turns. Every model request rebuilds live context from the current path's entries. If the path contains compactions, only the newest one is projected as `summary + retained turns`, followed by messages appended after that entry. Earlier entries are not deleted or rewritten, so rewind, branching, history, and search continue to use the complete Session Tree.
 
 ## Commands
 
@@ -141,13 +141,12 @@ project.json
 session-tree/
   tree.json
   events.jsonl
-  cache/compaction/
 workspace-states/
   states/
   blobs/
 ```
 
-The Session Tree log is append-only JSONL. A projection, search results, titles, token counts, and compaction summaries are derived data. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, and `thread-workspace-state-v1` formats. Old data is not read, migrated, upgraded, or partially interpreted.
+The Session Tree log is append-only JSONL. Messages, tool facts, turns, live-tip changes, and compaction entries are persisted there; projections, search results, titles, and token statistics are rebuilt from it. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, and `thread-workspace-state-v1` formats. Old data is not read, migrated, upgraded, or partially interpreted.
 
 ## Configuration
 
@@ -169,7 +168,7 @@ The main boundaries are:
 src/project/          project identity and lifecycle
 src/session-tree/     persistent Sessions, Turns, Entries, paths, history, search
 src/workspace-state/  capture, integrity verification, and rewind restoration
-src/context/          live-path input, budget, compaction cache
+src/context/          live-path projection, budget, and compaction entries
 src/agent/            model/tool turn runtime and interruption handling
 src/app/              composition and application use cases
 src/commands/         command interface
