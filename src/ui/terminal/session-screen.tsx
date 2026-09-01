@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
-import { COMPACTION_TRIGGER_RATIO } from "../../agent/compaction.js";
-import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SquashScreen, UiState } from "../state.js";
+import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
+import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -42,7 +42,7 @@ export function contextMeter(percent: number, cells = 6): string {
 }
 
 /**
- * Warn below the compaction trigger, not above it: at 80% an automatic squash had
+ * Warn below the compaction trigger, not above it: at 80% automatic compaction had
  * already fired at 78%, so the warning colour could never actually be observed.
  */
 export const CONTEXT_WARN_PERCENT = Math.round(COMPACTION_TRIGGER_RATIO * 100) - 10;
@@ -86,10 +86,7 @@ function Footer(props: {
   const meterColor = () => meta().contextPercent >= CONTEXT_WARN_PERCENT ? theme().warning : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>context {state().branch}</text>
-      <Show when={meta().gitBranch !== null}>
-        <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().faint}> · git {meta().gitBranch}</text>
-      </Show>
+      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>session {state().sessionId.slice(0, 12)}</text>
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
         <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
@@ -274,7 +271,7 @@ function ModelPickerOverlay(props: {
 }
 
 /* Bare `/rewind` floats the same kind of panel as /model: one row per user
- * message, newest first; enter twice to restore to before the selected turn. */
+ * message, newest first; enter twice to rewind before the selected turn. */
 const REWIND_OVERLAY_MAX_ROWS = 8;
 
 function rewindTime(startedAt: number): string {
@@ -283,7 +280,7 @@ function rewindTime(startedAt: number): string {
 }
 
 function RewindOverlay(props: {
-  screen: Accessor<RewindScreen | SquashScreen>;
+  screen: Accessor<RewindScreen>;
   /** View-side selection signal — moving it must not notify the controller. */
   selected: Accessor<number>;
   /** True between an arrow-key move and the next controller notify. */
@@ -304,7 +301,7 @@ function RewindOverlay(props: {
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
       <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
         <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
-          {props.screen().type === "thread_squash" ? "squash from a user message" : "rewind to before a user message"}
+          rewind to before a user message
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
       </box>
@@ -339,15 +336,13 @@ function RewindOverlay(props: {
       </For>
       <Show when={rewindConfirm() && !props.navigated() && selectedItem() !== undefined}>
         <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().warning}>
-          ⏎ again to rewind before this message · later messages discarded · esc
+          ⏎ again to rewind before this message · old path retained · esc
         </text>
       </Show>
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
           <SpinnerText fg={theme().spark} />
-          <text height={1} wrapMode="none" fg={theme().spark}>
-            {props.screen().type === "thread_squash" ? " squashing…" : " rewinding…"}
-          </text>
+          <text height={1} wrapMode="none" fg={theme().spark}> rewinding…</text>
         </box>
       </Show>
       <Show when={props.screen().error !== undefined && !props.navigated()}>
@@ -496,9 +491,7 @@ export function SessionScreen(props: {
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
   const rewindScreen = (): RewindScreen | undefined =>
     state().screen.type === "rewind" ? state().screen as RewindScreen : undefined;
-  const squashScreen = (): SquashScreen | undefined =>
-    state().screen.type === "thread_squash" ? state().screen as SquashScreen : undefined;
-  const pathPicker = (): RewindScreen | SquashScreen | undefined => rewindScreen() ?? squashScreen();
+  const pathPicker = (): RewindScreen | undefined => rewindScreen();
   /* Floating panels sit at left/right 1 with a rounded border, so their
    * interior width is the terminal width minus margins and the two border
    * columns. */
@@ -515,7 +508,7 @@ export function SessionScreen(props: {
     if (!rewind) return 0;
     // header + windowed rows + optional confirm/busy/error lines + border
     return 1 + Math.min(REWIND_OVERLAY_MAX_ROWS, rewind.items.length)
-      + (rewind.type === "rewind" && rewind.confirm ? 1 : 0)
+      + (rewind.confirm ? 1 : 0)
       + (rewind.busy ? 1 : 0) + (rewind.error ? 1 : 0) + 2;
   };
   const askScreen = (): AskScreen | undefined =>
@@ -622,7 +615,7 @@ export function SessionScreen(props: {
           backgroundColor={theme.surface}
         >
           <RewindOverlay
-            screen={() => pathPicker() as RewindScreen | SquashScreen}
+            screen={() => pathPicker() as RewindScreen}
             selected={props.overlaySelected}
             navigated={props.overlayNavigated}
             resources={props.resources}

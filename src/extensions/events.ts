@@ -2,7 +2,7 @@ import type { Context } from "@earendil-works/pi-ai";
 import type { ToolResult } from "../tools/types.js";
 
 export interface ExtensionEventMap {
-  turn_start: { turnId: string; branch: string; input: string };
+  turn_start: { turnId: string; sessionId: string; input: string };
   before_context: { context: Context; turnId: string };
   before_tool_call: {
     toolName: string;
@@ -11,7 +11,7 @@ export interface ExtensionEventMap {
     denyReason?: string;
   };
   tool_result: { toolName: string; raw: ToolResult; modelContent: string };
-  turn_end: { turnId: string; outcome: "completed" | "aborted" | "failed" };
+  turn_end: { turnId: string; outcome: "completed" | "interrupted" | "failed" };
 }
 
 export type ExtensionEventType = keyof ExtensionEventMap;

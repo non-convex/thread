@@ -11,11 +11,7 @@ import { moveSelection, type UiScreen } from "../state.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
-import {
-  DocumentScreen,
-  HistoryScreen,
-  MergeScreen,
-} from "./screens.js";
+import { DocumentScreen } from "./screens.js";
 import { estimatedWrappedLines, COMPOSER_MAX_LINES, COMPOSER_MIN_LINES, SessionScreen } from "./session-screen.js";
 import { createThreadSyntaxStyle, terminalTheme } from "./theme.js";
 
@@ -77,7 +73,7 @@ export function ThreadRoot(props: {
    * are set, which Solid treats as no-ops. */
   createEffect(() => {
     const active = screen();
-    if (active.type === "model_picker" || active.type === "rewind" || active.type === "thread_squash") {
+    if (active.type === "model_picker" || active.type === "rewind") {
       setOverlaySelected(active.selected);
       setOverlayNavigated(false);
     }
@@ -164,7 +160,7 @@ export function ThreadRoot(props: {
       props.controller.handleScreenKey(key);
       return;
     }
-    if (activeScreen.type === "model_picker" || activeScreen.type === "rewind" || activeScreen.type === "thread_squash") {
+    if (activeScreen.type === "model_picker" || activeScreen.type === "rewind") {
       // The picker/path-action panels float over the session screen: selection
       // keys move the view-side signal (no notify — that is what flickered),
       // enter goes to the controller, everything else reaches the composer.
@@ -222,8 +218,7 @@ export function ThreadRoot(props: {
     }
     const scrollKey = key.name === "up" || key.name === "down" || key.name === "pageup" || key.name === "pagedown";
     const scrollableScreen = screen().type === "document";
-    const mergePageScroll = screen().type === "merge" && (key.name === "pageup" || key.name === "pagedown");
-    if ((scrollableScreen && scrollKey) || mergePageScroll) {
+    if (scrollableScreen && scrollKey) {
       key.preventDefault();
       if (key.name === "pageup" || key.name === "pagedown") {
         screenScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
@@ -240,7 +235,7 @@ export function ThreadRoot(props: {
       <Switch>
         {/* The model picker and path-action panels are overlays on
             the session screen, not separate screens, so they all route here. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind" || screen().type === "thread_squash" || screen().type === "ask"}>
+        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind" || screen().type === "ask"}>
           <SessionScreen
             controller={props.controller}
             state={state}
@@ -260,12 +255,6 @@ export function ThreadRoot(props: {
             terminalWidth={() => dimensions().width}
             setScroll={(value) => { sessionScroll = value; }}
           />
-        </Match>
-        <Match when={screen().type === "merge"}>
-          <MergeScreen screen={() => screen() as Extract<UiScreen, { type: "merge" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />
-        </Match>
-        <Match when={screen().type === "history"}>
-          <HistoryScreen screen={() => screen() as Extract<UiScreen, { type: "history" }>} state={state} resources={props.resources} />
         </Match>
         <Match when={screen().type === "document"}>
           <DocumentScreen screen={() => screen() as Extract<UiScreen, { type: "document" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />

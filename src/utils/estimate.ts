@@ -149,7 +149,7 @@ export interface CacheScan {
 }
 
 /**
- * Walk a built context and attribute prompt-cache waste turn by turn. A squash
+ * Walk a built context and attribute prompt-cache waste turn by turn. A compaction
  * message legitimately rewrites the prefix, so the comparison resets there
  * instead of blaming the next request; a model switch does not reset, because it
  * really does re-bill the whole prompt. Aborted and failed responses still count:
@@ -186,7 +186,7 @@ export function scanCacheUsage(messages: readonly Message[]): CacheScan {
 }
 
 /**
- * A squash summary is injected as a user message ahead of the retained tail, so
+ * A compaction summary is injected as a user message ahead of the retained tail, so
  * the prefix it replaces is gone and the next request cannot reuse it.
  */
 function isPrefixRewrite(message: Message): boolean {
@@ -194,15 +194,14 @@ function isPrefixRewrite(message: Message): boolean {
   const text = typeof content === "string"
     ? content
     : content.map((block) => (block.type === "text" ? block.text : "")).join("");
-  return text.startsWith("[Summary of earlier project-session context]") ||
-    text.startsWith("[Session history squashed from the selected user turn");
+  return text.startsWith("[Derived project-state summary;");
 }
 
 /**
  * Sum cache totals across a context. Numerator and denominator accumulate
  * separately: averaging each response's percentage would weight a tiny early
  * request the same as a full-window one. The first request of a context, and the
- * first after a squash rewrites the prefix, legitimately report no hits.
+ * first after compaction rewrites the prefix, legitimately report no hits.
  */
 export function accumulateCacheHits(messages: readonly Message[]): CacheHitTotals {
   return scanCacheUsage(messages).hitTotals;

@@ -1,136 +1,59 @@
-import type { SessionEntry, ToolStartedRecord } from "../../domain.js";
-import type { TranscriptItem } from "../state.js";
+import type { SessionEntry, ToolExecutionEntry } from "../../session-tree/model.js";
+import type { LiveTurn, TranscriptItem } from "../state.js";
 
-export const TRANSCRIPT_REPLAY_USER_MESSAGES = 8;
-
-function contentText(content: unknown): string {
+function textContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((block) => {
-      if (!block || typeof block !== "object") return "";
-      const value = block as Record<string, unknown>;
-      if (value.type === "text" && typeof value.text === "string") return value.text;
-      return "";
-    })
-    .filter(Boolean)
+    .filter((block): block is { type: string; text?: string; thinking?: string } =>
+      typeof block === "object" && block !== null && "type" in block
+    )
+    .map((block) => block.type === "text" ? block.text ?? "" : block.type === "thinking" ? block.thinking ?? "" : "")
     .join("\n")
     .trim();
 }
 
-function thinkingText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") return "";
-      const value = block as Record<string, unknown>;
-      if (value.type === "thinking" && typeof value.thinking === "string") return value.thinking;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+function summarizeArgs(args: Record<string, unknown>): string {
+  const rendered = JSON.stringify(args);
+  return rendered.length > 160 ? `${rendered.slice(0, 157)}…` : rendered;
 }
 
-function argSummary(args: Record<string, unknown>): string {
-  for (const key of ["path", "command", "pattern", "query"]) {
-    const value = args[key];
-    if (typeof value === "string") return value.replace(/\s+/g, " ").slice(0, 120);
-  }
-  const encoded = JSON.stringify(args);
-  return encoded === "{}" ? "" : encoded.slice(0, 120);
+export function projectLiveUser(turn: Pick<LiveTurn, "id" | "input">): TranscriptItem {
+  return { id: `${turn.id}:user`, kind: "user", content: turn.input };
 }
 
-function toolResultSummary(name: string, args: Record<string, unknown>, content: string): string {
-  const target = argSummary(args);
-  if (name === "read" && target) return target;
-  const first = content.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return first.slice(0, 180) || target || "completed";
-}
-
-/** Wall-clock time between a tool's start record and its result entry. */
-function toolElapsed(record: ToolStartedRecord | undefined, resultTimestamp: number | undefined): string | undefined {
-  if (!record || resultTimestamp === undefined || resultTimestamp < record.timestamp) return undefined;
-  return `${((resultTimestamp - record.timestamp) / 1000).toFixed(1)}s`;
-}
-
-function messageTranscriptItems(
-  entryId: string,
-  message: Extract<SessionEntry, { type: "message" }>["message"],
-  toolRecords: ReadonlyMap<string, ToolStartedRecord>,
-  timestamp?: number,
-): TranscriptItem[] {
-  if (message.role === "user") return [{ id: entryId, kind: "user", content: contentText(message.content) }];
-  if (message.role === "assistant") {
-    const items: TranscriptItem[] = [];
-    const thinking = thinkingText(message.content);
-    if (thinking) items.push({ id: `${entryId}:thinking`, kind: "thinking", content: thinking });
-    const text = contentText(message.content);
-    if (text) items.push({ id: entryId, kind: "assistant", content: text });
-    return items;
+export function projectTranscript(entries: readonly SessionEntry[]): TranscriptItem[] {
+  const tools = new Map<string, ToolExecutionEntry>();
+  for (const entry of entries) if (entry.type === "tool_execution") tools.set(entry.toolCallId, entry);
+  const output: TranscriptItem[] = [];
+  for (const entry of entries) {
+    if (entry.type === "tool_execution") continue;
+    const message = entry.message;
+    if (message.role === "user") {
+      output.push({ id: entry.id, kind: "user", content: textContent(message.content) });
+      continue;
+    }
+    if (message.role === "toolResult") {
+      const started = tools.get(message.toolCallId);
+      output.push({
+        id: entry.id,
+        kind: "tool",
+        content: textContent(message.content),
+        name: started?.toolName ?? message.toolName,
+        ...(started ? { args: summarizeArgs(started.effectiveArgs) } : {}),
+        isError: message.isError,
+      });
+      continue;
+    }
+    for (let index = 0; index < message.content.length; index++) {
+      const block = message.content[index]!;
+      if (block.type === "thinking" && block.thinking.trim()) {
+        output.push({ id: `${entry.id}:thinking:${index}`, kind: "thinking", content: block.thinking });
+      }
+      if (block.type === "text" && block.text.trim()) {
+        output.push({ id: `${entry.id}:text:${index}`, kind: "assistant", content: block.text });
+      }
+    }
   }
-  if (message.role === "toolResult") {
-    const record = toolRecords.get(entryId);
-    const args = record?.effectiveArgs ?? {};
-    const name = message.toolName || record?.toolName || "tool";
-    const text = contentText(message.content);
-    const target = argSummary(args);
-    const elapsed = toolElapsed(record, timestamp);
-    return [{
-      id: entryId,
-      kind: "tool",
-      label: target ? `${name}  ${target}` : name,
-      name,
-      args: target,
-      content: toolResultSummary(name, args, text),
-      isError: message.isError,
-      ...(elapsed ? { elapsed } : {}),
-    }];
-  }
-  return [];
-}
-
-function transcriptItems(entry: SessionEntry, toolRecords: ReadonlyMap<string, ToolStartedRecord>): TranscriptItem[] {
-  if (entry.type === "squash") {
-    const squash: TranscriptItem = {
-      id: entry.id,
-      kind: "squash",
-      label: entry.summaryKind === "project_state" ? "project state" : "selected turn",
-      content: entry.summary,
-    };
-    return [
-      squash,
-      ...entry.retainedTail.flatMap((retained) =>
-        messageTranscriptItems(retained.sourceEntryId, retained.message, toolRecords, retained.message.timestamp)
-      ),
-    ];
-  }
-  if (entry.type === "context_merge") {
-    return [{ id: entry.id, kind: "context_merge", label: entry.sourceRef, content: entry.content }];
-  }
-  if (entry.type !== "message") return [];
-  return messageTranscriptItems(entry.id, entry.message, toolRecords, entry.timestamp);
-}
-
-export function projectTranscript(
-  sourcePath: readonly SessionEntry[],
-  records: readonly ToolStartedRecord[],
-  hiddenThroughEntryId?: string,
-): TranscriptItem[] {
-  let path = sourcePath;
-  if (hiddenThroughEntryId) {
-    const hiddenIndex = path.findIndex((entry) => entry.id === hiddenThroughEntryId);
-    if (hiddenIndex >= 0) path = path.slice(hiddenIndex + 1);
-  }
-  const toolRecords = new Map(records.map((record) => [record.resultEntryId, record] as const));
-  const items = path.flatMap((entry) => transcriptItems(entry, toolRecords));
-  let start = items.length;
-  let userBoundaries = 0;
-  for (let index = items.length - 1; index >= 0; index--) {
-    const item = items[index]!;
-    if (item.kind === "user" || (item.kind === "squash" && item.label === "selected turn")) userBoundaries++;
-    start = index;
-    if (userBoundaries >= TRANSCRIPT_REPLAY_USER_MESSAGES) break;
-  }
-  return items.slice(start);
+  return output;
 }

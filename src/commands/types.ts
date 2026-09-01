@@ -1,18 +1,15 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
-import type { CapsuleService } from "../revisions/capsule-service.js";
-import type { MergeService } from "../revisions/merge-service.js";
-import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
-import type { VersionService } from "../revisions/version-service.js";
-import type { CommitContextCost } from "../domain.js";
+import type { SessionSearchService } from "../session-tree/search.js";
+import type { SessionTreeService } from "../session-tree/service.js";
 
 export interface HistoryViewItem {
   turnId: string;
   userEntryId: string;
-  baseCheckpointId: string;
+  workspaceStateId: string;
   label: string;
-  outcome: "running" | "completed" | "aborted" | "failed";
+  outcome: "running" | "completed" | "interrupted" | "failed";
   startedAt: number;
-  status: "current-path" | "retained" | "off-path" | "synthetic-squash";
+  status: "current-path" | "current-session-off-path" | "other-session";
 }
 
 export type EphemeralView =
@@ -24,9 +21,6 @@ export type EphemeralView =
       currentModelId: string | undefined;
       scope: "configured" | "all";
     }
-  | { type: "thread_merge"; preview: MergePreview; selectedContext: ContextMergeStrategy }
-  | { type: "history"; items: HistoryViewItem[] }
-  | { type: "thread_squash"; items: HistoryViewItem[] }
   | { type: "rewind"; items: HistoryViewItem[] };
 
 export interface CommandResult {
@@ -38,15 +32,9 @@ export interface CommandResult {
 
 export interface ThreadCommandContext {
   rootPath: string;
-  versions: VersionService;
-  merge: MergeService;
-  capsules: CapsuleService;
-  model: import("../agent/model-client.js").ModelClient | undefined;
-  /** Cost of sending the selected context through the active model runtime. */
-  contextCost?: (sessionHeadId: string | null) => CommitContextCost | undefined;
-  /** Skill load warnings, surfaced by status so a rejected skill is not silent. */
+  tree: SessionTreeService;
+  search: SessionSearchService;
   skillDiagnostics?: readonly import("../skills/loader.js").SkillDiagnostic[];
-  /** Skills discovered at startup, including entries hidden from the model. */
   skills?: readonly import("../skills/loader.js").Skill[];
   signal: AbortSignal;
 }

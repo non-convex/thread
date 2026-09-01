@@ -4,18 +4,18 @@ export type UiEvent =
   | { type: "command_started"; name: string }
   | { type: "command_finished"; name: string; ok: boolean }
   | {
-      type: "head_changed";
-      branch: string;
-      checkpointId: string;
-      reason: "turn" | "command" | "new" | "switch" | "restore" | "merge" | "recovery";
+      type: "session_changed";
+      sessionId: string;
+      liveTipTurnId: string | null;
+      reason: "turn" | "new" | "opened" | "rewind";
     }
+  | { type: "turn_preparing"; input: string; sessionId: string }
   | {
       type: "turn_started";
       turnId: string;
       userEntryId?: string;
       input: string;
-      branch: string;
-      syntheticSquash?: boolean;
+      sessionId: string;
     }
   | { type: "assistant_started"; step: number }
   | { type: "assistant_text_delta"; step: number; delta: string }
@@ -35,8 +35,7 @@ export type UiEvent =
   | { type: "compaction_finished"; ok: boolean }
   | {
       type: "turn_finished";
-      outcome: "completed" | "aborted" | "failed";
-      checkpointId?: string;
+      outcome: "completed" | "interrupted" | "failed";
       error?: string;
     };
 

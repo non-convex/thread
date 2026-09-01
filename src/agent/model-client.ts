@@ -130,7 +130,7 @@ export class PiModelClient implements ModelClient {
 
   /**
    * Same model, different prompt-cache partition. Used to bind a client to one
-   * Session Tree so its turns, summary forks and capsule calls share a shard
+   * Session Tree so its turns and summary forks share a shard
    * instead of colliding with another tree open on the same model.
    */
   withCacheKey(cacheKey: string): PiModelClient {

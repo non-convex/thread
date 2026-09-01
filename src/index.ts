@@ -1,4 +1,15 @@
 export { ThreadApp, type ThreadAppOptions, type InputResult } from "./app.js";
+export { ProjectService } from "./project/service.js";
+export { discoverProjectRoot } from "./project/discovery.js";
+export { SessionTreeService, type PlannedTurn, type RewindCandidate } from "./session-tree/service.js";
+export { SessionTreeRepository } from "./session-tree/repository.js";
+export { SessionTreeProjection, SessionTreeCorruptionError } from "./session-tree/projection.js";
+export { SessionSearchService } from "./session-tree/search.js";
+export { WorkspaceStateService } from "./workspace-state/service.js";
+export { WorkspaceStateRepository } from "./workspace-state/repository.js";
+export { ContextBuilder, type BuiltContext } from "./context/builder.js";
+export { ContextCache, type CompactionCacheEntry } from "./context/cache.js";
+export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
 export {
   createBuiltinModelClient,
   createConfiguredModelCatalog,

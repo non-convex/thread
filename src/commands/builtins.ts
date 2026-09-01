@@ -1,294 +1,146 @@
-import { runGit } from "../workspace/git.js";
-import { createTurnPathClassifier, turnLabel } from "../session/history-status.js";
-import type { CommandRegistry, HistoryViewItem, ThreadCommand, ThreadCommandContext } from "./types.js";
+import { listSessionHistory } from "../session-tree/history.js";
+import type { ThreadCommand, CommandRegistry, HistoryViewItem, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
 
-function requireArgs(args: string[], count: number, usage: string): void {
-  if (args.length < count) throw new Error(`Usage: /thread ${usage}`);
-}
-
-function short(id: string): string {
+function short(id: string | null): string {
+  if (id === null) return "root";
   return id.length > 18 ? id.slice(0, 18) : id;
 }
 
 const status: ThreadCommand = {
   name: "status",
-  description: "Show the current Session Tree, thread branch and main Git branch.",
+  description: "Show the project Session Tree and active Session.",
   async execute(_args, context) {
-    const value = context.versions.status();
-    const git = await runGit(["-C", context.rootPath, "branch", "--show-current"], { allowExitCodes: [0, 128] });
-    return ephemeral(
-      [
-        `session tree: ${value.sessionId}`,
-        `thread branch: ${value.currentBranch}`,
-        `thread HEAD: ${value.headCheckpointId}`,
-        `workspace tree: ${value.workspaceTreeOid}`,
-        `context head: ${value.sessionHeadId ?? "(empty)"}`,
-        `main Git branch: ${git.stdout.toString("utf8").trim() || "(detached/unborn)"}`,
-        `branches: ${value.branchCount}; thread commits: ${value.commitCount}`,
-        ...(context.skills && context.skills.length > 0
-          ? [`skills: ${context.skills.map((skill) => skill.name).join(", ")}`]
-          : []),
-        ...(context.skillDiagnostics ?? []).map(
-          (diagnostic) => `skill ${diagnostic.kind}: ${diagnostic.message} (${diagnostic.path})`,
-        ),
-        ...context.versions.warnings.map((warning) => `warning: ${warning}`),
-      ].join("\n"),
-    );
+    context.signal.throwIfAborted();
+    const tree = context.tree.tree;
+    return ephemeral([
+      `project: ${tree.projectId}`,
+      `session tree: ${tree.id}`,
+      `active session: ${context.tree.activeSession.id}`,
+      `live tip: ${context.tree.activeLiveTip ?? "root"}`,
+      `sessions: ${context.tree.projection.sessions.size}`,
+      `turns: ${context.tree.projection.turns.size}`,
+      ...(context.skills?.length ? [`skills: ${context.skills.map((skill) => skill.name).join(", ")}`] : []),
+      ...(context.skillDiagnostics ?? []).map((item) => `skill ${item.kind}: ${item.message} (${item.path})`),
+    ].join("\n"));
   },
 };
 
-const branches: ThreadCommand = {
-  name: "branches",
-  description: "List thread branches.",
+const sessions: ThreadCommand = {
+  name: "sessions",
+  description: "List root Sessions and their saved live tips.",
   async execute(_args, context) {
-    const current = context.versions.currentBranch.name;
-    const lines = [...context.versions.projection.branches.values()]
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .map((branch) => `${branch.name === current ? "*" : " "} ${branch.name} ${short(branch.headCheckpointId)}`);
+    context.signal.throwIfAborted();
+    const lines = listSessionHistory(context.tree).map((session) =>
+      `${session.active ? "*" : " "} ${session.sessionId} tip=${short(session.liveTipTurnId)} turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
+    );
     return ephemeral(lines.join("\n"));
   },
 };
 
-const branch: ThreadCommand = {
-  name: "branch",
-  description: "Create and switch to a thread branch.",
+const open: ThreadCommand = {
+  name: "open",
+  description: "Resume a root Session without changing workspace files.",
   async execute(args, context) {
-    requireArgs(args, 1, "branch <name> [<from>]");
-    const created = await context.versions.createBranch(args[0]!, args[1] ?? "HEAD", true);
-    return ephemeral(`Created and switched to thread branch ${created.name} at ${created.headCheckpointId}`, true);
+    if (args.length !== 1) throw new Error("Usage: /thread open <session-id>");
+    context.signal.throwIfAborted();
+    const session = await context.tree.openSession(args[0]!);
+    return ephemeral(`Opened Session ${session.id}; workspace left unchanged`, true);
   },
 };
 
-const switchCommand: ThreadCommand = {
-  name: "switch",
-  description: "Switch workspace and context to another thread branch.",
-  async execute(args, context) {
-    requireArgs(args, 1, "switch <branch>");
-    await context.versions.switchBranch(args[0]!);
-    return ephemeral(`Switched to thread branch ${args[0]}`, true);
-  },
-};
-
-const reflog: ThreadCommand = {
-  name: "reflog",
-  description: "Show thread branch pointer movements.",
-  async execute(args, context) {
-    const name = args[0] ?? context.versions.currentBranch.name;
-    const lines = context.versions.projection.reflog
-      .filter((entry) => entry.branchName === name)
-      .slice()
-      .reverse()
-      .map((entry) => {
-        const checkpoint = context.versions.projection.checkpoints.get(entry.newCheckpointId);
-        const details = checkpoint?.reason === "squash"
-          ? ` trigger=${checkpoint.details?.squashTrigger ?? "unknown"}` +
-            ` from=${checkpoint.details?.squashFromEntryId ?? "root"}` +
-            ` source=${checkpoint.details?.squashSourceHeadId ?? "empty"}` +
-            ` entries=${checkpoint.details?.squashEntryCount ?? 0}` +
-            ` turns=${checkpoint.details?.squashTurnCount ?? 0}`
-          : "";
-        return `${entry.seq.toString().padStart(5)} ${short(entry.oldCheckpointId ?? "none")} -> ${short(entry.newCheckpointId)} ${entry.reason}${details}`;
-      });
-    return ephemeral(lines.join("\n") || `(no reflog entries for ${name})`);
-  },
-};
-
-const log: ThreadCommand = {
-  name: "log",
-  description: "Show thread commits or the full checkpoint graph.",
-  async execute(args, context) {
-    const all = args.includes("--all");
-    const graph = args.includes("--graph");
-    const label = args.find((arg) => !arg.startsWith("--")) ?? "HEAD";
-    const start = context.versions.resolve(label).checkpointId;
-    const pending = [start];
-    const seen = new Set<string>();
-    const commitsByCheckpoint = new Map<string, string[]>();
-    for (const commit of context.versions.projection.commits.values()) {
-      const labels = commitsByCheckpoint.get(commit.checkpointId) ?? [];
-      labels.push(
-        `${short(commit.id)} ${commit.message} [ctx ${commit.contextCost.percent}% ${commit.contextCost.providerId}/${commit.contextCost.modelId}]`,
-      );
-      commitsByCheckpoint.set(commit.checkpointId, labels);
-    }
-    const turnsByBase = new Map<string, string[]>();
-    for (const turn of context.versions.projection.turns.values()) {
-      const entry = context.versions.projection.entries.get(turn.userEntryId);
-      let excerpt = "";
-      if (entry?.type === "message" && entry.message.role === "user") {
-        excerpt = typeof entry.message.content === "string"
-          ? entry.message.content
-          : entry.message.content
-              .filter((block) => block.type === "text")
-              .map((block) => (block.type === "text" ? block.text : ""))
-              .join(" ");
-      }
-      const labels = turnsByBase.get(turn.baseCheckpointId) ?? [];
-      labels.push(`rewind ${short(turn.id)} before ${JSON.stringify(excerpt.slice(0, 80))}`);
-      turnsByBase.set(turn.baseCheckpointId, labels);
-    }
-    const lines: string[] = [];
-    while (pending.length > 0) {
-      const id = pending.shift()!;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const checkpoint = context.versions.getCheckpoint(id);
-      const labels = commitsByCheckpoint.get(id) ?? [];
-      if (all || labels.length > 0 || id === start) {
-        const turnLabels = turnsByBase.get(id) ?? [];
-        lines.push(
-          `${graph ? (checkpoint.parentCheckpointIds.length > 1 ? "M" : "*") : ""} ${short(id)} ${checkpoint.reason}${labels.length ? ` — ${labels.join("; ")}` : ""}${all && turnLabels.length ? ` — ${turnLabels.join("; ")}` : ""}`.trim(),
-        );
-      }
-      pending.push(...checkpoint.parentCheckpointIds);
-    }
-    return ephemeral(lines.join("\n"));
-  },
-};
-
-const show: ThreadCommand = {
-  name: "show",
-  description: "Show one branch, commit or checkpoint.",
-  async execute(args, context) {
-    requireArgs(args, 1, "show <ref>");
-    const ref = context.versions.resolve(args[0]!);
-    const checkpoint = context.versions.getCheckpoint(ref.checkpointId);
-    const commits = [...context.versions.projection.commits.values()].filter(
-      (commit) => commit.checkpointId === checkpoint.id,
-    );
-    const capsule = await context.capsules.read(checkpoint.id);
-    const currentModelContextCost = context.contextCost?.(checkpoint.sessionHeadId);
-    return ephemeral(JSON.stringify({ ref, checkpoint, commits, capsule, currentModelContextCost }, null, 2));
-  },
-};
-
-/** All turns, classified against the active entry path rather than branch labels. */
-export function buildHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
-  const classify = createTurnPathClassifier(context.versions.session, context.versions.head.sessionHeadId);
-  return [...context.versions.projection.turns.values()]
+function allHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
+  const activeSessionId = context.tree.activeSession.id;
+  const activePathIds = new Set(context.tree.livePath().map((turn) => turn.id));
+  return [...context.tree.projection.turns.values()]
     .sort((left, right) => right.startedAt - left.startedAt)
     .map((turn) => {
-      const entry = context.versions.projection.entries.get(turn.userEntryId);
+      const entry = context.tree.projection.entries.get(turn.userEntryId);
+      const text = entry?.type === "message" && entry.message.role === "user"
+        ? (typeof entry.message.content === "string"
+          ? entry.message.content
+          : entry.message.content.filter((block) => block.type === "text")
+              .map((block) => block.type === "text" ? block.text : "").join(" "))
+        : "";
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
-        baseCheckpointId: turn.baseCheckpointId,
-        label: turnLabel(entry),
-        outcome: turn.outcome,
+        workspaceStateId: turn.workspaceStateId,
+        label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
+        outcome: turn.status,
         startedAt: turn.startedAt,
-        status: classify(turn),
+        status: turn.sessionId !== activeSessionId
+          ? "other-session"
+          : activePathIds.has(turn.id) ? "current-path" : "current-session-off-path",
       };
     });
 }
 
-export function buildSquashItems(context: ThreadCommandContext): HistoryViewItem[] {
-  return buildHistoryItems(context).filter((item) => {
-    if (item.status !== "current-path") return false;
-    const entry = context.versions.projection.entries.get(item.userEntryId);
-    return entry?.type === "message" && entry.message.role === "user";
-  });
+export function buildRewindItems(context: ThreadCommandContext): HistoryViewItem[] {
+  return context.tree.rewindCandidates().slice().reverse().map((candidate) => ({
+    turnId: candidate.turnId,
+    userEntryId: candidate.userEntryId,
+    workspaceStateId: candidate.workspaceStateId,
+    label: candidate.label,
+    outcome: candidate.status,
+    startedAt: candidate.startedAt,
+    status: "current-path",
+  }));
 }
 
 const history: ThreadCommand = {
   name: "history",
-  description: "Choose a historical user message to restore from.",
+  description: "Show turns across the whole project Session Tree.",
   async execute(_args, context) {
-    const branch = context.versions.currentBranch.name;
-    const items = buildHistoryItems(context);
-    const content = items.length
-      ? items.map((item) => `${short(item.turnId)} ${item.status.padEnd(16)} ${item.outcome.padEnd(9)} ${item.label}`).join("\n")
-      : `(no turns on thread branch ${branch})`;
-    return viewResult(content, { type: "history", items });
-  },
-};
-
-const squash: ThreadCommand = {
-  name: "squash",
-  description: "Replace a current-path user-turn interval with a summary and continue as a normal turn.",
-  async execute() {
-    throw new Error("/thread squash must be run through the active agent runtime");
-  },
-};
-
-const commit: ThreadCommand = {
-  name: "commit",
-  description: "Create an immutable thread milestone at the current checkpoint.",
-  async execute(args, context) {
-    requireArgs(args, 1, "commit <message>");
-    if (!context.model) throw new Error("/thread commit requires a configured model to record context cost");
-    const created = await context.versions.createCommit(args.join(" "));
-    const checkpoint = context.versions.getCheckpoint(created.checkpointId);
-    const capsule = await context.capsules.generate(checkpoint, "commit", context.signal);
-    return ephemeral(
-      `Created thread commit ${created.id} at ${created.checkpointId}\nContext capsule: ${capsule.status}${capsule.error ? ` (${capsule.error})` : ""}`,
-      true,
-    );
-  },
-};
-
-const restore: ThreadCommand = {
-  name: "restore",
-  description: "Restore workspace, context or both from a thread version.",
-  async execute(args, context) {
-    const modeFlag = args.find((arg) => arg.startsWith("--"));
-    const labels = args.filter((arg) => !arg.startsWith("--"));
-    requireArgs(labels, 1, "restore <ref> [--workspace|--context|--both]");
-    const mode = modeFlag === "--workspace" ? "workspace" : modeFlag === "--context" ? "context" : "both";
-    const checkpoint = await context.versions.restore(labels[0]!, mode);
-    return ephemeral(`Restored ${mode} from ${labels[0]} (${checkpoint.id})`, true);
-  },
-};
-
-const merge: ThreadCommand = {
-  name: "merge",
-  description: "Clean-merge a version into the current thread branch.",
-  async execute(args, context) {
-    const strategyFlag = args.find((arg) => arg.startsWith("--context="));
-    const labels = args.filter((arg) => !arg.startsWith("--context="));
-    requireArgs(labels, 1, "merge <ref> [--context=keep-current|summarize]");
-    if (!strategyFlag) {
-      const preview = await context.merge.preview(labels[0]!);
-      const details = preview.clean
-        ? `${preview.workspaceFiles.length} workspace file(s) can be merged cleanly`
-        : `Merge blocked by ${preview.conflicts.length} workspace conflict(s):\n${preview.conflicts.join("\n")}`;
-      return viewResult(details, {
-        type: "thread_merge",
-        preview,
-        selectedContext: "keep-current",
-      });
+    context.signal.throwIfAborted();
+    const items = allHistoryItems(context);
+    const itemByTurn = new Map(items.map((item) => [item.turnId, item]));
+    const lines: string[] = [`Root ${context.tree.tree.rootId}`];
+    const sessions = [...context.tree.projection.sessions.values()].sort((left, right) => left.createdAt - right.createdAt);
+    for (const session of sessions) {
+      const active = session.id === context.tree.activeSession.id ? " active" : "";
+      lines.push(`├─ Session ${session.id}${active}`);
+      const turns = [...context.tree.projection.turns.values()]
+        .filter((turn) => turn.sessionId === session.id)
+        .sort((left, right) => left.startedAt - right.startedAt);
+      const children = new Map<string | null, typeof turns>();
+      for (const turn of turns) {
+        const siblings = children.get(turn.parentTurnId) ?? [];
+        siblings.push(turn);
+        children.set(turn.parentTurnId, siblings);
+      }
+      const render = (parentId: string | null, depth: number): void => {
+        for (const turn of children.get(parentId) ?? []) {
+          const item = itemByTurn.get(turn.id)!;
+          const live = context.tree.projection.liveTips.get(session.id) === turn.id ? " live" : "";
+          lines.push(`${"│  ".repeat(depth + 1)}├─ ${short(turn.id)} ${item.outcome}${live} — ${item.label}`);
+          render(turn.id, depth + 1);
+        }
+      };
+      render(null, 0);
+      if (turns.length === 0) lines.push("│  └─ (empty)");
     }
-    const strategy = strategyFlag.slice("--context=".length);
-    if (strategy !== "keep-current" && strategy !== "summarize") throw new Error(`Unknown context strategy: ${strategy}`);
-    const result = await context.merge.merge(labels[0]!, strategy, context.signal);
-    if (!result.clean) return ephemeral(`Merge has conflicts; workspace was not changed:\n${result.conflicts.join("\n")}`);
-    return ephemeral(
-      `Merged ${labels[0]} as ${result.checkpoint!.id}\nThread commit: ${result.commit!.id}\nContext: ${strategy}`,
-      true,
-    );
+    const content = lines.join("\n");
+    return viewResult(content, { type: "document", title: "Session Tree history", content });
+  },
+};
+
+const search: ThreadCommand = {
+  name: "search",
+  description: "Search text across all Sessions and historical paths.",
+  async execute(args, context) {
+    if (args.length === 0) throw new Error("Usage: /thread search <query> [<query> ...]");
+    context.signal.throwIfAborted();
+    const result = context.search.search(args, 20);
+    const content = result.hits.length
+      ? result.hits.map((hit) =>
+        `${short(hit.turnId)} session=${short(hit.sessionId)} ${hit.pathStatus} ${hit.matched.join(", ")}\n  ${hit.snippet}`
+      ).join("\n")
+      : "(no matching turns)";
+    return viewResult(content, { type: "document", title: "Session Tree search", content });
   },
 };
 
 export function registerBuiltinCommands(registry: CommandRegistry): void {
-  for (const command of [
-    status,
-    branches,
-    branch,
-    switchCommand,
-    log,
-    reflog,
-    show,
-    history,
-    squash,
-    commit,
-    restore,
-    merge,
-  ]) {
-    registry.register(command);
-  }
-}
-
-export async function rewindCommand(turnId: string, context: ThreadCommandContext) {
-  const checkpoint = await context.versions.restoreTurnBefore(turnId);
-  return ephemeral(`Rewound to before ${turnId} (${checkpoint.id})`, true);
+  for (const command of [status, sessions, open, history, search]) registry.register(command);
 }

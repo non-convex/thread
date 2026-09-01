@@ -1,20 +1,17 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
 import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
-import type { ContextMergeStrategy, MergePreview } from "../revisions/merge-service.js";
-import type { AskRequest } from "./ask.js";
 import type { ToolResult } from "../tools/types.js";
+import type { AskRequest } from "./ask.js";
 import type { UiEvent } from "./events.js";
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool" | "squash" | "context_merge";
+  kind: "user" | "assistant" | "thinking" | "tool";
   content: string;
   label?: string;
   isError?: boolean;
-  /** Tool items only: bare tool name and a one-line argument summary. */
   name?: string;
   args?: string;
-  /** Tool items only: wall-clock duration, so history keeps the timing a live turn shows. */
   elapsed?: string;
 }
 
@@ -41,7 +38,7 @@ export interface LiveBlock {
 export interface LiveTurn {
   id: string;
   input: string;
-  branch: string;
+  sessionId: string;
   blocks: LiveBlock[];
   startedAt: number;
 }
@@ -52,45 +49,26 @@ export interface ModelPickerScreen {
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
   scope: "configured" | "all";
-  /** Written by the view on every arrow key; the controller only reads it. */
   selected: number;
   busy: boolean;
   error: string | undefined;
 }
 
-/** The /rewind overlay: pick the user message whose turn should be undone. */
 export interface RewindScreen {
   type: "rewind";
   items: HistoryViewItem[];
-  /** Written by the view on every arrow key; the controller only reads it. */
   selected: number;
   confirm: boolean;
   busy: boolean;
   error: string | undefined;
 }
 
-export interface SquashScreen {
-  type: "thread_squash";
-  items: HistoryViewItem[];
-  selected: number;
-  busy: boolean;
-  error: string | undefined;
-}
-
-/**
- * The `ask` tool's choice panel. Unlike the other overlays this one is opened by
- * the agent rather than the user, and the turn is parked until it closes.
- */
 export interface AskScreen {
   type: "ask";
   request: AskRequest;
-  /** Index of the question being answered; questions are walked in order. */
   questionIndex: number;
-  /** Selected option per question, by option index. Multi-select keeps several. */
   chosen: number[][];
-  /** Written by the view on every arrow key; the controller only reads it. */
   selected: number;
-  /** True while the user is typing their own answer for the current question. */
   customText: string | undefined;
 }
 
@@ -99,25 +77,7 @@ export type UiScreen =
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
   | RewindScreen
-  | SquashScreen
-  | AskScreen
-  | {
-      type: "merge";
-      preview: MergePreview;
-      selected: ContextMergeStrategy;
-      note: string | undefined;
-      confirm: boolean;
-      busy: boolean;
-      error: string | undefined;
-    }
-  | {
-      type: "history";
-      items: HistoryViewItem[];
-      selected: number;
-      confirm: boolean;
-      busy: boolean;
-      error: string | undefined;
-    };
+  | AskScreen;
 
 export interface UiState {
   screen: UiScreen;
@@ -126,11 +86,11 @@ export interface UiState {
   busy: boolean;
   activity: string | undefined;
   notice: { level: "info" | "success" | "error"; text: string } | undefined;
-  branch: string;
-  checkpointId: string;
+  sessionId: string;
+  liveTipTurnId: string | null;
 }
 
-export function createUiState(branch: string, checkpointId: string, transcript: TranscriptItem[]): UiState {
+export function createUiState(sessionId: string, liveTipTurnId: string | null, transcript: TranscriptItem[]): UiState {
   return {
     screen: { type: "session" },
     transcript,
@@ -138,16 +98,16 @@ export function createUiState(branch: string, checkpointId: string, transcript: 
     busy: false,
     activity: undefined,
     notice: undefined,
-    branch,
-    checkpointId,
+    sessionId,
+    liveTipTurnId,
   };
 }
 
 export function openEphemeralView(state: UiState, view: EphemeralView): void {
   if (view.type === "document") state.screen = { type: "document", title: view.title, content: view.content };
   if (view.type === "model_picker") {
-    const current = view.models.findIndex(
-      (model) => model.providerId === view.currentProviderId && model.modelId === view.currentModelId,
+    const current = view.models.findIndex((model) =>
+      model.providerId === view.currentProviderId && model.modelId === view.currentModelId
     );
     state.screen = {
       type: "model_picker",
@@ -156,27 +116,6 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       currentModelId: view.currentModelId,
       scope: view.scope,
       selected: current >= 0 ? current : 0,
-      busy: false,
-      error: undefined,
-    };
-  }
-  if (view.type === "thread_merge") {
-    state.screen = {
-      type: "merge",
-      preview: view.preview,
-      selected: view.selectedContext,
-      note: undefined,
-      confirm: false,
-      busy: false,
-      error: undefined,
-    };
-  }
-  if (view.type === "history") {
-    state.screen = {
-      type: "history",
-      items: view.items,
-      selected: 0,
-      confirm: false,
       busy: false,
       error: undefined,
     };
@@ -191,52 +130,33 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       error: undefined,
     };
   }
-  if (view.type === "thread_squash") {
-    state.screen = {
-      type: "thread_squash",
-      items: view.items,
-      selected: 0,
-      busy: false,
-      error: undefined,
-    };
-  }
 }
 
 function endStreaming(live: LiveTurn): LiveTurn {
   const last = live.blocks.at(-1);
   if (!last?.streaming) return live;
-  return {
-    ...live,
-    blocks: [...live.blocks.slice(0, -1), { ...last, streaming: false, finishedAt: Date.now() }],
-  };
+  return { ...live, blocks: [...live.blocks.slice(0, -1), { ...last, streaming: false, finishedAt: Date.now() }] };
 }
 
 function appendLiveText(live: LiveTurn, kind: "thinking" | "assistant", delta: string): LiveTurn {
   if (!delta) return live;
   const last = live.blocks.at(-1);
   if (last?.kind === kind && last.streaming) {
-    return {
-      ...live,
-      blocks: [...live.blocks.slice(0, -1), { ...last, content: last.content + delta }],
-    };
+    return { ...live, blocks: [...live.blocks.slice(0, -1), { ...last, content: last.content + delta }] };
   }
   const closed = endStreaming(live);
   return {
     ...closed,
-    blocks: [
-      ...closed.blocks,
-      {
-        id: `${kind}:${closed.blocks.length + 1}`,
-        kind,
-        content: delta,
-        streaming: true,
-        startedAt: Date.now(),
-      },
-    ],
+    blocks: [...closed.blocks, {
+      id: `${kind}:${closed.blocks.length + 1}`,
+      kind,
+      content: delta,
+      streaming: true,
+      startedAt: Date.now(),
+    }],
   };
 }
 
-/** Wrap-around list movement shared by the overlay panels; pure, no notify. */
 export function moveSelection(selected: number, delta: number, count: number): number {
   if (count === 0 || delta === 0) return selected;
   return (selected + delta + count) % count;
@@ -246,29 +166,40 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
     case "command_started":
       state.busy = true;
-      state.activity = ["clear", "compact", "model", "new", "session", "rewind"].includes(event.name)
-        ? `running /${event.name}`
-        : `running /thread ${event.name}`;
+      state.activity = `running /${event.name}`;
       state.notice = undefined;
       return;
     case "command_finished":
       state.busy = false;
       state.activity = undefined;
       return;
-    case "head_changed":
-      state.branch = event.branch;
-      state.checkpointId = event.checkpointId;
+    case "session_changed":
+      state.sessionId = event.sessionId;
+      state.liveTipTurnId = event.liveTipTurnId;
+      return;
+    case "turn_preparing":
+      state.busy = true;
+      state.activity = "preparing";
+      state.notice = undefined;
+      state.liveTurn = {
+        id: `pending:${Date.now()}`,
+        input: event.input,
+        sessionId: event.sessionId,
+        blocks: [],
+        startedAt: Date.now(),
+      };
       return;
     case "turn_started":
       state.busy = true;
-      state.activity = "thinking";
+      state.activity ??= "thinking";
       state.notice = undefined;
+      const existing = state.liveTurn;
       state.liveTurn = {
         id: event.turnId,
         input: event.input,
-        branch: event.branch,
-        blocks: [],
-        startedAt: Date.now(),
+        sessionId: event.sessionId,
+        blocks: existing?.input === event.input && existing.sessionId === event.sessionId ? existing.blocks : [],
+        startedAt: existing?.startedAt ?? Date.now(),
       };
       return;
     case "assistant_started":
@@ -287,12 +218,6 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts} in ${(event.delayMs / 1000).toFixed(1)}s`;
       return;
     case "model_retry_started":
-      if (state.liveTurn) {
-        state.liveTurn = {
-          ...state.liveTurn,
-          blocks: state.liveTurn.blocks.filter((block) => !(block.kind === "assistant" && block.streaming)),
-        };
-      }
       state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts}`;
       return;
     case "tool_started": {
@@ -300,46 +225,26 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       const closed = endStreaming(state.liveTurn);
       state.liveTurn = {
         ...closed,
-        blocks: [
-          ...closed.blocks,
-          {
-            id: `tool:${event.id}`,
-            kind: "tool",
-            content: "",
-            tool: {
-              id: event.id,
-              name: event.name,
-              args: event.args,
-              status: "running",
-              startedAt: Date.now(),
-            },
-          },
-        ],
+        blocks: [...closed.blocks, {
+          id: `tool:${event.id}`,
+          kind: "tool",
+          content: "",
+          tool: { id: event.id, name: event.name, args: event.args, status: "running", startedAt: Date.now() },
+        }],
       };
       state.activity = event.name;
       return;
     }
-    case "tool_finished": {
+    case "tool_finished":
       if (state.liveTurn) {
         state.liveTurn = {
           ...state.liveTurn,
-          blocks: state.liveTurn.blocks.map((block) => {
-            if (block.tool?.id !== event.id) return block;
-            return {
-              ...block,
-              tool: {
-                ...block.tool,
-                status: event.isError ? "failed" : "completed",
-                result: event.result,
-                finishedAt: Date.now(),
-              },
-            };
-          }),
+          blocks: state.liveTurn.blocks.map((block) => block.tool?.id === event.id
+            ? { ...block, tool: { ...block.tool, status: event.isError ? "failed" : "completed", result: event.result, finishedAt: Date.now() } }
+            : block),
         };
       }
-      state.activity = event.isError ? `${event.name} failed` : event.name;
       return;
-    }
     case "compaction_started":
       state.activity = `compacting context · ${event.reason}`;
       return;

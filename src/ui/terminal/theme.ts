@@ -42,8 +42,6 @@ export interface ThreadTerminalTheme {
   borderStrong: string;
   selection: string;
   selectionText: string;
-  diffAdded: string;
-  diffRemoved: string;
 }
 
 const darkTheme: ThreadTerminalTheme = {
@@ -78,8 +76,6 @@ const darkTheme: ThreadTerminalTheme = {
   borderStrong: "#5a6355",
   selection: "#d3c9bb",
   selectionText: "#2e332b",
-  diffAdded: "#96b374",
-  diffRemoved: "#e07b78",
 };
 
 const lightTheme: ThreadTerminalTheme = {
@@ -107,8 +103,6 @@ const lightTheme: ThreadTerminalTheme = {
   borderStrong: "#c8bda2",
   selection: "#3f4433",
   selectionText: "#f7f2e7",
-  diffAdded: "#4f7a3a",
-  diffRemoved: "#b34a48",
 };
 
 export const bold = createTextAttributes({ bold: true });

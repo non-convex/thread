@@ -7,12 +7,12 @@ export interface PlainRunnerOptions {
 }
 
 export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): Promise<void> {
-  const status = app.versions.status();
+  const tree = app.sessionTree.tree;
   output.write(
-    `Session Tree ${status.sessionId}\nthread branch ${status.currentBranch} @ ${status.headCheckpointId}\n${
+    `Session Tree ${tree.id}\nSession ${app.sessionTree.activeSession.id} @ ${app.sessionTree.activeLiveTip ?? "Root"}\n${
       app.model
         ? `model ${app.model.providerId}/${app.model.modelId}`
-        : "no model configured; use /model to select one or /thread for version commands"
+        : "no model configured; use /model to select one"
     }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
   const readline = createInterface({ input, output, terminal: Boolean(input.isTTY && output.isTTY) });
@@ -23,7 +23,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
     while (true) {
       let line: string;
       try {
-        line = await readline.question(`\n${app.versions.currentBranch.name}> `);
+        line = await readline.question(`\n${app.sessionTree.activeSession.id.slice(0, 12)}> `);
       } catch {
         break;
       }
@@ -43,7 +43,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
         if (result.kind === "command" && result.result.presentation === "clear") {
           output.write(output.isTTY ? "\x1b[2J\x1b[H" : "[display cleared]\n");
         } else if (result.kind === "command") {
-          output.write(`\n[thread version result]\n${result.result.content}\n`);
+          output.write(`\n[thread result]\n${result.result.content}\n`);
         }
         if (result.kind === "turn" && result.result.error) {
           output.write(`[turn ${result.result.outcome}: ${result.result.error.message}]\n`);

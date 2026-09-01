@@ -10,7 +10,7 @@ export interface TerminalAppOptions {
 }
 
 /**
- * OpenTUI host for Thread's full-screen terminal experience. Session history,
+ * OpenTUI host for Thread's full-screen terminal experience. Session Tree history,
  * live output, composer and transient screens share one persistent render tree.
  */
 export class ThreadTerminalApp {

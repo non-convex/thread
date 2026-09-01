@@ -2,6 +2,7 @@ import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, For, Index, Show, type Accessor, type JSX } from "solid-js";
 import type { LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, dimItalic, italic } from "./theme.js";
+import { projectLiveUser } from "./transcript-projection.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
 
@@ -62,8 +63,7 @@ function elapsedLabel(startedAt: number | undefined, finishedAt: number | undefi
 /* ── Turn grouping ────────────────────────────────────────────────────────
  * The design strings one agent turn (thinking → tools → reply) on a single
  * vertical rail. History arrives as a flat item list, so group each user
- * message with the agent items that follow it. Leading non-user items (e.g.
- * an import right after a restore) form their own rail-less group.
+ * message with the agent items that follow it.
  */
 export interface TranscriptTurnGroup {
   id: string;
@@ -78,10 +78,6 @@ export function groupTranscriptTurns(items: readonly TranscriptItem[]): Transcri
       groups.push({ id: item.id, user: item, items: [] });
       continue;
     }
-    if (item.kind === "squash") {
-      groups.push({ id: item.id, user: undefined, items: [item] });
-      continue;
-    }
     const last = groups.at(-1);
     if (last) last.items.push(item);
     else groups.push({ id: item.id, user: undefined, items: [item] });
@@ -93,7 +89,7 @@ export function groupTranscriptTurns(items: readonly TranscriptItem[]): Transcri
  * `projectTranscript` rebuilds every TranscriptItem from the session log on
  * each sync, and grouping then allocates fresh group objects. Solid's <For>
  * keys rows by reference, so handing it new objects tears down and rebuilds
- * every committed turn — including their markdown renderables — whenever the
+ * every completed turn — including their markdown renderables — whenever the
  * controller notifies. During a turn that happens per flushed delta batch, so
  * earlier replies visibly re-wrap and the sticky-bottom scrollbox re-anchors.
  * Reuse the previous object for any group whose values did not change so <For>
@@ -335,8 +331,6 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
 
 function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const item = () => props.item;
-  const theme = props.resources.theme;
-  const systemLabel = () => item().kind === "squash" ? "◌ squash" : "◌ import";
   return (
     <Show
       when={item().kind === "tool"}
@@ -345,11 +339,6 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
           when={item().kind === "thinking"}
           fallback={
             <box flexDirection="column" width="100%" marginBottom={1}>
-              <Show when={item().kind === "squash" || item().kind === "context_merge"}>
-                <text height={1} wrapMode="none" fg={item().kind === "squash" ? theme.warning : theme.success} attributes={dim}>
-                  {systemLabel()}
-                </text>
-              </Show>
               <MarkdownReply id={`history-markdown-${item().id}`} content={item().content} resources={props.resources} />
             </box>
           }
@@ -470,13 +459,21 @@ export function LiveTurnView(props: {
   resources: ThreadViewResources;
 }) {
   return (
-    <TurnBlock label={props.label} resources={props.resources}>
-      {/* Live blocks are append-only. Index keeps each renderable alive while
-          immutable block snapshots replace its value during streaming. */}
-      <Index each={props.turn().blocks}>
-        {(block) => <LiveBlockView block={block} resources={props.resources} />}
-      </Index>
-    </TurnBlock>
+    <>
+      <UserMessageCard
+        item={projectLiveUser(props.turn())}
+        resources={props.resources}
+      />
+      <Show when={props.turn().blocks.length > 0}>
+        <TurnBlock label={props.label} resources={props.resources}>
+          {/* Live blocks are append-only. Index keeps each renderable alive while
+              immutable block snapshots replace its value during streaming. */}
+          <Index each={props.turn().blocks}>
+            {(block) => <LiveBlockView block={block} resources={props.resources} />}
+          </Index>
+        </TurnBlock>
+      </Show>
+    </>
   );
 }
 
@@ -530,7 +527,7 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       >
         <ascii_font text="thread" font="tiny" color={theme.accent} backgroundColor={theme.surface} />
       </box>
-      <text fg={theme.softText} marginBottom={1}>Session Tree · versioned workspace and context</text>
+      <text fg={theme.softText} marginBottom={1}>Persistent Session Tree · turn-level workspace rewind</text>
       <box flexDirection="row" height={1}>
         <text fg={theme.muted} height={1} wrapMode="none">type a task to start working, or </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">/model</text>
@@ -538,7 +535,7 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> branches · history · merges</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> Sessions · history · search</text>
         <text fg={theme.accentDim} height={1} wrapMode="none"> · ⇧⇥</text>
         <text fg={theme.muted} height={1} wrapMode="none"> thinking level</text>
       </box>

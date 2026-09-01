@@ -3,45 +3,26 @@ import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../utils/estimate.js";
 import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
-import { runGit } from "../../workspace/git.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
   createUiState,
   openEphemeralView,
   reduceUiEvent,
   type AskScreen,
-  type TranscriptItem,
-  type UiScreen,
   type UiState,
 } from "../state.js";
 import { projectTranscript } from "./transcript-projection.js";
 
 export interface TerminalMeta {
   rootPath: string;
-  /** provider/model — shown where provider disambiguates, e.g. the model picker. */
   modelLabel: string;
-  /** Bare model id — shown in the footer and turn labels. */
   modelName: string;
   thinkingLevel: ModelThinkingLevel;
   supportsThinking: boolean;
   contextPercent: number;
-  /** Prompt-cache hit rate over this context's history, or null before any usage is reported. */
   cacheHitPercent: number | null;
-  /**
-   * Prompt tokens re-billed because a reusable prefix was not read from cache,
-   * accumulated since the newest prefix rewrite. Shown so a dropped cache is
-   * visible rather than silently expensive.
-   */
   cacheMissedTokens: number;
-  /** Why the most recent counted miss happened, or null when the last turn hit. */
   cacheMissReason: "idle" | "model-changed" | "prefix-changed" | null;
-  uncommitted: boolean;
-  /**
-   * Main-repository branch, or null while unknown. Reading it needs a git
-   * process, so the footer renders without it and picks it up on refresh.
-   * A detached HEAD reports its short commit instead.
-   */
-  gitBranch: string | null;
 }
 
 export interface SlashSuggestion {
@@ -54,20 +35,13 @@ export interface TerminalKey {
   ctrl: boolean;
   shift: boolean;
   meta: boolean;
-  /** Raw sequence, used to accept typed characters in the ask panel. */
   sequence?: string;
 }
 
-/**
- * The character a key would type, or undefined for control and navigation keys.
- * Used by the ask panel, where any printable key starts a free-text answer.
- */
 function printableKey(key: TerminalKey): string | undefined {
-  if (key.ctrl || key.meta) return undefined;
-  const sequence = key.sequence;
-  if (!sequence || sequence.length !== 1) return undefined;
-  const code = sequence.codePointAt(0)!;
-  return code >= 0x20 && code !== 0x7f ? sequence : undefined;
+  if (key.ctrl || key.meta || !key.sequence || key.sequence.length !== 1) return undefined;
+  const code = key.sequence.codePointAt(0)!;
+  return code >= 0x20 && code !== 0x7f ? key.sequence : undefined;
 }
 
 type Listener = () => void;
@@ -91,17 +65,12 @@ export class ThreadTuiController {
   readonly state: UiState;
   readonly meta: TerminalMeta;
   readonly slashSuggestions: readonly SlashSuggestion[];
-
   private readonly listeners = new Set<Listener>();
   private readonly batcher: UiEventBatcher;
   private active: AbortController | undefined;
   private stopped = false;
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
-  private hiddenThroughEntryId: string | undefined;
-  private replayRequested = false;
-  private committedIds = new Set<string>();
-  private currentTurn: { userEntryId: string | undefined; input: string } | undefined;
   private pendingAsk: { resolve: (answers: AskAnswers) => void; reject: (error: Error) => void } | undefined;
   private askAnswers: string[][] = [];
   private readonly detachAsk: () => void;
@@ -109,22 +78,18 @@ export class ThreadTuiController {
   private readonly donePromise: Promise<void>;
 
   constructor(private readonly app: ThreadApp) {
-    const status = app.versions.status();
     this.slashSuggestions = [
-      { name: "clear", description: "Clear the visible transcript without changing thread context" },
-      { name: "compact", description: "Compact older context and retain recent interactions" },
-      { name: "model", description: "Open a list and choose the active model" },
-      { name: "new", description: "Start an empty-context branch from the Session Tree root" },
-      // Only offered when something is installed, so the hint never advertises an
-      // empty feature.
-      ...(app.skills.length > 0
-        ? [{ name: "skill", description: "List installed skills, or load one into this turn" }]
-        : []),
-      { name: "thread", description: "Thread version commands: status, history, commit, diff, merge, restore" },
-      { name: "rewind", description: "Restore to before a historical turn" },
+      { name: "clear", description: "Clear the visible transcript" },
+      { name: "compact", description: "Regenerate the current path's context cache" },
+      { name: "model", description: "Choose the active model" },
+      { name: "new", description: "Create an empty Session from the project Root" },
+      { name: "session", description: "List or resume root Sessions" },
+      ...(app.skills.length ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
+      { name: "thread", description: "Session Tree status, history, Sessions, and search" },
+      { name: "rewind", description: "Return to before a current-path user message" },
       { name: "exit", description: "Exit thread" },
     ];
-    this.state = createUiState(status.currentBranch, status.headCheckpointId, []);
+    this.state = createUiState(app.sessionTree.activeSession.id, app.sessionTree.activeLiveTip, []);
     this.meta = {
       rootPath: app.rootPath,
       modelLabel: app.model ? `${app.model.providerId}/${app.model.modelId}` : "no model",
@@ -135,45 +100,27 @@ export class ThreadTuiController {
       cacheHitPercent: null,
       cacheMissedTokens: 0,
       cacheMissReason: null,
-      uncommitted: false,
-      gitBranch: null,
     };
-    this.refreshMeta();
-    void this.refreshGitBranch();
-    this.donePromise = new Promise<void>((resolve) => {
-      this.resolveDone = resolve;
-    });
+    this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((event) => this.applyUiEvent(event));
-    this.detachAsk = app.setAskPresenter({
-      present: (request, signal) => this.presentAsk(request, signal),
-    });
-    this.syncTranscript("reset");
+    this.detachAsk = app.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
+    this.syncTranscript();
+    this.refreshMeta();
   }
 
-  get isActive(): boolean {
-    return this.active !== undefined;
-  }
-
-  get isStopped(): boolean {
-    return this.stopped;
-  }
+  get isActive(): boolean { return this.active !== undefined; }
+  get isStopped(): boolean { return this.stopped; }
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  waitUntilStopped(): Promise<void> {
-    return this.donePromise;
-  }
+  waitUntilStopped(): Promise<void> { return this.donePromise; }
 
   dispose(): void {
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
-    this.idleExitTimer = undefined;
-    /* A parked question outlives the renderer otherwise, and its promise would
-     * keep the turn — and the process — waiting for an answer nobody can give.
-     * Aborting rather than dismissing, because the session itself is going away. */
     this.pendingAsk?.reject(new DOMException("Aborted", "AbortError"));
     this.detachAsk();
     this.listeners.clear();
@@ -182,135 +129,85 @@ export class ThreadTuiController {
   requestStop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
-    this.idleExitTimer = undefined;
-    this.active?.abort(new Error("Terminal session closed"));
-    this.resolveStopIfIdle();
+    this.active?.abort(new DOMException("Aborted", "AbortError"));
+    this.resolveDone?.();
+    this.notify();
   }
 
   interrupt(): boolean {
     if (!this.active) return false;
-    this.active.abort(new Error("Interrupted by user"));
+    this.active.abort(new DOMException("Aborted", "AbortError"));
     return true;
   }
 
   idleCtrlC(): boolean {
     const now = Date.now();
-    if (now - this.lastCtrlC < 900) {
+    if (now - this.lastCtrlC < 1_000) {
       this.requestStop();
       return true;
     }
     this.lastCtrlC = now;
-    if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
-    this.idleExitTimer = setTimeout(() => {
-      this.idleExitTimer = undefined;
-      this.lastCtrlC = 0;
-      if (this.state.notice?.text === "Press Ctrl+C again to exit") {
-        this.state.notice = undefined;
-        this.notify();
-      }
-    }, 900);
     this.state.notice = { level: "info", text: "Press Ctrl+C again to exit" };
+    this.idleExitTimer = setTimeout(() => {
+      this.state.notice = undefined;
+      this.notify();
+    }, 1_100);
     this.notify();
     return false;
   }
 
   cancelIdleExitGesture(): void {
-    if (this.lastCtrlC === 0) return;
     this.lastCtrlC = 0;
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
     this.idleExitTimer = undefined;
-    if (this.state.notice?.text === "Press Ctrl+C again to exit") {
-      this.state.notice = undefined;
-      this.notify();
-    }
   }
 
   cycleThinkingLevel(): void {
-    if (this.state.screen.type !== "session") return;
-    if (this.state.busy) {
-      this.state.notice = { level: "info", text: "Wait for the current turn before changing the thinking level" };
-    } else {
-      const level = this.app.cycleThinkingLevel();
-      this.refreshMeta();
-      this.state.notice = level === undefined
-        ? { level: "info", text: "Current model does not support thinking" }
-        : { level: "success", text: `Thinking level: ${level}` };
-    }
+    const level = this.app.cycleThinkingLevel();
+    if (!level) return;
+    this.refreshMeta();
+    this.state.notice = { level: "info", text: `Thinking: ${level}` };
     this.notify();
   }
 
   closeView(): void {
-    if (this.state.screen.type === "session") return;
-    this.state.screen = { type: "session" };
+    if (this.state.screen.type === "ask") this.pendingAsk?.reject(new AskDismissedError());
+    else this.state.screen = { type: "session" };
     this.notify();
   }
 
   handleScreenKey(key: TerminalKey): boolean {
     const screen = this.state.screen;
-    const up = key.name === "up" || key.name === "k";
-    const down = key.name === "down" || key.name === "j";
-    const enter = key.name === "return" || key.name === "kpenter" || key.name === "linefeed";
-    /* The ask panel handles its own navigation, unlike the pickers below: it also
-     * needs space to toggle a multi-select and printable keys for a free-text
-     * answer, so selection cannot live in a view-local signal. */
-    if (screen.type === "ask") return this.handleAskKey(screen, key, { up, down, enter });
-    if (screen.type === "model_picker" || screen.type === "rewind" || screen.type === "thread_squash") {
-      /* Arrow-key navigation for these floating panels is handled by the
-       * view (a local Solid signal, written back onto screen.selected) so it
-       * never round-trips through notify() — a notify per keystroke
-       * re-evaluates every state()/meta() binding and the whole session
-       * visibly flickers. Only the enter key needs the controller. */
-      if (enter) {
-        if (screen.type === "model_picker") void this.advanceModelPicker();
-        else if (screen.type === "rewind") void this.advanceRewind();
-        else void this.advanceSquash();
-        return true;
-      }
-      return false;
+    const enter = ["return", "kpenter", "linefeed"].includes(key.name);
+    if (screen.type === "ask") return this.handleAskKey(screen, key, {
+      up: key.name === "up",
+      down: key.name === "down",
+      enter,
+    });
+    if (screen.type === "model_picker" && enter && !screen.busy) {
+      void this.advanceModelPicker();
+      return true;
     }
-    if (screen.type === "merge") {
-      if (up || down || key.name === "tab") {
-        screen.selected = screen.selected === "keep-current" ? "summarize" : "keep-current";
-        screen.confirm = false;
-        screen.error = undefined;
+    if (screen.type === "rewind" && enter && !screen.busy) {
+      if (!screen.confirm) {
+        screen.confirm = true;
         this.notify();
-        return true;
-      }
-      if (enter) {
-        void this.advanceMerge();
-        return true;
-      }
-    }
-    if (screen.type === "history") {
-      if (screen.items.length > 0 && (up || down)) {
-        const delta = up ? -1 : 1;
-        screen.selected = (screen.selected + delta + screen.items.length) % screen.items.length;
-        screen.confirm = false;
-        screen.error = undefined;
-        this.notify();
-        return true;
-      }
-      if (enter) {
-        void this.advanceHistory();
-        return true;
-      }
+      } else void this.advanceRewind();
+      return true;
     }
     return false;
   }
 
   async submit(raw: string): Promise<void> {
     const input = raw.trim();
-    if (!input || this.active || this.state.busy || this.state.screen.type !== "session") return;
+    if (!input || this.active || this.stopped) return;
     if (input === "/exit") {
       this.requestStop();
       return;
     }
     const active = new AbortController();
     this.active = active;
-    this.state.busy = true;
-    this.state.activity = input.startsWith("/") ? "running command" : "starting turn";
-    this.notify();
+    this.state.notice = undefined;
     try {
       const result = await this.app.handleInput(input, {
         signal: active.signal,
@@ -318,32 +215,16 @@ export class ThreadTuiController {
       });
       this.batcher.flush();
       if (result.kind === "command") this.presentCommand(result.result);
-      if (result.kind === "turn") {
-        if (this.state.liveTurn) {
-          this.markStreamedTurnCommitted();
-        }
-        this.clearLiveTurn();
-        this.syncTranscript(this.replayRequested ? "reset" : "append");
-        if (result.result.error) this.state.notice = { level: "error", text: result.result.error.message };
-      }
-      this.replayRequested = false;
+      this.syncTranscript();
+      this.state.liveTurn = undefined;
       this.refreshMeta();
-      // A turn's tools or a command may have changed the git branch.
-      void this.refreshGitBranch();
     } catch (error) {
       this.batcher.flush();
-      const message = error instanceof Error ? error.message : String(error);
-      this.state.notice = { level: "error", text: message };
-      this.state.busy = false;
-      this.state.activity = undefined;
-      if (this.state.liveTurn) {
-        this.markStreamedTurnCommitted();
-      }
-      this.clearLiveTurn();
-      this.syncTranscript(this.replayRequested ? "reset" : "append");
-      this.replayRequested = false;
+      this.syncTranscript();
+      this.state.liveTurn = undefined;
+      this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
     } finally {
-      this.finishActive(active);
+      if (this.active === active) this.active = undefined;
       this.state.busy = false;
       this.state.activity = undefined;
       this.notify();
@@ -352,183 +233,47 @@ export class ThreadTuiController {
 
   private applyUiEvent(event: UiEvent): void {
     reduceUiEvent(this.state, event);
-    if (event.type === "turn_started") {
-      this.currentTurn = { userEntryId: event.userEntryId, input: event.input };
-      this.commitUserPrompt(
-        event.userEntryId ?? `user:${event.turnId}`,
-        event.input,
-        event.syntheticSquash ? "squash" : "user",
-      );
-    }
-    if (event.type === "head_changed" && event.reason === "new") {
-      this.hiddenThroughEntryId = undefined;
-      this.replayRequested = false;
-      this.committedIds.clear();
-      this.currentTurn = undefined;
-      this.state.liveTurn = undefined;
-      this.state.screen = { type: "session" };
-      this.syncTranscript("reset");
-      this.refreshMeta();
-    }
-    if (event.type === "head_changed" && event.reason !== "turn" && event.reason !== "new") this.replayRequested = true;
-    if (event.type === "turn_finished") {
-      this.markStreamedTurnCommitted();
-      this.clearLiveTurn();
-      this.syncTranscript(this.replayRequested ? "reset" : "append");
-      this.replayRequested = false;
-      this.refreshMeta();
-    }
     this.notify();
-  }
-
-  private commitUserPrompt(id: string, content: string, kind: "user" | "squash" = "user"): void {
-    if (this.committedIds.has(id)) return;
-    this.committedIds.add(id);
-    const item: TranscriptItem = { id, kind, content };
-    this.state.transcript = [...this.state.transcript, item];
   }
 
   private presentCommand(result: CommandResult): void {
     if (result.presentation === "clear") {
-      this.hiddenThroughEntryId = this.app.versions.head.sessionHeadId ?? undefined;
-      this.state.liveTurn = undefined;
       this.state.transcript = [];
-      this.state.notice = undefined;
-      this.committedIds.clear();
+      this.state.liveTurn = undefined;
       return;
     }
-    this.syncTranscript(this.replayRequested ? "reset" : "append");
-    this.replayRequested = false;
-    this.refreshMeta();
-    if (result.presentation === "view" && result.view) {
-      this.openView(result.view);
-      return;
-    }
-    if (result.content.includes("\n") || result.content.length > 180) {
-      this.openView({ type: "document", title: "Thread result", content: result.content });
-      return;
-    }
-    this.state.notice = {
-      level: result.changedState ? "success" : "info",
-      text: result.content,
-    };
+    if (result.view) this.openView(result.view);
+    else if (result.content) this.state.notice = { level: "success", text: result.content };
   }
 
   private openView(view: EphemeralView): void {
     openEphemeralView(this.state, view);
-    this.notify();
   }
 
   private async advanceModelPicker(): Promise<void> {
     const screen = this.state.screen;
-    if (screen.type !== "model_picker" || screen.busy) return;
-    const selected = screen.models[screen.selected];
-    if (!selected) return;
-    if (selected.providerId === this.app.model?.providerId && selected.modelId === this.app.model.modelId) {
-      this.closeView();
-      this.state.notice = { level: "info", text: `Already using ${selected.providerId}/${selected.modelId}` };
-      this.notify();
-      return;
-    }
-
+    if (screen.type !== "model_picker") return;
+    const model = screen.models[screen.selected];
+    if (!model) return;
     screen.busy = true;
-    screen.error = undefined;
-    const active = new AbortController();
-    this.active = active;
     this.notify();
-    try {
-      const result = await this.app.handleInput(
-        `/model ${quoteCommandArgument(selected.providerId)} ${quoteCommandArgument(selected.modelId)}`,
-        { signal: active.signal, onUiEvent: (event) => this.batcher.push(event) },
-      );
-      this.batcher.flush();
-      if (result.kind !== "command") throw new Error("Model selection did not produce a command result");
-      this.refreshMeta();
-      this.closeView();
-      this.state.notice = {
-        level: result.result.changedState ? "success" : "info",
-        text: result.result.content,
-      };
-    } catch (error) {
-      this.batcher.flush();
-      screen.error = error instanceof Error ? error.message : String(error);
-      this.state.busy = false;
-      this.state.activity = undefined;
-    } finally {
-      screen.busy = false;
-      this.finishActive(active);
-      this.notify();
-    }
-  }
-
-  private async advanceMerge(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "merge" || screen.busy || !screen.preview.clean) return;
-    if (!screen.confirm) {
-      if (screen.selected === "summarize" && !screen.note) {
-        screen.busy = true;
-        screen.error = undefined;
-        const active = new AbortController();
-        this.active = active;
-        this.notify();
-        try {
-          screen.note = await this.app.merge.prepareContextNote(screen.preview, active.signal);
-          screen.confirm = true;
-        } catch (error) {
-          screen.error = error instanceof Error ? error.message : String(error);
-        } finally {
-          screen.busy = false;
-          this.finishActive(active);
-          this.notify();
-        }
-        return;
-      }
-      screen.confirm = true;
-      this.notify();
-      return;
-    }
-    screen.busy = true;
-    screen.error = undefined;
-    const active = new AbortController();
-    this.active = active;
+    await this.submit(`/model ${model.providerId}/${model.modelId}`);
+    if (this.state.screen.type === "model_picker") this.state.screen = { type: "session" };
     this.notify();
-    try {
-      const result = await this.app.merge.applyPreview(screen.preview, screen.selected, active.signal, screen.note);
-      if (!result.clean || !result.checkpoint) throw new Error("Merge could not be applied cleanly");
-      this.state.branch = this.app.versions.currentBranch.name;
-      this.state.checkpointId = result.checkpoint.id;
-      this.replayRequested = true;
-      this.refreshMeta();
-      this.closeView();
-      this.syncTranscript("reset");
-      this.state.notice = { level: "success", text: `Merged ${screen.preview.incomingLabel} as ${short(result.checkpoint.id)}` };
-    } catch (error) {
-      screen.error = error instanceof Error ? error.message : String(error);
-      screen.confirm = false;
-    } finally {
-      screen.busy = false;
-      this.finishActive(active);
-      this.notify();
-    }
-  }
-
-  private async advanceHistory(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "history") return;
-    await this.advanceRestore(screen);
   }
 
   private async advanceRewind(): Promise<void> {
     const screen = this.state.screen;
     if (screen.type !== "rewind") return;
-    await this.advanceRestore(screen);
+    const item = screen.items[screen.selected];
+    if (!item) return;
+    screen.busy = true;
+    this.notify();
+    await this.submit(`/rewind ${item.turnId}`);
+    if (this.state.screen.type === "rewind") this.state.screen = { type: "session" };
+    this.notify();
   }
 
-  /**
-   * Opens the choice panel and resolves once the user commits. The panel replaces
-   * whatever overlay was open, because the parked turn is now the only thing that
-   * can make progress.
-   */
   private presentAsk(request: AskRequest, signal: AbortSignal): Promise<AskAnswers> {
     return new Promise<AskAnswers>((resolve, reject) => {
       if (signal.aborted) {
@@ -560,80 +305,43 @@ export class ThreadTuiController {
     });
   }
 
-  /**
-   * Panel keys: arrows move, space toggles a choice when multi-select is on, enter
-   * commits the current question and advances, and esc dismisses the whole request.
-   * Typing switches to a free-text answer, which is always available so the offered
-   * options never box the user in.
-   */
-  private handleAskKey(
-    screen: AskScreen,
-    key: TerminalKey,
-    keys: { up: boolean; down: boolean; enter: boolean },
-  ): boolean {
+  private handleAskKey(screen: AskScreen, key: TerminalKey, keys: { up: boolean; down: boolean; enter: boolean }): boolean {
     const question = screen.request.questions[screen.questionIndex];
     if (!question) return true;
     const optionCount = question.options.length;
-
     if (screen.customText !== undefined) {
-      if (key.name === "escape") {
-        screen.customText = undefined;
-        this.notify();
-        return true;
+      if (key.name === "escape") screen.customText = undefined;
+      else if (keys.enter) {
+        const value = screen.customText.trim();
+        if (value) this.commitAskAnswer(screen, [value]);
+      } else if (key.name === "backspace") screen.customText = screen.customText.slice(0, -1);
+      else {
+        const typed = printableKey(key);
+        if (typed) screen.customText += typed;
       }
-      if (keys.enter) {
-        const text = screen.customText.trim();
-        if (text) this.commitAskAnswer(screen, [text]);
-        return true;
-      }
-      if (key.name === "backspace") {
-        screen.customText = screen.customText.slice(0, -1);
-        this.notify();
-        return true;
-      }
-      const typed = printableKey(key);
-      if (typed) {
-        screen.customText += typed;
-        this.notify();
-      }
-      return true;
-    }
-
-    if (key.name === "escape") {
-      this.pendingAsk?.reject(new AskDismissedError());
-      return true;
-    }
-    if (keys.up || keys.down) {
-      const delta = keys.up ? -1 : 1;
-      screen.selected = (screen.selected + delta + optionCount) % optionCount;
       this.notify();
       return true;
     }
-    if (key.name === "space" && question.multiple) {
+    if (key.name === "escape") this.pendingAsk?.reject(new AskDismissedError());
+    else if ((keys.up || keys.down) && optionCount > 0) {
+      screen.selected = (screen.selected + (keys.up ? -1 : 1) + optionCount) % optionCount;
+    } else if (key.name === "space" && question.multiple) {
       const current = screen.chosen[screen.questionIndex] ?? [];
-      const next: number[] = current.includes(screen.selected)
-        ? current.filter((index: number) => index !== screen.selected)
+      screen.chosen[screen.questionIndex] = current.includes(screen.selected)
+        ? current.filter((index) => index !== screen.selected)
         : [...current, screen.selected];
-      screen.chosen[screen.questionIndex] = next;
-      this.notify();
-      return true;
+    } else if (keys.enter) {
+      const chosen = screen.chosen[screen.questionIndex] ?? [];
+      const picked = question.multiple && chosen.length ? chosen : [screen.selected];
+      this.commitAskAnswer(screen, picked.map((index) => question.options[index]!.label));
+    } else {
+      const typed = printableKey(key);
+      if (typed) screen.customText = typed;
     }
-    if (keys.enter) {
-      const toggled: number[] = screen.chosen[screen.questionIndex] ?? [];
-      const picked = question.multiple && toggled.length > 0 ? toggled : [screen.selected];
-      this.commitAskAnswer(screen, picked.map((index: number) => question.options[index]!.label));
-      return true;
-    }
-    const typed = printableKey(key);
-    if (typed) {
-      screen.customText = typed;
-      this.notify();
-      return true;
-    }
+    this.notify();
     return true;
   }
 
-  /** Records one answer and either advances to the next question or resolves. */
   private commitAskAnswer(screen: AskScreen, labels: string[]): void {
     this.askAnswers[screen.questionIndex] = labels;
     const next = screen.questionIndex + 1;
@@ -641,173 +349,44 @@ export class ThreadTuiController {
       screen.questionIndex = next;
       screen.selected = 0;
       screen.customText = undefined;
-      this.notify();
       return;
     }
-    const answers = screen.request.questions.map(
-      (_: unknown, index: number) => this.askAnswers[index] ?? [],
-    );
+    const answers = screen.request.questions.map((_question, index) => this.askAnswers[index] ?? []);
     this.askAnswers = [];
     this.pendingAsk?.resolve(answers);
   }
 
-  private async advanceSquash(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "thread_squash" || screen.busy || screen.items.length === 0) return;
-    const selected = screen.items[screen.selected]!;
-    this.closeView();
-    await this.submit(`/thread squash ${selected.turnId}`);
+  private activeMessages(): Message[] {
+    return this.app.sessionTree.livePath().flatMap((turn) => this.app.sessionTree.messagesForTurn(turn.id));
   }
 
-  /** Double-enter guarded restore shared by the history screen and the /rewind overlay. */
-  private async advanceRestore(screen: Extract<UiScreen, { type: "history" | "rewind" }>): Promise<void> {
-    if (screen.busy || screen.items.length === 0) return;
-    if (!screen.confirm) {
-      screen.confirm = true;
-      this.notify();
-      return;
-    }
-    const selected = screen.items[screen.selected]!;
-    screen.busy = true;
-    screen.error = undefined;
-    const active = new AbortController();
-    this.active = active;
-    this.notify();
-    try {
-      active.signal.throwIfAborted();
-      const checkpoint = await this.app.versions.restoreTurnBefore(selected.turnId);
-      active.signal.throwIfAborted();
-      this.state.branch = this.app.versions.currentBranch.name;
-      this.state.checkpointId = checkpoint.id;
-      this.refreshMeta();
-      this.closeView();
-      this.syncTranscript("reset");
-      this.state.notice = { level: "success", text: `Restored to before ${short(selected.turnId)}` };
-    } catch (error) {
-      screen.error = error instanceof Error ? error.message : String(error);
-      screen.confirm = false;
-    } finally {
-      screen.busy = false;
-      this.finishActive(active);
-      this.notify();
-    }
-  }
-
-  private syncTranscript(mode: "append" | "reset"): void {
-    const items = this.buildTranscript();
-    this.state.transcript = items;
-    if (mode === "reset") {
-      this.committedIds = new Set(items.map((item) => item.id));
-      return;
-    }
-    const pending = items.filter((item) => !this.committedIds.has(item.id));
-    if (pending.length === 0) return;
-    for (const item of pending) this.committedIds.add(item.id);
-  }
-
-  private clearLiveTurn(): void {
-    if (!this.state.liveTurn) return;
-    this.state.liveTurn = undefined;
-  }
-
-  private markStreamedTurnCommitted(): void {
-    const turn = this.currentTurn;
-    if (!turn) return;
-    const items = this.buildTranscript();
-    let start = turn.userEntryId ? items.findIndex((item) => item.id === turn.userEntryId) : -1;
-    if (start < 0) {
-      for (let index = items.length - 1; index >= 0; index--) {
-        const item = items[index];
-        if (item?.kind === "user" && item.content === turn.input) {
-          start = index;
-          break;
-        }
-      }
-    }
-    if (start >= 0) {
-      for (const item of items.slice(start)) {
-        if (["user", "squash", "assistant", "thinking", "tool"].includes(item.kind)) this.committedIds.add(item.id);
-      }
-    }
-    this.currentTurn = undefined;
-  }
-
-  private buildTranscript(): TranscriptItem[] {
-    const head = this.app.versions.head.sessionHeadId;
-    const toolRecords = this.app.session.projection.records.filter((record) => record.type === "tool_started");
-    return projectTranscript(this.app.session.pathTo(head), toolRecords, this.hiddenThroughEntryId);
+  private syncTranscript(): void {
+    const entries = this.app.sessionTree.livePath().flatMap((turn) => this.app.sessionTree.entriesForTurn(turn.id));
+    this.state.transcript = projectTranscript(entries);
+    this.state.sessionId = this.app.sessionTree.activeSession.id;
+    this.state.liveTipTurnId = this.app.sessionTree.activeLiveTip;
   }
 
   private refreshMeta(): void {
-    const head = this.app.versions.head;
-    const context = this.app.session.buildContext(head.sessionHeadId);
-    const model = this.app.model;
-    this.meta.modelLabel = model ? `${model.providerId}/${model.modelId}` : "no model";
-    this.meta.modelName = model?.modelId ?? "no model";
+    const messages = this.activeMessages();
+    const scan = scanCacheUsage(messages);
+    this.meta.modelLabel = this.app.model ? `${this.app.model.providerId}/${this.app.model.modelId}` : "no model";
+    this.meta.modelName = this.app.model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
-    this.meta.contextPercent = this.app.contextOccupancy(head.sessionHeadId)?.percent ?? 0;
-    const cache = scanCacheUsage(context.messages as Message[]);
-    this.meta.cacheHitPercent = cacheHitPercent(cache.hitTotals);
-    this.meta.cacheMissedTokens = cache.totals.missedTokens;
-    this.meta.cacheMissReason = latestCacheMissReason(context.messages as Message[], cache);
-    this.meta.uncommitted = ![...this.app.session.projection.commits.values()]
-      .some((commit) => commit.checkpointId === head.id);
-    this.state.branch = this.app.versions.currentBranch.name;
-    this.state.checkpointId = head.id;
-  }
-
-  /**
-   * Reads the main-repository branch out of band. Thread branches are
-   * independent of git refs, so this is display-only context and any failure
-   * (no HEAD yet in a fresh repository, git missing) simply leaves it unset.
-   */
-  private async refreshGitBranch(): Promise<void> {
-    const previous = this.meta.gitBranch;
-    let next: string | null = null;
-    try {
-      const branch = (await runGit(["-C", this.app.rootPath, "branch", "--show-current"]))
-        .stdout.toString("utf8").trim();
-      if (branch) next = branch;
-      else {
-        const commit = (await runGit(["-C", this.app.rootPath, "rev-parse", "--short", "HEAD"]))
-          .stdout.toString("utf8").trim();
-        next = commit ? `detached ${commit}` : null;
-      }
-    } catch {
-      next = null;
-    }
-    if (next !== previous) {
-      this.meta.gitBranch = next;
-      this.notify();
-    }
+    this.meta.contextPercent = this.app.contextOccupancy()?.percent ?? 0;
+    this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
+    this.meta.cacheMissedTokens = scan.totals.missedTokens;
+    this.meta.cacheMissReason = latestCacheMissReason(messages, scan);
   }
 
   private notify(): void {
     for (const listener of this.listeners) {
-      try {
-        listener();
-      } catch {
-        // Presentation listeners are isolated from durable execution.
-      }
+      try { listener(); } catch { /* renderer errors do not alter state */ }
     }
-  }
-
-  private finishActive(active: AbortController): void {
-    if (this.active === active) this.active = undefined;
-    this.resolveStopIfIdle();
-  }
-
-  private resolveStopIfIdle(): void {
-    if (this.stopped && !this.active) this.resolveDone?.();
   }
 }
 
 export function short(value: string): string {
-  const compact = value.includes("_") ? value.slice(value.indexOf("_") + 1) : value;
-  return compact.length > 12 ? compact.slice(0, 12) : compact;
-}
-
-function quoteCommandArgument(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return value.length > 12 ? value.slice(0, 12) : value;
 }

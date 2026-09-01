@@ -2,7 +2,7 @@
   "name": "thread",
   "version": "0.1.0",
   "private": true,
-  "description": "A project-lifetime coding-agent harness with versioned workspace and context branches.",
+  "description": "A coding-agent runtime with a persistent project Session Tree and turn-level workspace rewind.",
   "license": "MIT",
   "repository": {
     "type": "git",

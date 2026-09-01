@@ -7,7 +7,6 @@ import { loadModelState, resolveModelSelection, saveModelState } from "../config
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
-import { discoverGitWorkspace } from "../workspace/discovery.js";
 
 interface CliOptions {
   rootPath: string;
@@ -56,7 +55,7 @@ function parseArgs(argv: string[]): CliOptions {
 function help(): string {
   return `thread — a session-tree coding agent
 
-Usage: thread [--root <git-worktree>] [--config <file>]
+Usage: thread [--root <project-directory>] [--config <file>]
                  [--provider <id> --model <id>] [--extension <module>]
                  [--tui fullscreen|plain]
 
@@ -65,8 +64,8 @@ Default config: ~/.thread/config.json
 Remembered model/thinking choice: ~/.thread/state.json (delete to reset)
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
-Inside the prompt use /new to start an empty-context root branch, /model,
-/clear, /compact, /thread for Session Tree commands, /rewind <turn-id>, or /exit.
+Inside the prompt use /new to create an empty root Session, /session to resume one,
+/clear, /compact, /thread for Session Tree history/search, /rewind <turn-id>, or /exit.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 
@@ -81,7 +80,6 @@ async function main(): Promise<void> {
   // filename when its first TSX import happens after replaying a large JSONL
   // session. Load the TUI module before opening the durable session instead.
   const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
-  const workspace = await discoverGitWorkspace(options.rootPath);
   const loadedConfig = await loadModelConfig(options.configPath);
   const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {});
   // An explicit --provider/--model pair outranks the remembered choice, which in
@@ -111,7 +109,7 @@ async function main(): Promise<void> {
     }
   }
   const app = await ThreadApp.open({
-    rootPath: workspace.rootPath,
+    rootPath: options.rootPath,
     ...(model ? { model } : {}),
     modelCatalog,
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
