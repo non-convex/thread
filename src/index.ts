@@ -16,10 +16,17 @@ export {
   createConfiguredModelClient,
   PiModelCatalog,
   PiModelClient,
+  type ModelAuthProviderStatus,
   type ModelCatalog,
+  type ModelCatalogOptions,
   type ModelClient,
   type ModelDescriptor,
 } from "./agent/model-client.js";
+export {
+  DEFAULT_AUTH_FILE,
+  getAuthFilePath,
+  ThreadCredentialStore,
+} from "./auth/credential-store.js";
 export {
   DEFAULT_THREAD_HOME_NAME,
   DEFAULT_MODEL_CONFIG_FILE,

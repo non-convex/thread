@@ -2,11 +2,13 @@
 import { stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
+import { ThreadCredentialStore } from "../auth/credential-store.js";
 import { loadModelConfig } from "../config/model-config.js";
 import { loadModelState, resolveModelSelection, saveModelState } from "../config/model-state.js";
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
+import { loginProvider, logoutProvider, showAuthStatus } from "./subscription-auth.js";
 
 interface CliOptions {
   rootPath: string;
@@ -16,6 +18,27 @@ interface CliOptions {
   extensions: string[];
   tui: TerminalMode | "plain";
   help: boolean;
+}
+
+type CliCommand =
+  | { type: "login"; providerId: string }
+  | { type: "logout"; providerId: string }
+  | { type: "auth_status" };
+
+function parseCommand(argv: string[]): CliCommand | undefined {
+  if (argv[0] === "login") {
+    if (argv.length !== 2 || !argv[1]) throw new Error("Usage: thread login <provider>");
+    return { type: "login", providerId: argv[1] };
+  }
+  if (argv[0] === "logout") {
+    if (argv.length !== 2 || !argv[1]) throw new Error("Usage: thread logout <provider>");
+    return { type: "logout", providerId: argv[1] };
+  }
+  if (argv[0] === "auth") {
+    if (argv.length !== 2 || argv[1] !== "status") throw new Error("Usage: thread auth status");
+    return { type: "auth_status" };
+  }
+  return undefined;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -58,10 +81,14 @@ function help(): string {
 Usage: thread [--root <project-directory>] [--config <file>]
                  [--provider <id> --model <id>] [--extension <module>]
                  [--tui fullscreen|plain]
+       thread login <provider>
+       thread logout <provider>
+       thread auth status
 
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
 Remembered model/thinking choice: ~/.thread/state.json (delete to reset)
+Subscription credentials: ~/.thread/auth.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
@@ -70,7 +97,26 @@ In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const command = parseCommand(argv);
+  const credentials = new ThreadCredentialStore();
+  if (command) {
+    const enabledProviderIds = (await credentials.list()).map((credential) => credential.providerId);
+    const catalog = createConfiguredModelCatalog({}, { credentials, enabledProviderIds });
+    if (command.type === "login") await loginProvider(catalog, command.providerId);
+    else if (command.type === "logout") {
+      await logoutProvider(catalog, command.providerId);
+      const remembered = await loadModelState();
+      if (remembered?.model?.provider === command.providerId) {
+        await saveModelState({
+          ...(remembered.thinkingLevel ? { thinkingLevel: remembered.thinkingLevel } : {}),
+        });
+      }
+    }
+    else await showAuthStatus(catalog);
+    return;
+  }
+  const options = parseArgs(argv);
   if (options.help) {
     output.write(`${help()}\n`);
     return;
@@ -81,7 +127,11 @@ async function main(): Promise<void> {
   // session. Load the TUI module before opening the durable session instead.
   const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
   const loadedConfig = await loadModelConfig(options.configPath);
-  const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {});
+  const enabledProviderIds = (await credentials.list()).map((credential) => credential.providerId);
+  const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {}, {
+    credentials,
+    enabledProviderIds,
+  });
   // An explicit --provider/--model pair outranks the remembered choice, which in
   // turn outranks the configured default. parseArgs already guarantees the CLI
   // pair is either complete or absent.

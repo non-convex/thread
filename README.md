@@ -19,7 +19,7 @@ Thread does not implement its own general-purpose version control. Project Git, 
 ## Requirements
 
 - Bun 1.3 or newer
-- A model configured through `~/.thread/config.json`, the compatible pi fallback, or `--provider` and `--model`
+- A model configured through `~/.thread/config.json`, the compatible pi fallback, `--provider` and `--model`, or a ChatGPT subscription login
 
 Git is not required. Any existing directory can be opened as a project.
 
@@ -29,6 +29,22 @@ bun run dev --root /path/to/project
 ```
 
 An interactive TTY opens the full-screen terminal. Non-TTY use selects plain mode automatically. Use `--tui plain` to force it.
+
+### ChatGPT subscription
+
+Thread can use Codex access included with a ChatGPT subscription through the built-in `openai-codex` OAuth provider. The login is owned by Thread and stored separately from Codex CLI credentials:
+
+```bash
+thread login openai-codex
+thread auth status
+thread --provider openai-codex --model gpt-5.6-terra
+```
+
+After the first successful login, `openai-codex` models appear in the normal `/model` picker and OAuth tokens refresh automatically. Credentials are stored in `~/.thread/auth.json` (or `$THREAD_HOME/auth.json`); treat that file like a password. To remove them:
+
+```bash
+thread logout openai-codex
+```
 
 ## Core behavior
 
@@ -79,6 +95,16 @@ Compaction is a removable cache, not history. `/compact` summarizes an older pre
 Deleting the compaction cache does not remove or rewrite any Session, Turn, or Entry. The full context can be rebuilt from the Session Tree.
 
 ## Commands
+
+Top-level authentication commands:
+
+```text
+thread login <provider>
+thread logout <provider>
+thread auth status
+```
+
+Interactive commands:
 
 ```text
 /new

@@ -19,7 +19,7 @@ Thread 不实现自己的通用版本控制。项目若使用 Git，它也只是
 ## 环境与启动
 
 - Bun 1.3 或更高版本
-- 通过 `~/.thread/config.json`、兼容的 pi fallback，或 `--provider` 与 `--model` 配置模型
+- 通过 `~/.thread/config.json`、兼容的 pi fallback、`--provider` 与 `--model`，或 ChatGPT 订阅登录配置模型
 
 Thread 不要求 Git，任意已有目录都可以作为项目打开。
 
@@ -29,6 +29,22 @@ bun run dev --root /path/to/project
 ```
 
 交互式 TTY 默认进入全屏终端；非 TTY 自动使用 plain 模式，也可用 `--tui plain` 强制指定。
+
+### ChatGPT 订阅
+
+Thread 可以通过内置的 `openai-codex` OAuth provider 使用 ChatGPT 订阅包含的 Codex 权益。登录凭据由 Thread 独立持有，不与 Codex CLI 的凭据文件混用：
+
+```bash
+thread login openai-codex
+thread auth status
+thread --provider openai-codex --model gpt-5.6-terra
+```
+
+首次登录成功后，`openai-codex` 模型会进入正常的 `/model` 选择器，OAuth token 也会自动刷新。凭据保存在 `~/.thread/auth.json`（或 `$THREAD_HOME/auth.json`），应按密码文件保护。退出登录：
+
+```bash
+thread logout openai-codex
+```
 
 ## 核心语义
 
@@ -79,6 +95,16 @@ Compaction 是可删除缓存，不是历史节点。`/compact` 摘要较早的�
 删除 compaction cache 不会删除或改写 Session、Turn 或 Entry，完整上下文仍可由 Session Tree 重建。
 
 ## 命令
+
+顶层认证命令：
+
+```text
+thread login <provider>
+thread logout <provider>
+thread auth status
+```
+
+交互式命令：
 
 ```text
 /new

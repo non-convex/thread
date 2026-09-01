@@ -1,8 +1,11 @@
 import {
+  type AuthInteraction,
   type Api,
   type AssistantMessage,
   type CacheRetention,
   type Context,
+  type CredentialStore,
+  InMemoryCredentialStore,
   type Model,
   type ModelThinkingLevel,
   type Models,
@@ -13,6 +16,7 @@ import {
   type ThinkingLevel,
   type ToolCall,
 } from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
@@ -103,6 +107,18 @@ export interface ModelCatalog {
   list(providerId?: string): ModelDescriptor[];
   listAll?(providerId?: string): ModelDescriptor[];
   createClient(providerId: string, modelId: string): ModelClient;
+}
+
+export interface ModelAuthProviderStatus {
+  providerId: string;
+  name: string;
+  authenticated: boolean;
+  credentialType?: "api_key" | "oauth";
+}
+
+export interface ModelCatalogOptions {
+  credentials?: CredentialStore;
+  enabledProviderIds?: readonly string[];
 }
 
 export class PiModelClient implements ModelClient {
@@ -260,19 +276,25 @@ export class PiModelClient implements ModelClient {
 
 export class PiModelCatalog implements ModelCatalog {
   private readonly configuredModelKeys: ReadonlySet<string> | undefined;
+  private readonly enabledProviderIds: ReadonlySet<string>;
 
   constructor(
     private readonly models: Models,
     configuredModels?: readonly { providerId: string; modelId: string }[],
+    private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
+    enabledProviderIds: readonly string[] = [],
   ) {
     this.configuredModelKeys = configuredModels === undefined
       ? undefined
       : new Set(configuredModels.map((model) => modelKey(model.providerId, model.modelId)));
+    this.enabledProviderIds = new Set(enabledProviderIds);
   }
 
   list(providerId?: string): ModelDescriptor[] {
     const models = this.models.getModels(providerId).filter((model) =>
-      this.configuredModelKeys === undefined || this.configuredModelKeys.has(modelKey(model.provider, model.id)),
+      this.configuredModelKeys === undefined ||
+      this.enabledProviderIds.has(model.provider) ||
+      this.configuredModelKeys.has(modelKey(model.provider, model.id)),
     );
     return this.describe(models);
   }
@@ -299,10 +321,43 @@ export class PiModelCatalog implements ModelCatalog {
   createClient(providerId: string, modelId: string): PiModelClient {
     return selectModelClient(this.models, providerId, modelId);
   }
+
+  async login(providerId: string, interaction: AuthInteraction): Promise<void> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+    if (!provider.auth.oauth) throw new Error(`Provider ${providerId} does not support subscription login`);
+    await this.models.login(providerId, "oauth", interaction);
+  }
+
+  async logout(providerId: string, signal?: AbortSignal): Promise<void> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+    if (!provider.auth.oauth) throw new Error(`Provider ${providerId} does not support subscription login`);
+    await this.models.logout(providerId, signal ? { signal } : undefined);
+  }
+
+  async authStatus(signal?: AbortSignal): Promise<ModelAuthProviderStatus[]> {
+    const stored = new Map((await this.credentials.list(signal ? { signal } : undefined))
+      .map((credential) => [credential.providerId, credential.type] as const));
+    return this.models.getProviders()
+      .filter((provider) => provider.auth.oauth !== undefined)
+      .map((provider) => {
+        const credentialType = stored.get(provider.id);
+        return {
+          providerId: provider.id,
+          name: provider.name,
+          authenticated: credentialType === "oauth",
+          ...(credentialType ? { credentialType } : {}),
+        };
+      })
+      .sort((left, right) => left.providerId.localeCompare(right.providerId));
+  }
 }
 
 export function createBuiltinModelClient(providerId: string, modelId: string): PiModelClient {
-  return new PiModelCatalog(builtinModels()).createClient(providerId, modelId);
+  const credentials = new InMemoryCredentialStore();
+  registerBunOAuthFlows();
+  return new PiModelCatalog(builtinModels({ credentials }), undefined, credentials).createClient(providerId, modelId);
 }
 
 function apiFor(api: SupportedCustomApi) {
@@ -373,14 +428,19 @@ export function createConfiguredModelClient(
 
 export function createConfiguredModelCatalog(
   providers: Record<string, CustomProviderConfig>,
+  options: ModelCatalogOptions = {},
 ): PiModelCatalog {
-  const models = builtinModels();
+  const credentials = options.credentials ?? new InMemoryCredentialStore();
+  // Standalone Bun executables cannot discover pi-ai's private lazy OAuth
+  // modules at runtime, so register their statically bundled loaders first.
+  registerBunOAuthFlows();
+  const models = builtinModels({ credentials });
   const configuredModels: Array<{ providerId: string; modelId: string }> = [];
   for (const [customProviderId, config] of Object.entries(providers)) {
     registerCustomProvider(models, customProviderId, config);
     configuredModels.push(...config.models.map((model) => ({ providerId: customProviderId, modelId: model.id })));
   }
-  return new PiModelCatalog(models, configuredModels);
+  return new PiModelCatalog(models, configuredModels, credentials, options.enabledProviderIds);
 }
 
 function modelKey(providerId: string, modelId: string): string {
