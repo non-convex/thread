@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
-import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, UiState } from "../state.js";
+import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SubagentSettingsScreen, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -211,10 +211,14 @@ function ModelPickerOverlay(props: {
       <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
         <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
           {props.screen().scope === "all"
-            ? "all built-in and configured models"
-            : "configured models · /model all for the full catalog"}
+            ? `all models · ${props.screen().target === "main" ? "main" : "implementation-worker"}`
+            : props.screen().target === "main"
+              ? "configured models · /model all for the full catalog"
+              : "worker models · /subagent on all for the full catalog"}
         </text>
-        <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ switch · esc</text>
+        <text height={1} wrapMode="none" fg={theme().faint}>
+          {props.screen().target === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
+        </text>
       </box>
       <For each={visible()}>
         {({ item: model, index }) => {
@@ -259,11 +263,67 @@ function ModelPickerOverlay(props: {
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
           <SpinnerText fg={theme().spark} />
-          <text height={1} wrapMode="none" fg={theme().spark}> switching model…</text>
+          <text height={1} wrapMode="none" fg={theme().spark}>
+            {props.screen().target === "main" ? " switching model…" : " enabling subagent…"}
+          </text>
         </box>
       </Show>
       {/* Stale errors drop as soon as the selection moves again. */}
       <Show when={props.screen().error !== undefined && !props.navigated()}>
+        <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().error}>{props.screen().error}</text>
+      </Show>
+    </box>
+  );
+}
+
+function SubagentSettingsOverlay(props: {
+  screen: Accessor<SubagentSettingsScreen>;
+  selected: Accessor<number>;
+  resources: ThreadViewResources;
+  contentWidth: Accessor<number>;
+}) {
+  const theme = () => props.resources.theme;
+  const options = [
+    { label: "Off", description: "Hide delegation tools and run only the main agent" },
+    { label: "On", description: "Choose a worker model, then enable implementation workers" },
+  ] as const;
+  return (
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+        <text flexGrow={1} height={1} wrapMode="none" fg={theme().faint}>subagent mode</text>
+        <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
+      </box>
+      <For each={options}>
+        {(option, index) => {
+          const selected = () => index() === props.selected();
+          const current = () => props.screen().enabled === (index() === 1);
+          return (
+            <box
+              flexDirection="row"
+              width={props.contentWidth() - 2}
+              height={1}
+              backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
+            >
+              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().accent}>
+                {selected() ? "▸ " : current() ? "● " : "  "}
+              </text>
+              <text width={8} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().text} attributes={selected() ? bold : 0}>
+                {option.label}
+              </text>
+              <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={selected() ? theme().softText : theme().muted}>
+                {option.description}
+              </text>
+            </box>
+          );
+        }}
+      </For>
+      <Show when={props.screen().busy}>
+        <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+          <SpinnerText fg={theme().spark} />
+          <text height={1} wrapMode="none" fg={theme().spark}> updating subagent mode…</text>
+        </box>
+      </Show>
+      <Show when={props.screen().error !== undefined}>
         <text width={props.contentWidth() - 2} height={1} wrapMode="none" truncate={true} fg={theme().error}>{props.screen().error}</text>
       </Show>
     </box>
@@ -489,6 +549,8 @@ export function SessionScreen(props: {
   const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
+  const subagentSettings = (): SubagentSettingsScreen | undefined =>
+    state().screen.type === "subagent_settings" ? state().screen as SubagentSettingsScreen : undefined;
   const rewindScreen = (): RewindScreen | undefined =>
     state().screen.type === "rewind" ? state().screen as RewindScreen : undefined;
   const pathPicker = (): RewindScreen | undefined => rewindScreen();
@@ -502,6 +564,11 @@ export function SessionScreen(props: {
     // header + windowed rows + optional busy/error lines + border
     return 1 + Math.min(MODEL_OVERLAY_MAX_ROWS, picker.models.length)
       + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
+  };
+  const subagentOverlayHeight = () => {
+    const settings = subagentSettings();
+    if (!settings) return 0;
+    return 1 + 2 + (settings.busy ? 1 : 0) + (settings.error ? 1 : 0) + 2;
   };
   const rewindOverlayHeight = () => {
     const rewind = pathPicker();
@@ -555,7 +622,7 @@ export function SessionScreen(props: {
           </Show>
         </scrollbox>
       </Show>
-      <Show when={modelPicker() === undefined && pathPicker() === undefined && props.suggestions().length > 0}>
+      <Show when={modelPicker() === undefined && subagentSettings() === undefined && pathPicker() === undefined && props.suggestions().length > 0}>
         <box
           position="absolute"
           right={1}
@@ -596,6 +663,27 @@ export function SessionScreen(props: {
             screen={() => modelPicker() as ModelPickerScreen}
             selected={props.overlaySelected}
             navigated={props.overlayNavigated}
+            resources={props.resources}
+            contentWidth={overlayContentWidth}
+          />
+        </box>
+      </Show>
+      <Show when={subagentSettings() !== undefined}>
+        <box
+          position="absolute"
+          right={1}
+          bottom={controlsHeight()}
+          left={1}
+          height={subagentOverlayHeight()}
+          zIndex={20}
+          border={true}
+          borderStyle="rounded"
+          borderColor={theme.borderStrong}
+          backgroundColor={theme.surface}
+        >
+          <SubagentSettingsOverlay
+            screen={() => subagentSettings() as SubagentSettingsScreen}
+            selected={props.overlaySelected}
             resources={props.resources}
             contentWidth={overlayContentWidth}
           />

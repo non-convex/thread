@@ -4,6 +4,19 @@
     "id": "claude-sonnet-4-6"
   },
   "defaultThinkingLevel": "medium",
+  "agents": {
+    "implementation-worker": {
+      "model": {
+        "provider": "my-relay",
+        "id": "claude-haiku-4-5"
+      },
+      "thinkingLevel": "xhigh",
+      "maxConcurrent": 2,
+      "maxSteps": 100,
+      "maxRuntimeMinutes": 60,
+      "maxRevisions": 2
+    }
+  },
   "providers": {
     "my-relay": {
       "name": "My Anthropic-compatible relay",
@@ -14,6 +27,14 @@
         {
           "id": "claude-sonnet-4-6",
           "name": "Claude Sonnet 4.6 via relay",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 200000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5 via relay",
           "reasoning": true,
           "input": ["text", "image"],
           "contextWindow": 200000,

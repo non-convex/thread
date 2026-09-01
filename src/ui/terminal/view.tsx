@@ -73,7 +73,7 @@ export function ThreadRoot(props: {
    * are set, which Solid treats as no-ops. */
   createEffect(() => {
     const active = screen();
-    if (active.type === "model_picker" || active.type === "rewind") {
+    if (active.type === "model_picker" || active.type === "subagent_settings" || active.type === "rewind") {
       setOverlaySelected(active.selected);
       setOverlayNavigated(false);
     }
@@ -160,13 +160,15 @@ export function ThreadRoot(props: {
       props.controller.handleScreenKey(key);
       return;
     }
-    if (activeScreen.type === "model_picker" || activeScreen.type === "rewind") {
+    if (activeScreen.type === "model_picker" || activeScreen.type === "subagent_settings" || activeScreen.type === "rewind") {
       // The picker/path-action panels float over the session screen: selection
       // keys move the view-side signal (no notify — that is what flickered),
       // enter goes to the controller, everything else reaches the composer.
       const count = activeScreen.type === "model_picker"
         ? activeScreen.models.length
-        : activeScreen.items.length;
+        : activeScreen.type === "subagent_settings"
+          ? 2
+          : activeScreen.items.length;
       if ((key.name === "up" || key.name === "down") && count > 0 && !activeScreen.busy) {
         key.preventDefault();
         const delta = key.name === "up" ? -1 : 1;
@@ -235,7 +237,7 @@ export function ThreadRoot(props: {
       <Switch>
         {/* The model picker and path-action panels are overlays on
             the session screen, not separate screens, so they all route here. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "rewind" || screen().type === "ask"}>
+        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "subagent_settings" || screen().type === "rewind" || screen().type === "ask"}>
           <SessionScreen
             controller={props.controller}
             state={state}

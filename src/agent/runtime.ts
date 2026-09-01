@@ -2,6 +2,7 @@ import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { BuiltContext } from "../context/builder.js";
 import type { CompactionResult } from "../context/compaction.js";
 import type { ExtensionEvents } from "../extensions/events.js";
+import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { WorkspaceStateService } from "../workspace-state/service.js";
@@ -23,6 +24,7 @@ export class AgentRuntime {
     private readonly workspace: WorkspaceStateService,
     private readonly runner: TurnRunner,
     private readonly extensions: ExtensionEvents,
+    private readonly agentTasks?: AgentTaskOrchestrator,
   ) {}
 
   async run(input: string, options: RunTurnOptions): Promise<TurnResult> {
@@ -69,6 +71,16 @@ export class AgentRuntime {
     } catch (cause) {
       error = cause instanceof Error ? cause : new Error(String(cause));
       outcome = options.signal.aborted || error.name === "AbortError" ? "interrupted" : "failed";
+    }
+    try {
+      await this.agentTasks?.finishParentTurn(
+        planned.id,
+        outcome === "completed" ? "Parent turn ended before this task was applied" : `Parent turn ${outcome}`,
+        options.onUiEvent,
+      );
+    } catch (cause) {
+      error ??= cause instanceof Error ? cause : new Error(String(cause));
+      outcome = "failed";
     }
     const turn = await turnReady;
     const settled = await this.tree.finishTurn(turn.id, outcome, error);

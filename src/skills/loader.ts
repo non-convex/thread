@@ -1,7 +1,7 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { getThreadHome } from "../config/model-config.js";
+import { getThreadHome } from "../config/thread-config.js";
 
 /** Agent Skills spec caps. */
 const MAX_NAME_LENGTH = 64;

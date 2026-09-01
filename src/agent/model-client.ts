@@ -22,7 +22,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { resolveConfigHeaders, resolveConfigValue } from "../config/config-value.js";
-import type { CustomProviderConfig, SupportedCustomApi } from "../config/model-config.js";
+import type { CustomProviderConfig, SupportedCustomApi } from "../config/thread-config.js";
 
 /** Transient provider errors (408/409/429/5xx and server-requested retries). */
 export const DEFAULT_MODEL_MAX_RETRIES = 10;

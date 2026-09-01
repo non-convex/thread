@@ -10,6 +10,12 @@ export interface ToolResult {
 export interface ToolContext {
   rootPath: string;
   signal: AbortSignal;
+  invocation: {
+    executionId: string;
+    assistantEntryId: string;
+    toolCallId: string;
+  };
+  onUiEvent?: import("../ui/events.js").UiEventSink;
   /**
    * Present when an interactive front end can put a question in front of the
    * user. Tools that need a decision stay unregistered without it, so a plain or

@@ -2,9 +2,11 @@
 import { stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
+import type { AgentProfileDiagnostic } from "../agent-task/model.js";
+import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
 import { ThreadCredentialStore } from "../auth/credential-store.js";
-import { loadModelConfig } from "../config/model-config.js";
-import { loadModelState, resolveModelSelection, saveModelState } from "../config/model-state.js";
+import { loadThreadConfig } from "../config/thread-config.js";
+import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../config/thread-state.js";
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
@@ -87,12 +89,13 @@ Usage: thread [--root <project-directory>] [--config <file>]
 
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
-Remembered model/thinking choice: ~/.thread/state.json (delete to reset)
+Remembered main model, thinking, and subagent choices: ~/.thread/state.json (delete to reset)
 Subscription credentials: ~/.thread/auth.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
-/clear, /compact, /thread for Session Tree history/search, /rewind <turn-id>, or /exit.
+/subagent to configure workers, /clear, /compact, /thread for Session Tree
+history/search, /rewind <turn-id>, or /exit.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 
@@ -106,10 +109,19 @@ async function main(): Promise<void> {
     if (command.type === "login") await loginProvider(catalog, command.providerId);
     else if (command.type === "logout") {
       await logoutProvider(catalog, command.providerId);
-      const remembered = await loadModelState();
-      if (remembered?.model?.provider === command.providerId) {
-        await saveModelState({
+      const remembered = await loadThreadState();
+      if (remembered) {
+        const worker = remembered.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID];
+        await saveThreadState({
+          ...(remembered.model?.provider === command.providerId ? {} : remembered.model ? { model: remembered.model } : {}),
           ...(remembered.thinkingLevel ? { thinkingLevel: remembered.thinkingLevel } : {}),
+          ...(worker ? {
+            agents: {
+              [IMPLEMENTATION_WORKER_PROFILE_ID]: worker.model?.provider === command.providerId
+                ? { enabled: false, model: worker.model }
+                : worker,
+            },
+          } : {}),
         });
       }
     }
@@ -126,7 +138,7 @@ async function main(): Promise<void> {
   // filename when its first TSX import happens after replaying a large JSONL
   // session. Load the TUI module before opening the durable session instead.
   const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
-  const loadedConfig = await loadModelConfig(options.configPath);
+  const loadedConfig = await loadThreadConfig(options.configPath);
   const enabledProviderIds = (await credentials.list()).map((credential) => credential.providerId);
   const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {}, {
     credentials,
@@ -135,11 +147,40 @@ async function main(): Promise<void> {
   // An explicit --provider/--model pair outranks the remembered choice, which in
   // turn outranks the configured default. parseArgs already guarantees the CLI
   // pair is either complete or absent.
-  const selection = resolveModelSelection({
+  const state = await loadThreadState();
+  const selection = resolveMainModelSelection({
     ...(options.provider && options.model ? { cli: { provider: options.provider, id: options.model } } : {}),
-    state: await loadModelState(),
+    state,
     ...(loadedConfig ? { config: loadedConfig.config } : {}),
   });
+  const agentProfileDiagnostics: AgentProfileDiagnostic[] = (loadedConfig?.agentDiagnostics ?? []).map((message) => ({
+    profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+    level: "error",
+    message,
+  }));
+  const workerConfig = loadedConfig?.source === "thread"
+    ? loadedConfig.config.agents[IMPLEMENTATION_WORKER_PROFILE_ID]
+    : undefined;
+  const workerState = state?.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID];
+  const workerSelection = workerState?.model ?? workerConfig?.model;
+  let workerModel: ReturnType<typeof modelCatalog.createClient> | undefined;
+  if (workerState?.enabled && workerSelection) {
+    try {
+      workerModel = modelCatalog.createClient(workerSelection.provider, workerSelection.id);
+    } catch (error) {
+      agentProfileDiagnostics.push({
+        profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+        level: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else if (workerState?.enabled) {
+    agentProfileDiagnostics.push({
+      profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+      level: "error",
+      message: "Subagent was enabled without a worker model; use /subagent to choose one.",
+    });
+  }
   let model: ReturnType<typeof modelCatalog.createClient> | undefined;
   if (selection.model) {
     try {
@@ -162,14 +203,32 @@ async function main(): Promise<void> {
     rootPath: options.rootPath,
     ...(model ? { model } : {}),
     modelCatalog,
+    implementationWorker: {
+      enabled: workerState?.enabled === true,
+      ...(workerModel ? { model: workerModel } : {}),
+      ...(workerConfig?.model ? { defaultModel: workerConfig.model } : {}),
+      ...(workerConfig ? {
+        settings: {
+          thinkingLevel: workerConfig.thinkingLevel,
+          limits: {
+            maxConcurrent: workerConfig.maxConcurrent,
+            maxSteps: workerConfig.maxSteps,
+            maxRuntimeMs: workerConfig.maxRuntimeMinutes * 60_000,
+            maxRevisions: workerConfig.maxRevisions,
+          },
+        },
+      } : {}),
+    },
+    agentProfileDiagnostics,
+    ...(state ? { state } : {}),
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
     ...(loadedConfig?.config.cacheRetention
       ? { cacheRetention: loadedConfig.config.cacheRetention }
       : {}),
-    onModelStateChange: (state) => {
+    onStateChange: (nextState) => {
       // Fire-and-forget: losing a remembered preference must never interrupt
       // the session, so a failed write is silently ignored.
-      void saveModelState(state).catch(() => undefined);
+      void saveThreadState(nextState).catch(() => undefined);
     },
   });
   try {

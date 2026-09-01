@@ -16,6 +16,17 @@ export {
   type CompactionResult,
 } from "./context/compaction.js";
 export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
+export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./agent/step-runner.js";
+export { type ExecutionJournal, type ToolExecutionFact } from "./agent/execution-journal.js";
+export { AgentTaskOrchestrator, type AgentTaskOutcome, type TaskInspection } from "./agent-task/orchestrator.js";
+export { AgentTaskRepository } from "./agent-task/repository.js";
+export {
+  AgentProfileRegistry,
+  createImplementationWorkerProfile,
+  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+  IMPLEMENTATION_WORKER_PROFILE_ID,
+  type ImplementationWorkerProfileSettings,
+} from "./agent-task/profile.js";
 export {
   createBuiltinModelClient,
   createConfiguredModelCatalog,
@@ -35,27 +46,29 @@ export {
 } from "./auth/credential-store.js";
 export {
   DEFAULT_THREAD_HOME_NAME,
-  DEFAULT_MODEL_CONFIG_FILE,
+  DEFAULT_THREAD_CONFIG_FILE,
   getThreadHome,
-  getDefaultModelConfigPath,
+  getDefaultThreadConfigPath,
   getPiAgentDir,
-  loadModelConfig,
-  type ThreadModelConfig,
+  loadThreadConfig,
+  type ThreadConfig,
+  type AgentProfileConfig,
   type CustomModelConfig,
   type CustomProviderConfig,
-  type LoadedModelConfig,
+  type LoadedThreadConfig,
   type ModelSelectionConfig,
   type SupportedCustomApi,
-} from "./config/model-config.js";
+} from "./config/thread-config.js";
 export {
-  DEFAULT_MODEL_STATE_FILE,
-  getModelStatePath,
-  loadModelState,
-  resolveModelSelection,
-  saveModelState,
-  type ModelState,
-  type ResolvedModelSelection,
-} from "./config/model-state.js";
+  DEFAULT_THREAD_STATE_FILE,
+  getThreadStatePath,
+  loadThreadState,
+  resolveMainModelSelection,
+  saveThreadState,
+  type ImplementationWorkerState,
+  type ThreadState,
+  type ResolvedMainModelSelection,
+} from "./config/thread-state.js";
 export type { ExtensionAPI } from "./extensions/api.js";
 export type {
   ThreadCommand,

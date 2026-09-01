@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getThreadHome } from "../config/model-config.js";
+import { getThreadHome } from "../config/thread-config.js";
 import { stableId } from "../utils/id.js";
 import { discoverProjectRoot } from "./discovery.js";
 import { PROJECT_FORMAT, type Project, type ProjectManifest } from "./model.js";

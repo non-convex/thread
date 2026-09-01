@@ -85,6 +85,7 @@ export class ThreadTuiController {
       { name: "new", description: "Create an empty Session from the project Root" },
       { name: "session", description: "List or resume root Sessions" },
       ...(app.skills.length ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
+      { name: "subagent", description: "Turn implementation workers on or off" },
       { name: "thread", description: "Session Tree status, history, Sessions, and search" },
       { name: "rewind", description: "Return to before a current-path user message" },
       { name: "exit", description: "Exit thread" },
@@ -106,6 +107,12 @@ export class ThreadTuiController {
     this.detachAsk = app.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
     this.syncTranscript();
     this.refreshMeta();
+    if (app.agentProfileDiagnostics.length) {
+      this.state.notice = {
+        level: app.agentProfileDiagnostics.some((item) => item.level === "error") ? "error" : "info",
+        text: app.agentProfileDiagnostics.map((item) => `${item.profileId}: ${item.message}`).join(" · "),
+      };
+    }
   }
 
   get isActive(): boolean { return this.active !== undefined; }
@@ -188,6 +195,10 @@ export class ThreadTuiController {
       void this.advanceModelPicker();
       return true;
     }
+    if (screen.type === "subagent_settings" && enter && !screen.busy) {
+      void this.advanceSubagentSettings();
+      return true;
+    }
     if (screen.type === "rewind" && enter && !screen.busy) {
       if (!screen.confirm) {
         screen.confirm = true;
@@ -258,8 +269,19 @@ export class ThreadTuiController {
     if (!model) return;
     screen.busy = true;
     this.notify();
-    await this.submit(`/model ${model.providerId}/${model.modelId}`);
+    const command = screen.target === "main" ? "/model" : "/subagent";
+    await this.submit(`${command} ${model.providerId}/${model.modelId}`);
     if (this.state.screen.type === "model_picker") this.state.screen = { type: "session" };
+    this.notify();
+  }
+
+  private async advanceSubagentSettings(): Promise<void> {
+    const screen = this.state.screen;
+    if (screen.type !== "subagent_settings") return;
+    screen.busy = true;
+    this.notify();
+    await this.submit(screen.selected === 0 ? "/subagent off" : "/subagent on");
+    if (this.state.screen.type === "subagent_settings") this.state.screen = { type: "session" };
     this.notify();
   }
 
@@ -362,8 +384,10 @@ export class ThreadTuiController {
   }
 
   private syncTranscript(): void {
-    const entries = this.app.sessionTree.livePath().flatMap((turn) => this.app.sessionTree.entriesForTurn(turn.id));
-    this.state.transcript = projectTranscript(entries);
+    const turns = this.app.sessionTree.livePath();
+    const entries = turns.flatMap((turn) => this.app.sessionTree.entriesForTurn(turn.id));
+    const tasks = turns.flatMap((turn) => this.app.agentTaskDetailsForTurn(turn.id));
+    this.state.transcript = projectTranscript(entries, tasks);
     this.state.sessionId = this.app.sessionTree.activeSession.id;
     this.state.liveTipTurnId = this.app.sessionTree.activeLiveTip;
   }

@@ -94,6 +94,14 @@ Compaction is an append-only Session Tree entry. It stores a summary, a verbatim
 
 Before generating a summary, Thread estimates the actual system/tool overhead and reserves 4K tokens for the summary. It then retains the largest suffix of whole turns that keeps `system + summary + retained turns` near 20K tokens, while always retaining at least the newest two turns. Every model request rebuilds live context from the current path's entries. If the path contains compactions, only the newest one is projected as `summary + retained turns`, followed by messages appended after that entry. Earlier entries are not deleted or rewritten, so rewind, branching, history, and search continue to use the complete Session Tree.
 
+### Implementation workers
+
+Thread can delegate one or two independent leaf implementation tasks to `implementation-worker` agents after subagents are explicitly enabled with `/subagent`. Selecting `On` opens the worker model picker; selecting `Off` removes delegation tools and their system-prompt instructions from the main agent. Each worker receives only its task specification and a private workspace materialized from one shared base state. It uses only `read`, `list`, `grep`, `write`, `edit`, and `bash`; child traces never enter the parent Session context.
+
+Workers produce mechanical `thread-change-set-v1` manifests. The main agent must inspect the complete diff, may continue the same worker with concrete revision feedback, and applies an approved candidate through conservative three-way conflict checking. Workers never edit the current project directly. Apply is serialized and transactional, with a durable recovery record and rollback on failure. The parent turn owns every task: interruption or turn completion cancels or discards anything not already applied or terminal. `/rewind` restores the single pre-turn workspace state, so it also removes worker changes applied during that turn.
+
+Task events and child traces are stored separately from the Session Tree. The TUI anchors expandable task cards at the originating `delegate_tasks` call; the parent context receives only compact task-tool results.
+
 ## Commands
 
 Top-level authentication commands:
@@ -112,6 +120,7 @@ Interactive commands:
 /rewind [<turn-id-or-user-entry-id>]
 /compact
 /model [all|list [provider]|<provider>/<model>]
+/subagent [off|on [all]|<provider>/<model>]
 /skill [<name> [extra instruction]]
 /clear
 /exit
@@ -144,13 +153,20 @@ session-tree/
 workspace-states/
   states/
   blobs/
+  apply-recovery/
+agent-tasks/
+  events.jsonl
+  changesets/
+  workspaces/
 ```
 
-The Session Tree log is append-only JSONL. Messages, tool facts, turns, live-tip changes, and compaction entries are persisted there; projections, search results, titles, and token statistics are rebuilt from it. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, and `thread-workspace-state-v1` formats. Old data is not read, migrated, upgraded, or partially interpreted.
+The Session Tree and Agent Task logs are independent append-only JSONL streams. ChangeSet manifests reference the shared content-addressed workspace blob store. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, `thread-workspace-state-v1`, `thread-agent-task-v1`, and `thread-change-set-v1` formats. Old data is not read, migrated, upgraded, or partially interpreted.
 
 ## Configuration
 
-The default model configuration is `~/.thread/config.json`. See `thread.config.example.json`. `THREAD_HOME`, `THREAD_CONFIG`, `THREAD_PROVIDER`, and `THREAD_MODEL` are supported. The most recent model and thinking level are remembered in `~/.thread/state.json` unless command-line selection overrides them.
+The unified Thread configuration is `~/.thread/config.json`. See `thread.config.example.json`. `THREAD_HOME`, `THREAD_CONFIG`, `THREAD_PROVIDER`, and `THREAD_MODEL` are supported. Interactive main-model, thinking-level, subagent on/off, and worker-model choices are remembered in `~/.thread/state.json`; command-line selection can still override the main model.
+
+Subagents start `Off`. Run `/subagent`, choose `On`, then choose an explicit worker model; that selection is never inferred from the main model. The optional `agents.implementation-worker` config supplies the initial worker-model highlight and execution limits, but does not enable delegation by itself. An unavailable remembered worker model produces a non-fatal startup diagnostic and leaves task-management tools unregistered. `/model` changes only the main model.
 
 Skills are loaded once at startup and become part of the stable system-prompt prefix. Extensions can register tools, Session Tree commands, and runtime hooks through the exported API.
 
@@ -167,10 +183,11 @@ The main boundaries are:
 ```text
 src/project/          project identity and lifecycle
 src/session-tree/     persistent Sessions, Turns, Entries, paths, history, search
-src/workspace-state/  capture, integrity verification, and rewind restoration
+src/workspace-state/  state store, capture, materialization, diff and transactional apply
 src/context/          live-path projection, budget, and compaction entries
-src/agent/            model/tool turn runtime and interruption handling
-src/app/              composition and application use cases
+src/agent/            shared model-step, journal, tool scheduling, and parent-turn runtime
+src/agent-task/       profiles, task journal/projection, isolated workers, review and apply
+src/app/              façade, input routing, main-model state, runtime composition, use cases
 src/commands/         command interface
 src/ui/               plain and full-screen interfaces
 ```

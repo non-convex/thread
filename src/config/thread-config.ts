@@ -4,7 +4,7 @@ import path from "node:path";
 import type { CacheRetention, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const DEFAULT_THREAD_HOME_NAME = ".thread";
-export const DEFAULT_MODEL_CONFIG_FILE = "config.json";
+export const DEFAULT_THREAD_CONFIG_FILE = "config.json";
 
 export type SupportedCustomApi = "openai-completions" | "openai-responses" | "anthropic-messages";
 
@@ -36,8 +36,18 @@ export interface CustomProviderConfig {
   models: CustomModelConfig[];
 }
 
-export interface ThreadModelConfig {
+export interface AgentProfileConfig {
+  model: ModelSelectionConfig;
+  thinkingLevel: ModelThinkingLevel;
+  maxConcurrent: number;
+  maxSteps: number;
+  maxRuntimeMinutes: number;
+  maxRevisions: number;
+}
+
+export interface ThreadConfig {
   model?: ModelSelectionConfig;
+  agents: Partial<Record<"implementation-worker", AgentProfileConfig>>;
   defaultThinkingLevel?: ModelThinkingLevel;
   /**
    * Prompt-cache lifetime for every model request. Omitted means the provider
@@ -49,10 +59,11 @@ export interface ThreadModelConfig {
   providers: Record<string, CustomProviderConfig>;
 }
 
-export interface LoadedModelConfig {
+export interface LoadedThreadConfig {
   path: string;
   source: "thread" | "pi";
-  config: ThreadModelConfig;
+  config: ThreadConfig;
+  agentDiagnostics: string[];
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -224,7 +235,23 @@ function parsePiProvider(providerId: string, value: unknown): CustomProviderConf
   };
 }
 
-function parseConfig(value: unknown): ThreadModelConfig {
+function parseAgentProfile(value: unknown, label: string): AgentProfileConfig {
+  const input = object(value, label);
+  const selected = object(input.model, `${label}.model`);
+  return {
+    model: {
+      provider: string(selected.provider, `${label}.model.provider`),
+      id: string(selected.id, `${label}.model.id`),
+    },
+    thinkingLevel: input.thinkingLevel === undefined ? "xhigh" : thinkingLevel(input.thinkingLevel, `${label}.thinkingLevel`),
+    maxConcurrent: input.maxConcurrent === undefined ? 2 : positiveInteger(input.maxConcurrent, `${label}.maxConcurrent`),
+    maxSteps: input.maxSteps === undefined ? 100 : positiveInteger(input.maxSteps, `${label}.maxSteps`),
+    maxRuntimeMinutes: input.maxRuntimeMinutes === undefined ? 60 : positiveInteger(input.maxRuntimeMinutes, `${label}.maxRuntimeMinutes`),
+    maxRevisions: input.maxRevisions === undefined ? 2 : positiveInteger(input.maxRevisions, `${label}.maxRevisions`),
+  };
+}
+
+function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: string[] } {
   const input = object(value, "config");
   let model: ModelSelectionConfig | undefined;
   if (input.model !== undefined) {
@@ -238,6 +265,24 @@ function parseConfig(value: unknown): ThreadModelConfig {
       providers[providerId] = parseProvider(providerId, provider);
     }
   }
+  const agents: ThreadConfig["agents"] = {};
+  const agentDiagnostics: string[] = [];
+  if (input.agents !== undefined) {
+    try {
+      const configuredAgents = object(input.agents, "agents");
+      for (const key of Object.keys(configuredAgents)) {
+        if (key !== "implementation-worker") agentDiagnostics.push(`Unknown agent profile: ${key}`);
+      }
+      if (configuredAgents["implementation-worker"] !== undefined) {
+        agents["implementation-worker"] = parseAgentProfile(
+          configuredAgents["implementation-worker"],
+          "agents.implementation-worker",
+        );
+      }
+    } catch (error) {
+      agentDiagnostics.push(error instanceof Error ? error.message : String(error));
+    }
+  }
   const defaultThinkingLevel = input.defaultThinkingLevel === undefined
     ? undefined
     : thinkingLevel(input.defaultThinkingLevel, "defaultThinkingLevel");
@@ -245,10 +290,14 @@ function parseConfig(value: unknown): ThreadModelConfig {
     ? undefined
     : cacheRetention(input.cacheRetention, "cacheRetention");
   return {
-    ...(model ? { model } : {}),
-    ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
-    ...(retention ? { cacheRetention: retention } : {}),
-    providers,
+    config: {
+      ...(model ? { model } : {}),
+      ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
+      ...(retention ? { cacheRetention: retention } : {}),
+      agents,
+      providers,
+    },
+    agentDiagnostics,
   };
 }
 
@@ -257,8 +306,8 @@ export function getThreadHome(): string {
   return configured ? path.resolve(configured) : path.join(homedir(), DEFAULT_THREAD_HOME_NAME);
 }
 
-export function getDefaultModelConfigPath(): string {
-  return path.join(getThreadHome(), DEFAULT_MODEL_CONFIG_FILE);
+export function getDefaultThreadConfigPath(): string {
+  return path.join(getThreadHome(), DEFAULT_THREAD_CONFIG_FILE);
 }
 
 export function getPiAgentDir(): string {
@@ -286,7 +335,7 @@ function isMissingFileError(error: unknown): boolean {
   return (error as { cause?: NodeJS.ErrnoException }).cause?.code === "ENOENT";
 }
 
-async function loadPiModelConfig(): Promise<LoadedModelConfig | undefined> {
+async function loadPiThreadConfig(): Promise<LoadedThreadConfig | undefined> {
   const piDir = getPiAgentDir();
   const modelsPath = path.join(piDir, "models.json");
   let parsed: unknown;
@@ -319,9 +368,11 @@ async function loadPiModelConfig(): Promise<LoadedModelConfig | undefined> {
     return {
       path: modelsPath,
       source: "pi",
+      agentDiagnostics: [],
       config: {
         ...(model ? { model } : {}),
         ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
+        agents: {},
         providers,
       },
     };
@@ -330,26 +381,26 @@ async function loadPiModelConfig(): Promise<LoadedModelConfig | undefined> {
   }
 }
 
-export async function loadModelConfig(configuredPath?: string): Promise<LoadedModelConfig | undefined> {
-  const configPath = configuredPath ? path.resolve(configuredPath) : getDefaultModelConfigPath();
+export async function loadThreadConfig(configuredPath?: string): Promise<LoadedThreadConfig | undefined> {
+  const configPath = configuredPath ? path.resolve(configuredPath) : getDefaultThreadConfigPath();
   let source: string;
   try {
     source = await readFile(configPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" && configuredPath === undefined) {
-      return loadPiModelConfig();
+      return loadPiThreadConfig();
     }
-    throw new Error(`Cannot read model config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot read Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(source) as unknown;
   } catch (error) {
-    throw new Error(`Cannot parse model config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot parse Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    return { path: configPath, source: "thread", config: parseConfig(parsed) };
+    return { path: configPath, source: "thread", ...parseConfig(parsed) };
   } catch (error) {
-    throw new Error(`Invalid model config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Invalid Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

@@ -15,11 +15,16 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
         : "no model configured; use /model to select one"
     }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
+  output.write(`subagent ${app.subagentEnabled ? `on · ${app.subagentModel?.provider}/${app.subagentModel?.id}` : "off · use /subagent to configure"}\n`);
+  for (const diagnostic of app.agentProfileDiagnostics) {
+    output.write(`[agent ${diagnostic.level}] ${diagnostic.profileId}: ${diagnostic.message}\n`);
+  }
   const readline = createInterface({ input, output, terminal: Boolean(input.isTTY && output.isTTY) });
   let active: AbortController | undefined;
   const onSigint = () => active?.abort(new Error("Interrupted by user"));
   process.on("SIGINT", onSigint);
   try {
+    const taskStatuses = new Map<string, string>();
     while (true) {
       let line: string;
       try {
@@ -37,6 +42,25 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
           onTextDelta: (delta) => {
             streamed = true;
             output.write(delta);
+          },
+          onUiEvent: (event) => {
+            if (event.type === "agent_task_created") {
+              taskStatuses.set(event.summary.taskId, event.summary.status);
+              output.write(`\n[worker started] ${event.summary.taskId} ${event.summary.title} · ${event.summary.providerId}/${event.summary.modelId}\n`);
+              return;
+            }
+            if (event.type !== "agent_task_updated") return;
+            const previous = taskStatuses.get(event.summary.taskId);
+            if (previous === event.summary.status) return;
+            taskStatuses.set(event.summary.taskId, event.summary.status);
+            const label = event.summary.status === "awaiting_review" ? "worker completed"
+              : event.summary.status === "running" && event.summary.revision > 0 ? "worker revision"
+              : event.summary.status === "applied" ? "worker applied"
+              : event.summary.status === "failed" ? "worker failed"
+              : event.summary.status === "cancelled" ? "worker cancelled"
+              : event.summary.status === "discarded" ? "worker discarded"
+              : undefined;
+            if (label) output.write(`\n[${label}] ${event.summary.taskId} ${event.summary.title}\n`);
           },
         });
         if (streamed) output.write("\n");

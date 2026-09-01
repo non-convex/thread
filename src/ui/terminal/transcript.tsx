@@ -1,6 +1,6 @@
 import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, For, Index, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
-import type { LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
+import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, dimItalic, italic } from "./theme.js";
 import { projectLiveUser } from "./transcript-projection.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -103,7 +103,8 @@ function sameTranscriptItem(left: TranscriptItem, right: TranscriptItem): boolea
     && left.isError === right.isError
     && left.name === right.name
     && left.args === right.args
-    && left.label === right.label;
+    && left.label === right.label
+    && JSON.stringify(left.agentTask) === JSON.stringify(right.agentTask);
 }
 
 function sameTurnGroup(left: TranscriptTurnGroup, right: TranscriptTurnGroup): boolean {
@@ -338,6 +339,59 @@ function CompactionInfo(props: { content: string; resources: ThreadViewResources
   );
 }
 
+function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResources["theme"]): { icon: string; color: string } {
+  if (summary.status === "preparing" || summary.status === "running") return { icon: "◌", color: theme.spark };
+  if (summary.status === "applied") return { icon: "✓", color: theme.success };
+  if (summary.status === "awaiting_review") return { icon: "◇", color: theme.warning };
+  if (summary.status === "failed") return { icon: "×", color: theme.error };
+  return { icon: "−", color: theme.muted };
+}
+
+function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: ThreadViewResources }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const summary = () => props.card().summary;
+  const elapsed = () => `${(summary().elapsedMs / 1000).toFixed(1)}s`;
+  const usage = () => summary().usage?.totalTokens ?? 0;
+  const status = () => taskStatus(summary(), props.resources.theme);
+  return (
+    <box
+      flexDirection="column"
+      width="100%"
+      border={true}
+      borderStyle="rounded"
+      borderColor={status().color}
+      paddingX={1}
+      marginBottom={1}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT) setExpanded((value) => !value);
+      }}
+    >
+      <box flexDirection="row" width="100%" height={1}>
+        <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
+        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.softText} attributes={bold}>
+          {summary().title}
+        </text>
+        <text height={1} wrapMode="none" fg={props.resources.theme.muted}>
+          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} · {summary().changedFiles} files {expanded() ? "▾" : "▸"}
+        </text>
+      </box>
+      <Show when={expanded()}>
+        <box flexDirection="column" width="100%" paddingLeft={2} paddingTop={1}>
+          <Index each={props.card().trace}>
+            {(block) => <LiveBlockView block={block} resources={props.resources} />}
+          </Index>
+          <Show when={summary().scopeViolations.length}>
+            <text fg={props.resources.theme.error} wrapMode="word">scope violations: {summary().scopeViolations.join(", ")}</text>
+          </Show>
+          <Show when={summary().error}>
+            {(error: Accessor<string>) => <text fg={props.resources.theme.error} wrapMode="word">{error()}</text>}
+          </Show>
+        </box>
+      </Show>
+    </box>
+  );
+}
+
 function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const item = () => props.item;
   return (
@@ -354,6 +408,9 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
       </Match>
       <Match when={item().kind === "compaction"}>
         <CompactionInfo content={item().content} resources={props.resources} />
+      </Match>
+      <Match when={item().kind === "agent_task" && item().agentTask !== undefined}>
+        <AgentTaskCardView card={() => item().agentTask!} resources={props.resources} />
       </Match>
     </Switch>
   );
@@ -454,6 +511,9 @@ function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadVie
       <Match when={block().kind === "compaction"}>
         <CompactionInfo content={block().content} resources={props.resources} />
       </Match>
+      <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
+        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} />
+      </Match>
     </Switch>
   );
 }
@@ -541,6 +601,8 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread</text>
         <text fg={theme.muted} height={1} wrapMode="none"> Sessions · history · search</text>
+        <text fg={theme.accentDim} height={1} wrapMode="none"> · /subagent</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> workers</text>
         <text fg={theme.accentDim} height={1} wrapMode="none"> · ⇧⇥</text>
         <text fg={theme.muted} height={1} wrapMode="none"> thinking level</text>
       </box>

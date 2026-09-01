@@ -1,7 +1,6 @@
 import type { Message, ToolCall } from "@earendil-works/pi-ai";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionEvents } from "../extensions/events.js";
-import type { SessionTreeService } from "../session-tree/service.js";
 import {
   validateToolResourceClaims,
   type ToolExecutionPolicy,
@@ -10,9 +9,10 @@ import {
 import type { AgentTool, ToolContext, ToolRegistry, ToolResult } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import type { ExecutionJournal } from "./execution-journal.js";
 
 export interface PreparedToolCall {
-  turnId: string;
+  journal: ExecutionJournal;
   assistantEntryId: string;
   contentIndex: number;
   toolIndex: number;
@@ -43,17 +43,16 @@ function errorResult(error: unknown): ToolResult {
  * model-facing result without persisting it; the batch commits result messages
  * later in assistant source order.
  */
-export class ToolRunner {
+export class ToolCallExecutor {
   constructor(
     private readonly rootPath: string,
-    private readonly tree: SessionTreeService,
     private readonly tools: ToolRegistry,
     private readonly extensions: ExtensionEvents,
     private readonly askPresenter?: () => AskPresenter | undefined,
   ) {}
 
   async prepare(input: {
-    turnId: string;
+    journal: ExecutionJournal;
     assistantEntryId: string;
     contentIndex: number;
     toolIndex: number;
@@ -115,8 +114,7 @@ export class ToolRunner {
 
     // appendToolExecution is the side-effect durability barrier. The scheduler
     // cannot call execute() until this factual record has reached the log.
-    await this.tree.appendToolExecution({
-      turnId: input.turnId,
+    await input.journal.appendToolExecution({
       assistantEntryId: input.assistantEntryId,
       toolIndex: input.toolIndex,
       toolCallId: input.call.id,
@@ -126,7 +124,7 @@ export class ToolRunner {
     });
 
     return {
-      turnId: input.turnId,
+      journal: input.journal,
       assistantEntryId: input.assistantEntryId,
       contentIndex: input.contentIndex,
       toolIndex: input.toolIndex,
@@ -155,6 +153,12 @@ export class ToolRunner {
       const context: ToolContext = {
         rootPath: this.rootPath,
         signal,
+        invocation: {
+          executionId: prepared.journal.executionId,
+          assistantEntryId: prepared.assistantEntryId,
+          toolCallId: prepared.call.id,
+        },
+        ...(ui ? { onUiEvent: ui } : {}),
         ...(ask ? { ask } : {}),
       };
       try {

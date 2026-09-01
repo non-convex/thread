@@ -1,10 +1,4 @@
-import {
-  type AssistantMessage,
-  type Context,
-  type Message,
-  type ThinkingLevel,
-  isContextOverflow,
-} from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
 import type { ContextCompactionService, CompactionResult } from "../context/compaction.js";
@@ -14,8 +8,9 @@ import type { PlannedTurn, SessionTreeService } from "../session-tree/service.js
 import type { ToolRegistry } from "../tools/types.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import type { ModelClient } from "./model-client.js";
-import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch.js";
-import type { ToolRunner } from "./tool-runner.js";
+import { SessionTurnJournal } from "./execution-journal.js";
+import { AgentStepRunner } from "./step-runner.js";
+import type { ToolCallExecutor } from "./tool-call-executor.js";
 
 export interface RunTurnOptions {
   signal: AbortSignal;
@@ -31,18 +26,22 @@ interface CompactionInvocation {
 }
 
 export class TurnRunner {
+  private readonly stepRunner: AgentStepRunner;
+
   constructor(
     private readonly model: ModelClient,
     private readonly tree: SessionTreeService,
     private readonly builder: ContextBuilder,
     private readonly compaction: ContextCompactionService,
     private readonly tools: ToolRegistry,
-    private readonly toolRunner: ToolRunner,
+    toolRunner: ToolCallExecutor,
     private readonly extensions: ExtensionEvents,
     private readonly systemPrompt: string,
     private readonly maxOutputTokens: number,
-    private readonly reasoning?: ThinkingLevel,
-  ) {}
+    reasoning?: ThinkingLevel,
+  ) {
+    this.stepRunner = new AgentStepRunner(model, toolRunner, maxOutputTokens, reasoning);
+  }
 
   prepareCurrent(): BuiltContext {
     return this.builder.build();
@@ -80,107 +79,55 @@ export class TurnRunner {
           }
         }
       }
-      safeUiEvent(options.onUiEvent, { type: "assistant_started", step });
-      let assistantEntry = this.tree.planMessageEntry(planned.id);
-      const toolBatch = new ToolExecutionBatch({
-        turnId: planned.id,
-        assistantEntryId: assistantEntry.id,
+      const journal = new SessionTurnJournal(this.tree, planned.id, turnReady);
+      const continuedContextMessages = [...assembled.context.messages];
+      const continuedSessionMessages = [...assembled.built.messages];
+      const result = await this.stepRunner.run(assembled.context, journal, {
         signal: options.signal,
-        turnReady,
-        runner: this.toolRunner,
-        ...(options.onUiEvent ? { ui: options.onUiEvent } : {}),
-      });
-      try {
-        const response = await this.model.stream(assembled.context, {
-          signal: options.signal,
-          maxTokens: this.maxOutputTokens,
-          ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-          onTextDelta: (delta) => {
-            options.onTextDelta?.(delta);
-            safeUiEvent(options.onUiEvent, { type: "assistant_text_delta", step, delta });
-          },
-          onThinkingDelta: (delta) => {
-            safeUiEvent(options.onUiEvent, { type: "assistant_thinking_delta", step, delta });
-          },
-          onToolCallComplete: (call, contentIndex) => toolBatch.observe(call, contentIndex),
-          onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
-            const nextAssistantEntry = this.tree.planMessageEntry(planned.id);
-            await toolBatch.restartForModelRetry(
-              new Error(`Model attempt failed before retry ${attempt}`),
-              nextAssistantEntry.id,
+        step,
+        ...(options.onTextDelta ? { onTextDelta: options.onTextDelta } : {}),
+        ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+        onAssistantPersisted: (response) => {
+          continuedContextMessages.push(response);
+          continuedSessionMessages.push(response);
+          if (options.onUiEvent) {
+            this.reportContextUsage(
+              { ...assembled.context, messages: continuedContextMessages },
+              continuedSessionMessages,
+              options.onUiEvent,
             );
-            assistantEntry = nextAssistantEntry;
-            safeUiEvent(options.onUiEvent, {
-              type: "model_retry_scheduled",
-              step,
-              attempt,
-              maxAttempts,
-              delayMs,
-              errorMessage,
-            });
-          },
-          onRetryAttemptStart: (attempt, maxAttempts) => {
-            safeUiEvent(options.onUiEvent, { type: "model_retry_started", step, attempt, maxAttempts });
-          },
+          }
+        },
+      });
+      const { response, calls, results } = result;
+      assistantMessages.push(response);
+
+      if (this.stepRunner.isContextOverflow(response)) {
+        if (overflowRecoveryUsed) throw new Error("Context overflow remained after compaction; use /rewind or /new");
+        overflowRecoveryUsed = true;
+        const overflowContext = await this.assemble(planned.id);
+        const recovered = await this.compactBuilt(overflowContext, options, {
+          reason: "overflow",
+          turnId: planned.id,
+          appendAfter: turnReady,
         });
-        assistantMessages.push(response);
-        const calls: IndexedToolCall[] = response.content.flatMap((content, contentIndex) =>
-          content.type === "toolCall" ? [{ contentIndex, call: content }] : []
+        if (!recovered.compacted) throw new Error("Context overflow cannot be compacted while retaining the newest two turns");
+        continue;
+      }
+      if (response.stopReason === "aborted") throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
+      if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
+      if (calls.length === 0) break;
+      if (response.stopReason !== "toolUse") {
+        throw new Error(`Model returned tool calls with stop reason ${response.stopReason}; calls were not executed`);
+      }
+      continuedContextMessages.push(...results);
+      continuedSessionMessages.push(...results);
+      if (options.onUiEvent) {
+        this.reportContextUsage(
+          { ...assembled.context, messages: continuedContextMessages },
+          continuedSessionMessages,
+          options.onUiEvent,
         );
-        await toolBatch.reconcile(calls);
-        await turnReady;
-        // The full assistant message is the release barrier for mutations and
-        // interactive/process tools. Read effects may already be in flight.
-        await this.tree.appendMessage({ turnId: planned.id, message: response, entryId: assistantEntry.id }, true);
-        const continuedContextMessages = [...assembled.context.messages, response];
-        const continuedSessionMessages = [...assembled.built.messages, response];
-        if (options.onUiEvent) {
-          this.reportContextUsage(
-            { ...assembled.context, messages: continuedContextMessages },
-            continuedSessionMessages,
-            options.onUiEvent,
-          );
-        }
-
-        if (response.stopReason === "error" && isContextOverflow(response, this.model.contextWindow)) {
-          await toolBatch.cancel(new Error("Context-overflow response cannot continue tool execution"));
-          if (overflowRecoveryUsed) throw new Error("Context overflow remained after compaction; use /rewind or /new");
-          overflowRecoveryUsed = true;
-          const overflowContext = await this.assemble(planned.id);
-          const recovered = await this.compactBuilt(overflowContext, options, {
-            reason: "overflow",
-            turnId: planned.id,
-            appendAfter: turnReady,
-          });
-          if (!recovered.compacted) throw new Error("Context overflow cannot be compacted while retaining the newest two turns");
-          continue;
-        }
-        if (response.stopReason === "aborted") {
-          throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
-        }
-        if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
-        if (calls.length === 0) break;
-        if (response.stopReason !== "toolUse") {
-          throw new Error(`Model returned tool calls with stop reason ${response.stopReason}; calls were not executed`);
-        }
-
-        toolBatch.releaseResponse();
-        const results = await toolBatch.orderedResults();
-        for (const result of results) {
-          await this.tree.appendMessage({ turnId: planned.id, message: result });
-          continuedContextMessages.push(result);
-          continuedSessionMessages.push(result);
-        }
-        if (options.onUiEvent) {
-          this.reportContextUsage(
-            { ...assembled.context, messages: continuedContextMessages },
-            continuedSessionMessages,
-            options.onUiEvent,
-          );
-        }
-      } catch (error) {
-        await toolBatch.cancel(error);
-        throw error;
       }
     }
     return assistantMessages;

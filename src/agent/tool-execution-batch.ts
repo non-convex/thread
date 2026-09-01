@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Message, ToolCall } from "@earendil-works/pi-ai";
 import type { UiEventSink } from "../ui/events.js";
-import { ToolRunner, type PreparedToolCall } from "./tool-runner.js";
+import type { ExecutionJournal } from "./execution-journal.js";
+import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
 import { ToolScheduler } from "./tool-scheduler.js";
 
 export interface IndexedToolCall {
@@ -27,11 +28,10 @@ export class ToolExecutionBatch {
 
   constructor(
     private readonly input: {
-      turnId: string;
+      journal: ExecutionJournal;
       assistantEntryId: string;
       signal: AbortSignal;
-      turnReady: Promise<unknown>;
-      runner: ToolRunner;
+      runner: ToolCallExecutor;
       ui?: UiEventSink;
     },
   ) {
@@ -41,7 +41,7 @@ export class ToolExecutionBatch {
   observe(call: ToolCall, contentIndex: number): Promise<void> {
     const stableCall = structuredClone(call);
     const operation = this.prepareTail.then(async () => {
-      await this.input.turnReady;
+      await this.input.journal.ready;
       this.input.signal.throwIfAborted();
       const existing = this.prepared.get(stableCall.id);
       if (existing) {
@@ -53,7 +53,7 @@ export class ToolExecutionBatch {
       }
       this.lastStreamContentIndex = contentIndex;
       const prepared = await this.input.runner.prepare({
-        turnId: this.input.turnId,
+        journal: this.input.journal,
         assistantEntryId: this.input.assistantEntryId,
         contentIndex,
         toolIndex: this.prepared.size,

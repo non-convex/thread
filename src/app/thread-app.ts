@@ -1,22 +1,30 @@
-import type { CacheRetention, Message, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
-import { AgentRuntime, type TurnResult } from "../agent/runtime.js";
+import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { AgentRuntime } from "../agent/runtime.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../agent/messages.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
-import { ToolRunner } from "../agent/tool-runner.js";
-import { TurnRunner } from "../agent/turn-runner.js";
-import { buildRewindItems, registerBuiltinCommands } from "../commands/builtins.js";
-import { parseCommandLine } from "../commands/parser.js";
-import { THREAD_COMMAND_PREFIX, ThreadCommandRouter } from "../commands/registry.js";
+import type { AgentProfile, AgentProfileDiagnostic } from "../agent-task/model.js";
+import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import {
-  clearDisplayResult,
+  AgentProfileRegistry,
+  createImplementationWorkerProfile,
+  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+  IMPLEMENTATION_WORKER_PROFILE_ID,
+  type ImplementationWorkerProfileSettings,
+} from "../agent-task/profile.js";
+import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
+import { AgentTaskRepository } from "../agent-task/repository.js";
+import { createAgentTaskTools } from "../agent-task/tools.js";
+import { buildRewindItems, registerBuiltinCommands } from "../commands/builtins.js";
+import { ThreadCommandRouter } from "../commands/registry.js";
+import {
   CommandRegistry,
   ephemeral,
   viewResult,
   type CommandResult,
 } from "../commands/types.js";
-import type { ModelState } from "../config/model-state.js";
+import type { ModelSelectionConfig } from "../config/thread-config.js";
+import type { ThreadState } from "../config/thread-state.js";
 import { ContextBuilder } from "../context/builder.js";
-import { ContextCompactionService } from "../context/compaction.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { openProject } from "./open-project.js";
@@ -45,6 +53,11 @@ import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import { WorkspaceStateRepository } from "../workspace-state/repository.js";
 import { WorkspaceStateService } from "../workspace-state/service.js";
+import { MainAgentController } from "./main-agent-controller.js";
+import { RuntimeFactory } from "./runtime-factory.js";
+import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
+
+export type { InputResult } from "./input-router.js";
 
 export interface ThreadAppOptions {
   rootPath: string;
@@ -55,14 +68,17 @@ export interface ThreadAppOptions {
   cacheRetention?: CacheRetention;
   skills?: LoadedSkills;
   workspaceExcludedPaths?: readonly string[];
-  onModelStateChange?: (state: ModelState) => void;
+  implementationWorker?: {
+    enabled: boolean;
+    model?: ModelClient;
+    defaultModel?: ModelSelectionConfig;
+    settings?: ImplementationWorkerProfileSettings;
+  };
+  agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
+  state?: ThreadState;
+  onStateChange?: (state: ThreadState) => void;
 }
 
-export type InputResult =
-  | { kind: "command"; result: CommandResult }
-  | { kind: "turn"; result: TurnResult };
-
-const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
 
 export class ThreadApp {
@@ -71,6 +87,7 @@ export class ThreadApp {
   readonly sessionTree: SessionTreeService;
   readonly workspaceState: WorkspaceStateService;
   readonly search: SessionSearchService;
+  readonly agentTasks: AgentTaskOrchestrator;
   readonly tools = new ToolRegistry();
   readonly commands = new CommandRegistry();
   readonly extensionApi: ExtensionAPI;
@@ -78,14 +95,18 @@ export class ThreadApp {
   private readonly contextBuilder: ContextBuilder;
   private readonly events = new ExtensionEvents();
   private readonly commandRouter: ThreadCommandRouter;
+  private readonly inputRouter: InputRouter;
   private readonly loadedSkills: LoadedSkills;
   private readonly modelCatalog: ModelCatalog | undefined;
-  private readonly onModelStateChange: ((state: ModelState) => void) | undefined;
   private readonly configuredSystemPrompt: string | undefined;
   private readonly cacheRetention: CacheRetention | undefined;
-  private currentModel: ModelClient | undefined;
-  private preferredThinkingLevel: ModelThinkingLevel;
-  private currentThinkingLevel: ModelThinkingLevel = "off";
+  private readonly mainAgent: MainAgentController;
+  private readonly workerSettings: ImplementationWorkerProfileSettings;
+  private readonly workerDefaultModel: ModelSelectionConfig | undefined;
+  private readonly onStateChange: ((state: ThreadState) => void) | undefined;
+  private threadState: ThreadState;
+  private agentToolDisposers: (() => void)[] = [];
+  private readonly runtimeFactory = new RuntimeFactory();
   private runtime: AgentRuntime | undefined;
   private askPresenter: AskPresenter | undefined;
   private inputActive = false;
@@ -98,6 +119,7 @@ export class ThreadApp {
     builder: ContextBuilder;
     search: SessionSearchService;
     skills: LoadedSkills;
+    agentTaskRepository: AgentTaskRepository;
   }) {
     this.project = values.project;
     this.rootPath = values.project.rootPath;
@@ -108,10 +130,27 @@ export class ThreadApp {
     this.search = values.search;
     this.loadedSkills = values.skills;
     this.modelCatalog = options.modelCatalog;
-    this.onModelStateChange = options.onModelStateChange;
     this.configuredSystemPrompt = options.systemPrompt;
     this.cacheRetention = options.cacheRetention;
-    this.preferredThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
+    this.threadState = structuredClone(options.state ?? {});
+    this.onStateChange = options.onStateChange;
+    this.workerSettings = options.implementationWorker?.settings ?? DEFAULT_IMPLEMENTATION_WORKER_SETTINGS;
+    this.workerDefaultModel = options.implementationWorker?.defaultModel;
+    this.mainAgent = new MainAgentController(
+      this.sessionTree.tree.id,
+      this.cacheRetention,
+      options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      (state) => this.rememberMainState(state),
+    );
+
+    const workerProfile = options.implementationWorker?.enabled && options.implementationWorker.model
+      ? this.bindAgentProfile(createImplementationWorkerProfile(options.implementationWorker.model, this.workerSettings))
+      : undefined;
+    this.agentTasks = new AgentTaskOrchestrator(
+      values.agentTaskRepository,
+      new AgentProfileRegistry(workerProfile ? [workerProfile] : [], options.agentProfileDiagnostics),
+      values.workspace,
+    );
 
     registerBuiltinTools(this.tools);
     this.tools.register(createSessionSearchTool(this.search));
@@ -120,15 +159,18 @@ export class ThreadApp {
       this.tools.register(createSkillTool(() => this.loadedSkills.skills));
     }
     this.tools.register(createAskTool());
+    this.syncAgentTaskTools();
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);
     this.extensionApi = createExtensionAPI(this.tools, this.commands, this.events);
     this.configureRuntime(options.model);
+    this.inputRouter = this.createInputRouter();
   }
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
     const project = await openProject(options.rootPath);
     let repository: SessionTreeRepository | undefined;
+    let agentTaskRepository: AgentTaskRepository | undefined;
     try {
       repository = await SessionTreeRepository.open(project);
       const tree = new SessionTreeService(repository);
@@ -141,8 +183,12 @@ export class ThreadApp {
       const builder = new ContextBuilder(tree);
       const search = new SessionSearchService(tree);
       const skills = options.skills ?? await loadSkills();
-      return new ThreadApp(options, { project, repository, tree, workspace, builder, search, skills });
+      agentTaskRepository = await AgentTaskRepository.open(project);
+      const app = new ThreadApp(options, { project, repository, tree, workspace, builder, search, skills, agentTaskRepository });
+      await app.agentTasks.initialize();
+      return app;
     } catch (error) {
+      await agentTaskRepository?.close().catch(() => undefined);
       await repository?.close();
       throw error;
     }
@@ -154,19 +200,19 @@ export class ThreadApp {
   }
 
   get model(): ModelClient | undefined {
-    return this.currentModel;
+    return this.mainAgent.model;
   }
 
   get thinkingLevel(): ModelThinkingLevel {
-    return this.currentThinkingLevel;
+    return this.mainAgent.thinkingLevel;
   }
 
   get supportsThinking(): boolean {
-    return this.currentModel?.reasoning === true;
+    return this.mainAgent.supportsThinking;
   }
 
   get availableThinkingLevels(): readonly ModelThinkingLevel[] {
-    return this.thinkingLevelsFor(this.currentModel);
+    return this.mainAgent.availableThinkingLevels;
   }
 
   get skills(): readonly Skill[] {
@@ -177,6 +223,37 @@ export class ThreadApp {
     return this.loadedSkills.diagnostics;
   }
 
+  get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
+    return this.agentTasks.profiles.diagnostics;
+  }
+
+  get subagentEnabled(): boolean {
+    return this.agentTasks.enabled;
+  }
+
+  get subagentModel(): ModelSelectionConfig | undefined {
+    const profile = this.agentTasks.profiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
+    if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
+    return this.threadState.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID]?.model ?? this.workerDefaultModel;
+  }
+
+  agentTaskSummaries(parentTurnId: string) {
+    return this.agentTasks.summariesForTurn(parentTurnId);
+  }
+
+  agentTaskDetailsForTurn(parentTurnId: string) {
+    return [...this.agentTasks.repository.projection.tasks.values()]
+      .filter((task) => task.parentTurnId === parentTurnId)
+      .map((task) => ({
+        task: structuredClone(task),
+        summary: this.agentTasks.repository.projection.summary(task.id),
+      }));
+  }
+
+  readAgentTask(taskId: string, view: "summary" | "diff" | "trace", options?: { path?: string; cursor?: number; limit?: number; fullTrace?: boolean }) {
+    return this.agentTasks.inspect(taskId, view, options);
+  }
+
   setAskPresenter(presenter: AskPresenter | undefined): () => void {
     this.askPresenter = presenter;
     return () => {
@@ -185,11 +262,11 @@ export class ThreadApp {
   }
 
   contextOccupancy(tipTurnId: string | null = this.sessionTree.activeLiveTip): { percent: number; requestTokens: number } | undefined {
-    if (!this.currentModel || !this.runtime) return undefined;
+    if (!this.model || !this.runtime) return undefined;
     const messages = this.contextBuilder.build(tipTurnId ?? undefined).messages;
     const { requestTokens } = this.runtime.estimateRequestBudget(messages);
     return {
-      percent: Math.min(999, Math.round((requestTokens / this.currentModel.contextWindow) * 100)),
+      percent: Math.min(999, Math.round((requestTokens / this.model.contextWindow) * 100)),
       requestTokens,
     };
   }
@@ -199,97 +276,123 @@ export class ThreadApp {
   }
 
   cycleThinkingLevel(): ModelThinkingLevel | undefined {
-    if (!this.currentModel?.reasoning) return undefined;
-    const levels = this.thinkingLevelsFor(this.currentModel);
-    const index = levels.indexOf(this.currentThinkingLevel);
-    this.preferredThinkingLevel = levels[(index + 1) % levels.length]!;
-    this.configureRuntime(this.currentModel);
-    this.rememberModelState();
-    return this.currentThinkingLevel;
+    const level = this.mainAgent.cycleThinkingLevel();
+    if (level) this.rebuildRuntime();
+    return level;
   }
 
-  private thinkingLevelsFor(model: ModelClient | undefined): readonly ModelThinkingLevel[] {
-    if (!model?.reasoning) return ["off"];
-    const levels = model.supportedThinkingLevels?.filter((level, index, all) => all.indexOf(level) === index);
-    return levels?.length ? levels : ["off", "minimal", "low", "medium", "high"];
-  }
-
-  private clampThinkingLevel(model: ModelClient | undefined, requested: ModelThinkingLevel): ModelThinkingLevel {
-    const available = this.thinkingLevelsFor(model);
-    if (available.includes(requested)) return requested;
-    const target = THINKING_LEVELS.indexOf(requested);
-    return [...available].sort((left, right) =>
-      Math.abs(THINKING_LEVELS.indexOf(left) - target) - Math.abs(THINKING_LEVELS.indexOf(right) - target)
-    )[0] ?? "off";
-  }
-
-  private requestReasoning(): ThinkingLevel | undefined {
-    return this.currentThinkingLevel === "off" ? undefined : this.currentThinkingLevel;
-  }
-
-  private bindModel(model: ModelClient | undefined): ModelClient | undefined {
-    if (!model) return undefined;
-    let bound = model;
-    const cacheBindable = bound as ModelClient & { withCacheKey?: (key: string) => ModelClient };
-    if (cacheBindable.withCacheKey && bound.cacheKey !== this.sessionTree.tree.id) {
-      bound = cacheBindable.withCacheKey(this.sessionTree.tree.id);
-    }
-    const retentionBindable = bound as ModelClient & {
-      withCacheRetention?: (retention: CacheRetention | undefined) => ModelClient;
+  private rememberMainState(main: Pick<ThreadState, "model" | "thinkingLevel">): void {
+    this.threadState = {
+      ...this.threadState,
+      ...(main.model ? { model: main.model } : {}),
+      ...(main.thinkingLevel ? { thinkingLevel: main.thinkingLevel } : {}),
     };
-    if (retentionBindable.withCacheRetention && bound.cacheRetention !== this.cacheRetention) {
-      bound = retentionBindable.withCacheRetention(this.cacheRetention);
+    this.onStateChange?.(structuredClone(this.threadState));
+  }
+
+  private rememberSubagentState(enabled: boolean, model: ModelSelectionConfig | undefined): void {
+    this.threadState = {
+      ...this.threadState,
+      agents: {
+        ...this.threadState.agents,
+        [IMPLEMENTATION_WORKER_PROFILE_ID]: {
+          enabled,
+          ...(model ? { model } : {}),
+        },
+      },
+    };
+    this.onStateChange?.(structuredClone(this.threadState));
+  }
+
+  private syncAgentTaskTools(): void {
+    if (!this.agentTasks.enabled) {
+      for (const dispose of this.agentToolDisposers.splice(0)) dispose();
+      return;
     }
-    return bound;
+    if (this.agentToolDisposers.length > 0) return;
+    const taskTools = createAgentTaskTools(this.agentTasks);
+    const conflict = taskTools.find((tool) => this.tools.get(tool.name));
+    if (conflict) throw new Error(`Cannot enable subagents because tool ${conflict.name} is already registered`);
+    const registered: (() => void)[] = [];
+    try {
+      for (const tool of taskTools) registered.push(this.tools.register(tool));
+      this.agentToolDisposers = registered;
+    } catch (error) {
+      for (const dispose of registered.reverse()) dispose();
+      throw error;
+    }
+  }
+
+  private disableSubagent(): CommandResult {
+    const previous = this.subagentModel;
+    this.agentTasks.profiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
+    this.agentTasks.profiles.setDiagnostics([]);
+    this.syncAgentTaskTools();
+    this.rebuildRuntime();
+    this.rememberSubagentState(false, previous);
+    return ephemeral("Subagent: Off", true);
+  }
+
+  private enableSubagent(providerId: string, modelId: string): CommandResult {
+    if (!providerId || !modelId || !this.modelCatalog) throw new Error("Worker model selection is unavailable");
+    const model = this.modelCatalog.createClient(providerId, modelId);
+    const profile = this.bindAgentProfile(createImplementationWorkerProfile(model, this.workerSettings));
+    const previous = this.agentTasks.profiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
+    this.agentTasks.profiles.set(profile);
+    try {
+      this.syncAgentTaskTools();
+    } catch (error) {
+      if (previous) this.agentTasks.profiles.set(previous);
+      else this.agentTasks.profiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
+      throw error;
+    }
+    this.agentTasks.profiles.setDiagnostics([]);
+    this.rebuildRuntime();
+    this.rememberSubagentState(true, { provider: providerId, id: modelId });
+    return ephemeral(`Subagent: On · worker ${providerId}/${modelId}`, true);
+  }
+
+  private bindAgentProfile(profile: AgentProfile): AgentProfile {
+    let model = profile.model;
+    const cacheBindable = model as ModelClient & { withCacheKey?: (key: string) => ModelClient };
+    const cacheKey = `${this.sessionTree.tree.id}:${profile.id}`;
+    if (cacheBindable.withCacheKey && model.cacheKey !== cacheKey) model = cacheBindable.withCacheKey(cacheKey);
+    const retentionBindable = model as ModelClient & { withCacheRetention?: (retention: CacheRetention | undefined) => ModelClient };
+    if (retentionBindable.withCacheRetention && model.cacheRetention !== this.cacheRetention) {
+      model = retentionBindable.withCacheRetention(this.cacheRetention);
+    }
+    return { ...profile, model };
   }
 
   private configureRuntime(model: ModelClient | undefined): void {
-    this.currentModel = this.bindModel(model);
-    this.currentThinkingLevel = this.clampThinkingLevel(this.currentModel, this.preferredThinkingLevel);
-    if (!this.currentModel) {
+    this.mainAgent.select(model);
+    this.rebuildRuntime();
+  }
+
+  private rebuildRuntime(): void {
+    const model = this.mainAgent.model;
+    if (!model) {
       this.runtime = undefined;
       return;
     }
-    const reasoning = this.requestReasoning();
     const skills = formatSkillsSection(this.loadedSkills.skills);
-    const systemPrompt = [this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT, skills].filter(Boolean).join("\n\n");
-    const compaction = new ContextCompactionService(
-      this.sessionTree,
-      this.currentModel,
-      reasoning,
-    );
-    const toolRunner = new ToolRunner(
-      this.rootPath,
-      this.sessionTree,
-      this.tools,
-      this.events,
-      () => this.askPresenter,
-    );
-    const maxOutputTokens = Math.min(
-      this.currentModel.maxOutputTokens,
-      16_384,
-      Math.max(1_024, Math.floor(this.currentModel.contextWindow * 0.2)),
-    );
-    const runner = new TurnRunner(
-      this.currentModel,
-      this.sessionTree,
-      this.contextBuilder,
-      compaction,
-      this.tools,
-      toolRunner,
-      this.events,
+    const systemPrompt = [
+      this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      this.agentTasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "",
+      skills,
+    ].filter(Boolean).join("\n\n");
+    this.runtime = this.runtimeFactory.create({
+      model,
+      ...(this.mainAgent.reasoning ? { reasoning: this.mainAgent.reasoning } : {}),
+      rootPath: this.rootPath,
       systemPrompt,
-      maxOutputTokens,
-      reasoning,
-    );
-    this.runtime = new AgentRuntime(this.sessionTree, this.workspaceState, runner, this.events);
-  }
-
-  private rememberModelState(): void {
-    const model = this.currentModel;
-    this.onModelStateChange?.({
-      ...(model ? { model: { provider: model.providerId, id: model.modelId } } : {}),
-      thinkingLevel: this.preferredThinkingLevel,
+      tree: this.sessionTree,
+      workspace: this.workspaceState,
+      contextBuilder: this.contextBuilder,
+      tools: this.tools,
+      extensions: this.events,
+      agentTasks: this.agentTasks,
+      askPresenter: () => this.askPresenter,
     });
   }
 
@@ -302,17 +405,58 @@ export class ThreadApp {
 
   private modelStatus(scope: "configured" | "all" = "configured"): CommandResult {
     const models = this.modelPickerModels(scope);
-    const content = this.currentModel
-      ? `Current model: ${this.currentModel.providerId}/${this.currentModel.modelId}\nContext window: ${this.currentModel.contextWindow.toLocaleString("en-US")} tokens\nThinking level: ${this.currentThinkingLevel}`
+    const content = this.model
+      ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nThinking level: ${this.thinkingLevel}`
       : "No model selected. Use /model list and /model <provider>/<model>.";
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
       type: "model_picker",
+      target: "main",
       models,
-      currentProviderId: this.currentModel?.providerId,
-      currentModelId: this.currentModel?.modelId,
+      currentProviderId: this.model?.providerId,
+      currentModelId: this.model?.modelId,
       scope,
     });
+  }
+
+  private subagentStatus(): CommandResult {
+    const selected = this.subagentModel;
+    const content = this.subagentEnabled
+      ? `Subagent: On\nWorker model: ${selected?.provider}/${selected?.id}`
+      : `Subagent: Off${selected ? `\nLast worker model: ${selected.provider}/${selected.id}` : ""}`;
+    return viewResult(content, { type: "subagent_settings", enabled: this.subagentEnabled });
+  }
+
+  private workerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
+    if (!this.modelCatalog) throw new Error("Worker model selection is unavailable");
+    const selected = this.subagentModel;
+    const models = this.modelPickerModels(scope);
+    const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
+    return viewResult(
+      models.length
+        ? `Choose the implementation-worker model to enable subagents.\nPlain mode: /subagent <provider>/<model>\n${choices}`
+        : "No worker models are available. Configure a provider or log in first.",
+      {
+        type: "model_picker",
+        target: IMPLEMENTATION_WORKER_PROFILE_ID,
+        models,
+        currentProviderId: selected?.provider,
+        currentModelId: selected?.id,
+        scope,
+      },
+    );
+  }
+
+  private handleSubagentCommand(args: string[]): CommandResult {
+    if (args.length === 0) return this.subagentStatus();
+    if (args.length === 1 && args[0] === "off") return this.disableSubagent();
+    if (args.length === 1 && args[0] === "on") return this.workerModelPicker();
+    if (args.length === 2 && args[0] === "on" && args[1] === "all") return this.workerModelPicker("all");
+    if (args.length === 1 && args[0]!.includes("/")) {
+      const separator = args[0]!.indexOf("/");
+      return this.enableSubagent(args[0]!.slice(0, separator), args[0]!.slice(separator + 1));
+    }
+    throw new Error("Usage: /subagent [off|on [all]|<provider>/<model>]");
   }
 
   private handleModelCommand(args: string[]): CommandResult {
@@ -337,9 +481,9 @@ export class ThreadApp {
       [providerId, modelId] = args as [string, string];
     } else throw new Error("Usage: /model <provider>/<model>");
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Model switching is unavailable");
-    const previous = this.currentModel ? `${this.currentModel.providerId}/${this.currentModel.modelId}` : "none";
+    const previous = this.model ? `${this.model.providerId}/${this.model.modelId}` : "none";
     this.configureRuntime(this.modelCatalog.createClient(providerId, modelId));
-    this.rememberModelState();
+    this.mainAgent.remember();
     return ephemeral(`Switched model from ${previous} to ${providerId}/${modelId}`, true);
   }
 
@@ -351,9 +495,76 @@ export class ThreadApp {
     ].join("\n");
   }
 
+  private createInputRouter(): InputRouter {
+    return new InputRouter({
+      newSession: async (options) => {
+        safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
+        try {
+          options.signal.throwIfAborted();
+          const session = await new NewSession(this.sessionTree).execute();
+          safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: session.id, liveTipTurnId: null, reason: "new" });
+          safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
+          return { kind: "command", result: ephemeral(`Created empty Session ${session.id} from Root; workspace unchanged`, true) };
+        } catch (error) {
+          safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
+          throw error;
+        }
+      },
+      model: async (args) => ({ kind: "command", result: this.handleModelCommand(args) }),
+      subagent: async (args) => ({ kind: "command", result: this.handleSubagentCommand(args) }),
+      skill: async (name, extra, options) => {
+        if (!name) return { kind: "command", result: ephemeral(this.describeSkills()) };
+        const skill = this.skills.find((item) => item.name === name);
+        if (!skill) throw new Error(`Unknown skill: ${name}`);
+        if (!this.runtime) throw new Error("/skill requires a configured model");
+        return { kind: "turn", result: await new RunTurn(this.runtime).execute(formatSkillInvocation(skill, extra), options) };
+      },
+      compact: async (options) => {
+        if (!this.runtime) throw new Error("/compact requires a configured model");
+        safeUiEvent(options.onUiEvent, { type: "command_started", name: "compact" });
+        try {
+          const result = await new Compact(this.runtime).execute(options);
+          safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
+          return { kind: "command", result: ephemeral(result.compacted
+            ? `Compaction entry appended: ${result.summarizedTurns} turn(s) summarized; ${result.retainedTurns} retained`
+            : "Nothing to compact without removing one of the newest two complete turns", result.compacted) };
+        } catch (error) {
+          safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: false });
+          throw error;
+        }
+      },
+      session: (args, options) => {
+        const routed = args.length === 0 ? "/thread sessions" : `/thread open ${args.join(" ")}`;
+        return this.routeThreadCommand(routed, options);
+      },
+      rewind: async (args, options) => {
+        if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
+        if (args.length === 0) {
+          const items = buildRewindItems(this.commandContext(options.signal));
+          return { kind: "command", result: items.length
+            ? viewResult("Choose a current-path user message to rewind before.", { type: "rewind", items })
+            : ephemeral("(no user turns on the current live path)") };
+        }
+        const candidate = await this.rewindTo(args[0]!);
+        safeUiEvent(options.onUiEvent, {
+          type: "session_changed",
+          sessionId: this.sessionTree.activeSession.id,
+          liveTipTurnId: this.sessionTree.activeLiveTip,
+          reason: "rewind",
+        });
+        return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
+      },
+      thread: (input, options) => this.routeThreadCommand(input, options),
+      turn: async (input, options) => {
+        if (!this.runtime) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
+        return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
+      },
+    });
+  }
+
   async handleInput(
     input: string,
-    options: { signal: AbortSignal; onTextDelta?: (delta: string) => void; onUiEvent?: UiEventSink },
+    options: InputOptions,
   ): Promise<InputResult> {
     if (this.inputActive) throw new Error("Wait for the active turn or command to finish");
     this.inputActive = true;
@@ -366,88 +577,9 @@ export class ThreadApp {
 
   private async handleInputInner(
     input: string,
-    options: { signal: AbortSignal; onTextDelta?: (delta: string) => void; onUiEvent?: UiEventSink },
+    options: InputOptions,
   ): Promise<InputResult> {
-    const trimmed = input.trim();
-    if (trimmed === "/new") {
-      safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
-      try {
-        options.signal.throwIfAborted();
-        const session = await new NewSession(this.sessionTree).execute();
-        safeUiEvent(options.onUiEvent, {
-          type: "session_changed",
-          sessionId: session.id,
-          liveTipTurnId: null,
-          reason: "new",
-        });
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
-        return { kind: "command", result: ephemeral(`Created empty Session ${session.id} from Root; workspace unchanged`, true) };
-      } catch (error) {
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
-        throw error;
-      }
-    }
-    if (trimmed.startsWith("/new ")) throw new Error("Usage: /new");
-    if (trimmed === "/clear") return { kind: "command", result: clearDisplayResult() };
-    if (trimmed === "/model" || trimmed.startsWith("/model ")) {
-      return { kind: "command", result: this.handleModelCommand(parseCommandLine(trimmed.slice(6).trim())) };
-    }
-    if (trimmed === "/skill" || trimmed.startsWith("/skill ")) {
-      const rest = trimmed.slice(6).trim();
-      if (!rest) return { kind: "command", result: ephemeral(this.describeSkills()) };
-      const separator = rest.search(/\s/);
-      const name = separator < 0 ? rest : rest.slice(0, separator);
-      const extra = separator < 0 ? undefined : rest.slice(separator + 1).trim() || undefined;
-      const skill = this.skills.find((item) => item.name === name);
-      if (!skill) throw new Error(`Unknown skill: ${name}`);
-      if (!this.runtime) throw new Error("/skill requires a configured model");
-      return { kind: "turn", result: await new RunTurn(this.runtime).execute(formatSkillInvocation(skill, extra), options) };
-    }
-    if (trimmed === "/compact") {
-      if (!this.runtime) throw new Error("/compact requires a configured model");
-      safeUiEvent(options.onUiEvent, { type: "command_started", name: "compact" });
-      try {
-        const result = await new Compact(this.runtime).execute(options);
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
-        return { kind: "command", result: ephemeral(result.compacted
-          ? `Compaction entry appended: ${result.summarizedTurns} turn(s) summarized; ${result.retainedTurns} retained`
-          : "Nothing to compact without removing one of the newest two complete turns", result.compacted) };
-      } catch (error) {
-        safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: false });
-        throw error;
-      }
-    }
-    if (trimmed.startsWith("/compact ")) throw new Error("Usage: /compact");
-    if (trimmed === "/session" || trimmed.startsWith("/session ")) {
-      const args = parseCommandLine(trimmed.slice(8).trim());
-      const routed = args.length === 0 ? "/thread sessions" : `/thread open ${args.join(" ")}`;
-      return this.routeThreadCommand(routed, options);
-    }
-    if (trimmed === "/rewind" || trimmed.startsWith("/rewind ")) {
-      const args = parseCommandLine(trimmed.slice(7).trim());
-      if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
-      if (args.length === 0) {
-        const items = buildRewindItems(this.commandContext(options.signal));
-        return { kind: "command", result: items.length
-          ? viewResult("Choose a current-path user message to rewind before.", { type: "rewind", items })
-          : ephemeral("(no user turns on the current live path)") };
-      }
-      const candidate = await this.rewindTo(args[0]!);
-      safeUiEvent(options.onUiEvent, {
-        type: "session_changed",
-        sessionId: this.sessionTree.activeSession.id,
-        liveTipTurnId: this.sessionTree.activeLiveTip,
-        reason: "rewind",
-      });
-      return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
-    }
-    if (trimmed === THREAD_COMMAND_PREFIX || trimmed.startsWith(`${THREAD_COMMAND_PREFIX} `)) {
-      return this.routeThreadCommand(trimmed, options);
-    }
-    if (!this.runtime) {
-      throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
-    }
-    return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
+    return this.inputRouter.route(input, options);
   }
 
   private commandContext(signal: AbortSignal) {
@@ -506,7 +638,17 @@ export class ThreadApp {
     return issues;
   }
 
-  close(): Promise<void> {
-    return this.repository.close();
+  cleanupWorkspaceStates() {
+    const referenced = this.agentTasks.referencedStateIds();
+    for (const turn of this.sessionTree.projection.turns.values()) referenced.add(turn.workspaceStateId);
+    return this.workspaceState.cleanup(referenced);
+  }
+
+  async close(): Promise<void> {
+    const failures: unknown[] = [];
+    await this.agentTasks.close().catch((error) => failures.push(error));
+    await this.repository.close().catch((error) => failures.push(error));
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Thread repositories failed to close cleanly");
   }
 }

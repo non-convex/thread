@@ -7,7 +7,7 @@ import type {
   CredentialInfo,
   CredentialStore,
 } from "@earendil-works/pi-ai";
-import { getThreadHome } from "../config/model-config.js";
+import { getThreadHome } from "../config/thread-config.js";
 import { createId } from "../utils/id.js";
 
 export const DEFAULT_AUTH_FILE = "auth.json";

@@ -19,7 +19,7 @@ function fail(error: unknown): ToolResult {
   return { content: error instanceof Error ? error.message : String(error), isError: true };
 }
 
-const writeTool: AgentTool<{ path: string; content: string }> = {
+export const writeTool: AgentTool<{ path: string; content: string }> = {
   name: "write",
   description:
     "Create a new UTF-8 file or completely replace an existing one. Prefer edit for partial changes to a file that already exists.",
@@ -63,4 +63,8 @@ export function registerBuiltinTools(registry: ToolRegistry): void {
   for (const tool of [readTool, listTool, grepTool, writeTool, editTool, bashTool, webSearchTool, webFetchTool]) {
     registry.register(tool);
   }
+}
+
+export function registerImplementationWorkerTools(registry: ToolRegistry): void {
+  for (const tool of [readTool, listTool, grepTool, writeTool, editTool, bashTool]) registry.register(tool);
 }

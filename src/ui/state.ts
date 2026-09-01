@@ -3,16 +3,23 @@ import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
 import type { ToolResult } from "../tools/types.js";
 import type { AskRequest } from "./ask.js";
 import type { UiEvent } from "./events.js";
+import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/model.js";
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool" | "compaction";
+  kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "agent_task";
   content: string;
   label?: string;
   isError?: boolean;
   name?: string;
   args?: string;
   elapsed?: string;
+  agentTask?: AgentTaskCard;
+}
+
+export interface AgentTaskCard {
+  summary: AgentTaskSummary;
+  trace: LiveBlock[];
 }
 
 export interface LiveTool {
@@ -27,12 +34,13 @@ export interface LiveTool {
 
 export interface LiveBlock {
   id: string;
-  kind: "thinking" | "assistant" | "tool" | "compaction";
+  kind: "thinking" | "assistant" | "tool" | "compaction" | "agent_task";
   content: string;
   streaming?: boolean;
   tool?: LiveTool;
   startedAt?: number;
   finishedAt?: number;
+  agentTask?: AgentTaskCard;
 }
 
 export interface LiveTurn {
@@ -45,10 +53,19 @@ export interface LiveTurn {
 
 export interface ModelPickerScreen {
   type: "model_picker";
+  target: "main" | "implementation-worker";
   models: ModelDescriptor[];
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
   scope: "configured" | "all";
+  selected: number;
+  busy: boolean;
+  error: string | undefined;
+}
+
+export interface SubagentSettingsScreen {
+  type: "subagent_settings";
+  enabled: boolean;
   selected: number;
   busy: boolean;
   error: string | undefined;
@@ -76,6 +93,7 @@ export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
+  | SubagentSettingsScreen
   | RewindScreen
   | AskScreen;
 
@@ -111,11 +129,21 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
     );
     state.screen = {
       type: "model_picker",
+      target: view.target,
       models: view.models,
       currentProviderId: view.currentProviderId,
       currentModelId: view.currentModelId,
       scope: view.scope,
       selected: current >= 0 ? current : 0,
+      busy: false,
+      error: undefined,
+    };
+  }
+  if (view.type === "subagent_settings") {
+    state.screen = {
+      type: "subagent_settings",
+      enabled: view.enabled,
+      selected: view.enabled ? 1 : 0,
       busy: false,
       error: undefined,
     };
@@ -157,6 +185,35 @@ function appendLiveText(live: LiveTurn, kind: "thinking" | "assistant", delta: s
   };
 }
 
+function taskTraceText(card: AgentTaskCard, kind: "thinking" | "assistant", delta: string): AgentTaskCard {
+  if (!delta) return card;
+  const last = card.trace.at(-1);
+  if (last?.kind === kind && last.streaming) {
+    return { ...card, trace: [...card.trace.slice(0, -1), { ...last, content: last.content + delta }] };
+  }
+  const trace = last?.streaming
+    ? [...card.trace.slice(0, -1), { ...last, streaming: false, finishedAt: Date.now() }]
+    : card.trace;
+  return {
+    ...card,
+    trace: [...trace, { id: `${kind}:${trace.length + 1}`, kind, content: delta, streaming: true, startedAt: Date.now() }],
+  };
+}
+
+function updateTaskCard(state: UiState, taskId: string, update: (card: AgentTaskCard) => AgentTaskCard): void {
+  if (state.liveTurn) {
+    state.liveTurn = {
+      ...state.liveTurn,
+      blocks: state.liveTurn.blocks.map((block) => block.agentTask?.summary.taskId === taskId
+        ? { ...block, agentTask: update(block.agentTask) }
+        : block),
+    };
+  }
+  state.transcript = state.transcript.map((item) => item.agentTask?.summary.taskId === taskId
+    ? { ...item, agentTask: update(item.agentTask) }
+    : item);
+}
+
 export function moveSelection(selected: number, delta: number, count: number): number {
   if (count === 0 || delta === 0) return selected;
   return (selected + delta + count) % count;
@@ -164,6 +221,61 @@ export function moveSelection(selected: number, delta: number, count: number): n
 
 export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
+    case "agent_task_created": {
+      if (!state.liveTurn) return;
+      const closed = endStreaming(state.liveTurn);
+      state.liveTurn = {
+        ...closed,
+        blocks: [...closed.blocks, {
+          id: `agent-task:${event.summary.taskId}`,
+          kind: "agent_task",
+          content: "",
+          agentTask: { summary: event.summary, trace: [] },
+        }],
+      };
+      return;
+    }
+    case "agent_task_updated": {
+      updateTaskCard(state, event.summary.taskId, (card) => ({ ...card, summary: event.summary }));
+      const running = state.liveTurn?.blocks.filter((block) =>
+        block.agentTask && (block.agentTask.summary.status === "preparing" || block.agentTask.summary.status === "running")
+      ).length ?? 0;
+      if (running > 0 && (state.activity === "wait_tasks" || state.activity?.startsWith("workers "))) {
+        state.activity = `workers ${running} running`;
+      }
+      return;
+    }
+    case "agent_task_trace": {
+      updateTaskCard(state, event.taskId, (card) => {
+        const child = event.event;
+        if (child.type === "assistant_started") {
+          const last = card.trace.at(-1);
+          return last?.streaming
+            ? { ...card, trace: [...card.trace.slice(0, -1), { ...last, streaming: false, finishedAt: Date.now() }] }
+            : card;
+        }
+        if (child.type === "assistant_text_delta") return taskTraceText(card, "assistant", child.delta);
+        if (child.type === "assistant_thinking_delta") return taskTraceText(card, "thinking", child.delta);
+        if (child.type === "tool_started") {
+          return {
+            ...card,
+            trace: [...card.trace, {
+              id: `tool:${child.id}`,
+              kind: "tool",
+              content: "",
+              tool: { id: child.id, name: child.name, args: child.args, status: "running", startedAt: Date.now() },
+            }],
+          };
+        }
+        return {
+          ...card,
+          trace: card.trace.map((block) => block.tool?.id === child.id
+            ? { ...block, tool: { ...block.tool, status: child.isError ? "failed" : "completed", result: child.result, finishedAt: Date.now() } }
+            : block),
+        };
+      });
+      return;
+    }
     case "command_started":
       state.busy = true;
       state.activity = `running /${event.name}`;
@@ -223,6 +335,15 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "context_updated":
       return;
     case "tool_started": {
+      if (AGENT_TASK_TOOL_NAMES.has(event.name)) {
+        if (event.name === "wait_tasks") {
+          const running = state.liveTurn?.blocks.filter((block) =>
+            block.agentTask && (block.agentTask.summary.status === "preparing" || block.agentTask.summary.status === "running")
+          ).length ?? 0;
+          state.activity = running > 0 ? `workers ${running} running` : "waiting for workers";
+        } else state.activity = event.name;
+        return;
+      }
       if (!state.liveTurn) return;
       const closed = endStreaming(state.liveTurn);
       state.liveTurn = {
