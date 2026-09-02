@@ -2,6 +2,9 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { CompactionEntry, RetainedTurn, SessionEntry } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 
+export const COMPACTION_SUMMARY_PREFIX =
+  "[The following is a memory and summary of earlier work]";
+
 export interface BuiltContext {
   messages: Message[];
   compactableTurns: RetainedTurn[];
@@ -11,7 +14,7 @@ export interface BuiltContext {
 function summaryMessage(entry: CompactionEntry): Message {
   return {
     role: "user",
-    content: `[Derived project-state summary; original Session Tree history remains authoritative]\n\n${entry.summary}`,
+    content: `${COMPACTION_SUMMARY_PREFIX}\n\n${entry.summary}`,
     timestamp: entry.timestamp,
   };
 }

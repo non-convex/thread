@@ -4,6 +4,7 @@
  * See the external-project attribution in README.md.
  */
 import type { AssistantMessage, Context, ImageContent, Message, TextContent, Tool, Usage } from "@earendil-works/pi-ai";
+import { COMPACTION_SUMMARY_PREFIX } from "../context/builder.js";
 
 export interface ContextUsageEstimate {
   /** Estimated total context tokens. */
@@ -194,7 +195,7 @@ function isPrefixRewrite(message: Message): boolean {
   const text = typeof content === "string"
     ? content
     : content.map((block) => (block.type === "text" ? block.text : "")).join("");
-  return text.startsWith("[Derived project-state summary;");
+  return text.startsWith(COMPACTION_SUMMARY_PREFIX);
 }
 
 /**
