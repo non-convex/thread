@@ -249,6 +249,9 @@ export class ThreadTuiController {
       this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
     } finally {
       if (this.active === active) this.active = undefined;
+      if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
+        this.state.turnFinishedAt = Date.now();
+      }
       this.state.busy = false;
       this.state.activity = undefined;
       this.notify();

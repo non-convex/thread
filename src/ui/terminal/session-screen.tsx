@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
-import { createMemo, For, Show, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
-import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SubagentSettingsScreen, TranscriptItem, UiState } from "../state.js";
+import { statusLineParts, type AskScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type SubagentSettingsScreen, type TranscriptItem, type UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -116,6 +116,21 @@ function Footer(props: {
 function Status(props: { state: Accessor<UiState>; resources: ThreadViewResources }) {
   const state = props.state;
   const theme = () => props.resources.theme;
+  const [now, setNow] = createSignal(Date.now());
+  createEffect(() => {
+    const snapshot = state();
+    const running = snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined;
+    if (!running) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 100);
+    (timer as { unref?: () => void }).unref?.();
+    onCleanup(() => clearInterval(timer));
+  });
+  const parts = () => {
+    const snapshot = state();
+    if (snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined) now();
+    return statusLineParts(snapshot, Date.now());
+  };
   const noticeLevel = () => state().notice?.level;
   const color = () => state().busy
     ? theme().spark
@@ -131,12 +146,13 @@ function Status(props: { state: Accessor<UiState>; resources: ThreadViewResource
         <text width={1} height={1}> </text>
       </Show>
       <text flexGrow={1} height={1} wrapMode="none" fg={color()} truncate={true}>
-        {state().busy
-          ? `${state().activity ?? "working"}`
-          : state().notice?.text ?? ""}
+        {parts().main}
       </text>
+      <Show when={parts().elapsed}>
+        <text height={1} wrapMode="none" fg={theme().faint}> {parts().elapsed}</text>
+      </Show>
       <Show when={state().busy}>
-        <text height={1} wrapMode="none" fg={theme().faint}>esc interrupt</text>
+        <text height={1} wrapMode="none" fg={theme().faint}>  esc interrupt</text>
       </Show>
     </box>
   );

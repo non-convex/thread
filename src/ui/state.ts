@@ -106,6 +106,8 @@ export interface UiState {
   notice: { level: "info" | "success" | "error"; text: string } | undefined;
   sessionId: string;
   liveTipTurnId: string | null;
+  turnStartedAt: number | undefined;
+  turnFinishedAt: number | undefined;
 }
 
 export function createUiState(sessionId: string, liveTipTurnId: string | null, transcript: TranscriptItem[]): UiState {
@@ -118,7 +120,40 @@ export function createUiState(sessionId: string, liveTipTurnId: string | null, t
     notice: undefined,
     sessionId,
     liveTipTurnId,
+    turnStartedAt: undefined,
+    turnFinishedAt: undefined,
   };
+}
+
+export function formatDurationMs(ms: number): string {
+  const clamped = Math.max(0, ms);
+  if (clamped < 60_000) return `${(clamped / 1000).toFixed(1)}s`;
+  const totalSeconds = Math.round(clamped / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+export function turnElapsedMs(state: Pick<UiState, "turnStartedAt" | "turnFinishedAt">, now: number): number | undefined {
+  if (state.turnStartedAt === undefined) return undefined;
+  return Math.max(0, (state.turnFinishedAt ?? now) - state.turnStartedAt);
+}
+
+export function statusLineParts(
+  state: Pick<UiState, "busy" | "activity" | "notice" | "turnStartedAt" | "turnFinishedAt">,
+  now: number,
+): { main: string; elapsed?: string } {
+  const ms = turnElapsedMs(state, now);
+  const elapsed = ms === undefined ? undefined : formatDurationMs(ms);
+  if (state.busy) {
+    return { main: state.activity ?? "working", ...(elapsed ? { elapsed } : {}) };
+  }
+  if (state.notice?.text) {
+    return { main: state.notice.text, ...(elapsed ? { elapsed } : {}) };
+  }
+  return { main: elapsed ? `worked ${elapsed}` : "" };
 }
 
 export function openEphemeralView(state: UiState, view: EphemeralView): void {
@@ -292,6 +327,8 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.busy = true;
       state.activity = `running /${event.name}`;
       state.notice = undefined;
+      state.turnStartedAt = undefined;
+      state.turnFinishedAt = undefined;
       return;
     case "command_finished":
       state.busy = false;
@@ -305,12 +342,14 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.busy = true;
       state.activity = "preparing";
       state.notice = undefined;
+      state.turnStartedAt = Date.now();
+      state.turnFinishedAt = undefined;
       state.liveTurn = {
         id: `pending:${Date.now()}`,
         input: event.input,
         sessionId: event.sessionId,
         blocks: [],
-        startedAt: Date.now(),
+        startedAt: state.turnStartedAt,
       };
       return;
     case "turn_started":
@@ -418,6 +457,9 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       return;
     }
     case "turn_finished":
+      if (state.turnStartedAt !== undefined && state.turnFinishedAt === undefined) {
+        state.turnFinishedAt = Date.now();
+      }
       if (event.outcome === "interrupted") state.notice = { level: "info", text: "Interrupted" };
       else if (event.error) state.notice = { level: "error", text: event.error };
       return;
