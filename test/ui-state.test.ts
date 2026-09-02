@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { AgentTaskSummary } from "../src/agent-task/model.js";
 import { createUiState, formatDurationMs, reduceUiEvent, statusLineParts } from "../src/ui/state.js";
+import { projectTranscript } from "../src/ui/terminal/transcript-projection.js";
 
 test("status activity tracks in-flight tools instead of the last started name", () => {
   const state = createUiState("session", null, []);
@@ -18,7 +20,6 @@ test("status activity tracks in-flight tools instead of the last started name", 
     type: "tool_finished",
     id: "a",
     name: "read",
-    result: { content: "ok", isError: false },
     isError: false,
   });
   assert.equal(state.activity, "grep");
@@ -27,10 +28,52 @@ test("status activity tracks in-flight tools instead of the last started name", 
     type: "tool_finished",
     id: "b",
     name: "grep",
-    result: { content: "ok", isError: false },
     isError: false,
   });
   assert.equal(state.activity, "thinking");
+});
+
+test("worker tool queue and start events update one live row", () => {
+  const state = createUiState("session", null, []);
+  const summary: AgentTaskSummary = {
+    taskId: "task",
+    parentTurnId: "turn",
+    toolCallId: "delegate",
+    title: "worker",
+    status: "running",
+    profileId: "implementation-worker",
+    providerId: "test",
+    modelId: "test",
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    elapsedMs: 0,
+    contextTokens: 0,
+    changedFiles: 0,
+    scopeViolations: [],
+  };
+  reduceUiEvent(state, { type: "turn_preparing", input: "go", sessionId: "session" });
+  reduceUiEvent(state, { type: "agent_task_created", summary });
+  reduceUiEvent(state, {
+    type: "agent_task_trace",
+    taskId: "task",
+    event: { type: "tool_started", id: "read", name: "read", args: {}, phase: "queued" },
+  });
+  reduceUiEvent(state, {
+    type: "agent_task_trace",
+    taskId: "task",
+    event: { type: "tool_started", id: "read", name: "read", args: {}, phase: "running" },
+  });
+  reduceUiEvent(state, {
+    type: "agent_task_trace",
+    taskId: "task",
+    event: { type: "tool_finished", id: "read", name: "read", isError: true, error: "failed" },
+  });
+
+  const card = state.liveTurn?.blocks.find((block) => block.agentTask)?.agentTask;
+  assert.equal(card?.trace.length, 1);
+  assert.equal(card?.trace[0]?.tool?.status, "failed");
+  assert.equal(card?.trace[0]?.tool?.error, "failed");
 });
 
 test("turn_finished does not drop the live turn before history is committed", () => {
@@ -76,4 +119,36 @@ test("status line tracks turn elapsed while running and after it finishes", () =
   reduceUiEvent(state, { type: "command_started", name: "model" });
   assert.equal(state.turnStartedAt, undefined);
   assert.equal(statusLineParts(state, Date.now()).elapsed, undefined);
+});
+
+test("compaction rows keep the full summary for expansion", () => {
+  const items = projectTranscript([{
+    id: "entry-compact",
+    sessionId: "session",
+    turnId: "turn",
+    ordinal: 0,
+    timestamp: 1,
+    type: "compaction",
+    summary: "## Long-term memory\n\n- kept",
+    retainedTurns: [],
+    tokensBefore: 100,
+    reason: "threshold",
+  }]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.kind, "compaction");
+  assert.equal(items[0]!.content, "context compacted · threshold");
+  assert.equal(items[0]!.detail, "## Long-term memory\n\n- kept");
+
+  const state = createUiState("session", null, []);
+  reduceUiEvent(state, { type: "turn_preparing", input: "go", sessionId: "session" });
+  reduceUiEvent(state, {
+    type: "compaction_finished",
+    reason: "manual",
+    ok: true,
+    entryId: "entry-live",
+    summary: "## Current project state\n\nstill going",
+  });
+  const block = state.liveTurn?.blocks.find((item) => item.kind === "compaction");
+  assert.equal(block?.content, "context compacted · manual");
+  assert.equal(block?.detail, "## Current project state\n\nstill going");
 });

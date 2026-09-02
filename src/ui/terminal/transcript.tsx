@@ -104,6 +104,7 @@ function sameTranscriptItem(left: TranscriptItem, right: TranscriptItem): boolea
     && left.name === right.name
     && left.args === right.args
     && left.label === right.label
+    && left.detail === right.detail
     && JSON.stringify(left.agentTask) === JSON.stringify(right.agentTask);
 }
 
@@ -330,11 +331,33 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
   );
 }
 
-function CompactionInfo(props: { content: string; resources: ThreadViewResources }) {
+function CompactionInfo(props: { content: string; detail?: string | undefined; resources: ThreadViewResources }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const expandable = () => Boolean(props.detail?.trim());
+  const theme = props.resources.theme;
   return (
-    <box flexDirection="row" width="100%" height={1} marginBottom={1}>
-      <text width={2} height={1} wrapMode="none" fg={props.resources.theme.spark}>◇</text>
-      <text height={1} wrapMode="none" fg={props.resources.theme.muted} attributes={dim}>{props.content}</text>
+    <box
+      flexDirection="column"
+      width="100%"
+      marginBottom={1}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT && expandable()) setExpanded((value) => !value);
+      }}
+    >
+      <box flexDirection="row" width="100%" height={1}>
+        <text width={2} height={1} wrapMode="none" fg={theme.spark}>◇</text>
+        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted} attributes={dim}>
+          {props.content}
+        </text>
+        <Show when={expandable()}>
+          <text height={1} wrapMode="none" fg={theme.faint}> {expanded() ? "▾" : "▸"}</text>
+        </Show>
+      </box>
+      <Show when={expanded() && expandable()}>
+        <box flexDirection="column" width="100%" paddingLeft={2} paddingTop={1}>
+          <MarkdownReply content={props.detail!} resources={props.resources} />
+        </box>
+      </Show>
     </box>
   );
 }
@@ -407,7 +430,7 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
         <ThinkingView content={() => item().content} resources={props.resources} />
       </Match>
       <Match when={item().kind === "compaction"}>
-        <CompactionInfo content={item().content} resources={props.resources} />
+        <CompactionInfo content={item().content} detail={item().detail} resources={props.resources} />
       </Match>
       <Match when={item().kind === "interrupted"}>
         <CompactionInfo content={item().content} resources={props.resources} />
@@ -450,8 +473,7 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
 }
 
 function toolResultText(block: LiveBlock): string {
-  const content = block.tool?.result?.content;
-  return typeof content === "string" ? content.trim() : "";
+  return block.tool?.error?.trim() ?? "";
 }
 
 function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
@@ -512,7 +534,7 @@ function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadVie
         <LiveToolView block={block} resources={props.resources} />
       </Match>
       <Match when={block().kind === "compaction"}>
-        <CompactionInfo content={block().content} resources={props.resources} />
+        <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} />
       </Match>
       <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
         <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} />

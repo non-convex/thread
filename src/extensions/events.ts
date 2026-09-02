@@ -30,6 +30,10 @@ export class ExtensionEvents {
     return () => current.delete(stored);
   }
 
+  hasHandlers(type: ExtensionEventType): boolean {
+    return (this.handlers.get(type)?.size ?? 0) > 0;
+  }
+
   async emit<K extends ExtensionEventType>(type: K, initial: ExtensionEventMap[K]): Promise<ExtensionEventMap[K]> {
     let event = initial;
     for (const handler of this.handlers.get(type) ?? []) {

@@ -45,7 +45,7 @@ function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
           name: fact?.toolName ?? entry.message.toolName,
           args: fact?.effectiveArgs ?? {},
           status: entry.message.isError ? "failed" : "completed",
-          result: { content: textContent(entry.message.content), isError: entry.message.isError },
+          ...(entry.message.isError ? { error: textContent(entry.message.content) } : {}),
           startedAt: entry.timestamp,
           finishedAt: entry.timestamp,
         },
@@ -90,6 +90,7 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
         id: entry.id,
         kind: "compaction",
         content: `context compacted · ${entry.reason}`,
+        detail: entry.summary,
       });
       continue;
     }

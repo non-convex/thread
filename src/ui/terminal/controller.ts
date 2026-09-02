@@ -2,6 +2,7 @@ import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../utils/estimate.js";
+import { gitBranchName } from "../../utils/git.js";
 import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import {
@@ -23,6 +24,7 @@ export interface TerminalMeta {
   cacheHitPercent: number | null;
   cacheMissedTokens: number;
   cacheMissReason: "idle" | "model-changed" | "prefix-changed" | null;
+  gitBranch: string | undefined;
 }
 
 export interface SlashSuggestion {
@@ -84,6 +86,7 @@ export class ThreadTuiController {
   private stopped = false;
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
+  private gitGeneration = 0;
   private pendingAsk: { resolve: (answers: AskAnswers) => void; reject: (error: Error) => void } | undefined;
   private askAnswers: string[][] = [];
   private readonly detachAsk: () => void;
@@ -114,12 +117,14 @@ export class ThreadTuiController {
       cacheHitPercent: null,
       cacheMissedTokens: 0,
       cacheMissReason: null,
+      gitBranch: undefined,
     };
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
-    this.batcher = new UiEventBatcher((event) => this.applyUiEvent(event));
+    this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
     this.detachAsk = app.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
     this.syncTranscript();
     this.refreshMeta();
+    this.refreshGit();
     if (app.agentProfileDiagnostics.length) {
       this.state.notice = {
         level: app.agentProfileDiagnostics.some((item) => item.level === "error") ? "error" : "info",
@@ -254,14 +259,25 @@ export class ThreadTuiController {
       }
       this.state.busy = false;
       this.state.activity = undefined;
+      this.refreshGit();
       this.notify();
     }
   }
 
-  private applyUiEvent(event: UiEvent): void {
-    reduceUiEvent(this.state, event);
-    if (event.type === "context_updated") this.meta.contextPercent = event.percent;
-    this.notify(notifyKind(event));
+  private applyUiEvents(events: readonly UiEvent[]): void {
+    let kind: UiNotifyKind = "live";
+    let applied = false;
+    for (const event of events) {
+      try {
+        reduceUiEvent(this.state, event);
+        if (event.type === "context_updated") this.meta.contextPercent = event.percent;
+        if (notifyKind(event) === "full") kind = "full";
+        applied = true;
+      } catch {
+        // One malformed presentation event must not discard the rest of its frame.
+      }
+    }
+    if (applied) this.notify(kind);
   }
 
   private presentCommand(result: CommandResult): void {
@@ -411,6 +427,16 @@ export class ThreadTuiController {
     this.state.transcript = transcript;
     this.state.sessionId = this.app.sessionTree.activeSession.id;
     this.state.liveTipTurnId = this.app.sessionTree.activeLiveTip;
+  }
+
+  private refreshGit(): void {
+    const generation = ++this.gitGeneration;
+    void gitBranchName(this.app.rootPath).then((branch) => {
+      if (this.stopped || generation !== this.gitGeneration) return;
+      if (this.meta.gitBranch === branch) return;
+      this.meta.gitBranch = branch;
+      this.notify("live");
+    });
   }
 
   private refreshMeta(): void {

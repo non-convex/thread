@@ -41,7 +41,7 @@ function currentTimeAnchor(): string {
   return `The current local date and time is ${year}-${month}-${day} ${hour}. Keep an existing timestamp verbatim when that entry's content is unchanged; use this time for entries written or revised now.`;
 }
 
-export const COMPACTION_TARGET_TOKENS = 20_000;
+export const COMPACTION_TARGET_TOKENS = 25_000;
 export const COMPACTION_SUMMARY_RESERVE_TOKENS = 4_000;
 export const COMPACTION_MIN_RETAINED_TURNS = 2;
 
@@ -50,6 +50,7 @@ export type CompactionResult =
   | {
       compacted: true;
       entryId: string;
+      summary: string;
       summarizedTurns: number;
       retainedTurns: number;
       tokensBefore: number;
@@ -215,6 +216,7 @@ export class ContextCompactionService {
     return {
       compacted: true,
       entryId: entry.id,
+      summary,
       summarizedTurns: preparation.summarizedTurnCount,
       retainedTurns: preparation.retainedTurns.length,
       tokensBefore: options.tokensBefore,

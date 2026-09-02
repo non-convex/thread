@@ -79,6 +79,7 @@ export class AgentRuntime {
       await this.tree.sealRunningTurn(turn.id, outcome, error);
     }
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
+    safeUiEvent(options.onUiEvent, { type: "workspace_checkpoint_started" });
     await this.workspace.checkpoint();
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeUiEvent(options.onUiEvent, {

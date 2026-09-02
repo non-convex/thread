@@ -165,8 +165,8 @@ export class ToolExecutionBatch {
         type: "tool_finished",
         id: prepared.call.id,
         name: prepared.call.name,
-        result: { content: text, isError: true },
         isError: true,
+        error: text,
       });
       results.push(abortedToolResult(prepared.call, text));
     }

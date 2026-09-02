@@ -216,7 +216,7 @@ export class TurnRunner {
         type: "compaction_finished",
         reason: invocation.reason,
         ok: true,
-        ...(result.compacted ? { entryId: result.entryId } : {}),
+        ...(result.compacted ? { entryId: result.entryId, summary: result.summary } : {}),
       });
       return result;
     } catch (error) {

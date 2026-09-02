@@ -1,6 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
 import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
-import type { ToolResult } from "../tools/types.js";
 import type { AskRequest } from "./ask.js";
 import type { UiEvent } from "./events.js";
 import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/model.js";
@@ -15,6 +14,8 @@ export interface TranscriptItem {
   args?: string;
   elapsed?: string;
   agentTask?: AgentTaskCard;
+  /** Full compaction summary; the collapsed row stays in `content`. */
+  detail?: string;
 }
 
 export interface AgentTaskCard {
@@ -27,7 +28,8 @@ export interface LiveTool {
   name: string;
   args: Record<string, unknown>;
   status: "queued" | "running" | "completed" | "failed";
-  result?: ToolResult;
+  /** Truncated failure text. Successful results stay out of presentation state. */
+  error?: string;
   startedAt: number;
   finishedAt?: number;
 }
@@ -41,6 +43,7 @@ export interface LiveBlock {
   startedAt?: number;
   finishedAt?: number;
   agentTask?: AgentTaskCard;
+  detail?: string;
 }
 
 export interface LiveTurn {
@@ -304,20 +307,41 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
         if (child.type === "assistant_text_delta") return taskTraceText(card, "assistant", child.delta);
         if (child.type === "assistant_thinking_delta") return taskTraceText(card, "thinking", child.delta);
         if (child.type === "tool_started") {
+          const phase = child.phase ?? "running";
+          const existing = card.trace.findIndex((block) => block.tool?.id === child.id);
+          if (existing >= 0) {
+            const current = card.trace[existing]!.tool!;
+            if (current.status === "completed" || current.status === "failed" ||
+                (phase === "queued" && current.status === "running")) return card;
+            return {
+              ...card,
+              trace: card.trace.map((block, index) => index === existing
+                ? { ...block, tool: { ...current, name: child.name, args: child.args, status: phase } }
+                : block),
+            };
+          }
           return {
             ...card,
             trace: [...card.trace, {
               id: `tool:${child.id}`,
               kind: "tool",
               content: "",
-              tool: { id: child.id, name: child.name, args: child.args, status: "running", startedAt: Date.now() },
+              tool: { id: child.id, name: child.name, args: child.args, status: phase, startedAt: Date.now() },
             }],
           };
         }
         return {
           ...card,
           trace: card.trace.map((block) => block.tool?.id === child.id
-            ? { ...block, tool: { ...block.tool, status: child.isError ? "failed" : "completed", result: child.result, finishedAt: Date.now() } }
+            ? {
+                ...block,
+                tool: {
+                  ...block.tool,
+                  status: child.isError ? "failed" : "completed",
+                  ...(child.error !== undefined ? { error: child.error } : {}),
+                  finishedAt: Date.now(),
+                },
+              }
             : block),
         };
       });
@@ -428,7 +452,15 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
         state.liveTurn = {
           ...state.liveTurn,
           blocks: state.liveTurn.blocks.map((block) => block.tool?.id === event.id
-            ? { ...block, tool: { ...block.tool, status: event.isError ? "failed" : "completed", result: event.result, finishedAt: Date.now() } }
+            ? {
+                ...block,
+                tool: {
+                  ...block.tool,
+                  status: event.isError ? "failed" : "completed",
+                  ...(event.error !== undefined ? { error: event.error } : {}),
+                  finishedAt: Date.now(),
+                },
+              }
             : block),
         };
         state.activity = inFlightToolActivity(state.liveTurn);
@@ -450,12 +482,17 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
               id: `compaction:${event.entryId}`,
               kind: "compaction",
               content: `context compacted · ${event.reason}`,
+              ...(event.summary ? { detail: event.summary } : {}),
             },
           ],
         };
       }
       return;
     }
+    case "workspace_checkpoint_started":
+      if (state.liveTurn) state.liveTurn = endStreaming(state.liveTurn);
+      state.activity = "saving workspace";
+      return;
     case "turn_finished":
       if (state.turnStartedAt !== undefined && state.turnFinishedAt === undefined) {
         state.turnFinishedAt = Date.now();

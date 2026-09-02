@@ -1,5 +1,5 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, type Accessor } from "solid-js";
+import { createMemo, For, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
 import { statusLineParts, type AskScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type SubagentSettingsScreen, type TranscriptItem, type UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
@@ -7,7 +7,7 @@ import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import { modelDetail, selectedWindow } from "./screens.js";
 import { wheelScrollAcceleration } from "./scroll.js";
-import { SpinnerText } from "./spinner.js";
+import { SpinnerText, tuiAnimationTime } from "./spinner.js";
 import { LiveTurnView, TranscriptTurnsView, WelcomeView } from "./transcript.js";
 import { bold } from "./theme.js";
 
@@ -87,6 +87,11 @@ function Footer(props: {
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>session {state().sessionId.slice(0, 12)}</text>
+      <Show when={meta().gitBranch}>
+        <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
+        <text height={1} wrapMode="none" fg={theme().faint}>⎇ </text>
+        <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>{meta().gitBranch}</text>
+      </Show>
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
         <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
@@ -116,21 +121,11 @@ function Footer(props: {
 function Status(props: { state: Accessor<UiState>; resources: ThreadViewResources }) {
   const state = props.state;
   const theme = () => props.resources.theme;
-  const [now, setNow] = createSignal(Date.now());
-  createEffect(() => {
+  const parts = createMemo(() => {
     const snapshot = state();
     const running = snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined;
-    if (!running) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 100);
-    (timer as { unref?: () => void }).unref?.();
-    onCleanup(() => clearInterval(timer));
+    return statusLineParts(snapshot, running ? tuiAnimationTime() : Date.now());
   });
-  const parts = () => {
-    const snapshot = state();
-    if (snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined) now();
-    return statusLineParts(snapshot, Date.now());
-  };
   const noticeLevel = () => state().notice?.level;
   const color = () => state().busy
     ? theme().spark

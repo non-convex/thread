@@ -1,6 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
+import { cooperativeYield } from "../utils/async.js";
 import { ProcessError, runProcess } from "../utils/process.js";
 import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
@@ -393,29 +394,53 @@ interface RgMatchEvent {
   };
 }
 
+function appendRgMatch(line: string, root: string, matches: GrepMatch[]): boolean {
+  if (!line) return false;
+  let event: RgMatchEvent;
+  try {
+    event = JSON.parse(line) as RgMatchEvent;
+  } catch {
+    return false;
+  }
+  if (event.type !== "match") return false;
+  const absolute = event.data?.path?.text;
+  const lineNumber = event.data?.line_number;
+  if (!absolute || typeof lineNumber !== "number") return false;
+  const file = grepFilePath(root, absolute);
+  matches.push({ file, line: lineNumber, text: event.data?.lines?.text ?? "" });
+  return matches.length >= GREP_SCAN_CAP;
+}
+
+function nextLineEnd(value: string, start: number): number {
+  const newline = value.indexOf("\n", start);
+  return newline < 0 ? value.length : newline;
+}
+
 export function parseRgMatches(stdout: string, root: string): { matches: GrepMatch[]; scanCapped: boolean } {
   const matches: GrepMatch[] = [];
-  let scanCapped = false;
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line) continue;
-    let event: RgMatchEvent;
-    try {
-      event = JSON.parse(line) as RgMatchEvent;
-    } catch {
-      continue;
-    }
-    if (event.type !== "match") continue;
-    const absolute = event.data?.path?.text;
-    const lineNumber = event.data?.line_number;
-    if (!absolute || typeof lineNumber !== "number") continue;
-    const file = grepFilePath(root, absolute);
-    matches.push({ file, line: lineNumber, text: event.data?.lines?.text ?? "" });
-    if (matches.length >= GREP_SCAN_CAP) {
-      scanCapped = true;
-      break;
-    }
+  for (let start = 0; start < stdout.length;) {
+    const end = nextLineEnd(stdout, start);
+    if (appendRgMatch(stdout.slice(start, end), root, matches)) return { matches, scanCapped: true };
+    start = end + 1;
   }
-  return { matches, scanCapped };
+  return { matches, scanCapped: false };
+}
+
+async function parseRgMatchesResponsive(
+  stdout: string,
+  root: string,
+  signal: AbortSignal,
+): Promise<{ matches: GrepMatch[]; scanCapped: boolean }> {
+  const matches: GrepMatch[] = [];
+  const maybeYield = cooperativeYield();
+  let lines = 0;
+  for (let start = 0; start < stdout.length;) {
+    const end = nextLineEnd(stdout, start);
+    if (appendRgMatch(stdout.slice(start, end), root, matches)) return { matches, scanCapped: true };
+    start = end + 1;
+    if (++lines % 64 === 0) await maybeYield(signal);
+  }
+  return { matches, scanCapped: false };
 }
 
 async function gitBoostFor(root: string, signal: AbortSignal): Promise<Map<string, number>> {
@@ -525,7 +550,7 @@ export const grepTool: AgentTool<GrepArgs> = {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("ripgrep (rg) was not found on PATH");
         throw error;
       }
-      const parsed = parseRgMatches(stdout, context.rootPath);
+      const parsed = await parseRgMatchesResponsive(stdout, context.rootPath, context.signal);
       const gitBoost = await gitBoostFor(context.rootPath, context.signal);
       const mtimes = await mtimesFor(context.rootPath, new Set(parsed.matches.map((match) => match.file)));
       const ordered = orderMatches(parsed.matches, gitBoost, mtimes);

@@ -1,6 +1,7 @@
 import { Parser } from "htmlparser2";
 import TurndownService from "turndown";
 import { Type } from "@earendil-works/pi-ai";
+import { cooperativeYield, yieldToEventLoop } from "../utils/async.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -244,8 +245,8 @@ function textualMime(mime: string): boolean {
   );
 }
 
-export function extractTextFromHtml(html: string): string {
-  let text = "";
+function createHtmlTextCollector(): { parser: Parser; result: () => string } {
+  const text: string[] = [];
   let skippedDepth = 0;
   const skipped = new Set(["script", "style", "noscript", "iframe", "object", "embed"]);
   const parser = new Parser({
@@ -253,15 +254,32 @@ export function extractTextFromHtml(html: string): string {
       if (skippedDepth > 0 || skipped.has(name)) skippedDepth++;
     },
     ontext(value) {
-      if (skippedDepth === 0) text += value;
+      if (skippedDepth === 0) text.push(value);
     },
     onclosetag() {
       if (skippedDepth > 0) skippedDepth--;
     },
   });
-  parser.write(html);
-  parser.end();
-  return text.trim();
+  return { parser, result: () => text.join("").trim() };
+}
+
+export function extractTextFromHtml(html: string): string {
+  const collector = createHtmlTextCollector();
+  collector.parser.write(html);
+  collector.parser.end();
+  return collector.result();
+}
+
+async function extractTextFromHtmlResponsive(html: string, signal: AbortSignal): Promise<string> {
+  const collector = createHtmlTextCollector();
+  const maybeYield = cooperativeYield();
+  const chunkCharacters = 64 * 1024;
+  for (let offset = 0; offset < html.length; offset += chunkCharacters) {
+    collector.parser.write(html.slice(offset, offset + chunkCharacters));
+    await maybeYield(signal);
+  }
+  collector.parser.end();
+  return collector.result();
 }
 
 export function convertHtmlToMarkdown(html: string): string {
@@ -342,13 +360,19 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
         if (!textualMime(mime)) throw new Error(`Unsupported fetched content type: ${mime || "unknown"}`);
         const body = await readBoundedBody(response, WEB_FETCH_RESPONSE_LIMIT_BYTES, signal);
         const content = new TextDecoder().decode(body);
-        const output = contentType.toLowerCase().includes("text/html")
-          ? format === "markdown"
-            ? convertHtmlToMarkdown(content)
-            : format === "text"
-              ? extractTextFromHtml(content)
-              : content
-          : content;
+        let output = content;
+        if (contentType.toLowerCase().includes("text/html")) {
+          if (format === "text") {
+            output = await extractTextFromHtmlResponsive(content, signal);
+          } else if (format === "markdown") {
+            // Turndown itself is synchronous. Yield before a large conversion so
+            // parallel fetch completions cannot begin their CPU phase in one turn.
+            if (content.length > 256 * 1024) await yieldToEventLoop();
+            signal.throwIfAborted();
+            output = convertHtmlToMarkdown(content);
+            signal.throwIfAborted();
+          }
+        }
         return ok(limitedCharacters(output, WEB_FETCH_OUTPUT_LIMIT_CHARACTERS), {
           url: finalUrl.toString(),
           contentType,

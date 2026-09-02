@@ -1,7 +1,8 @@
 import type { Stats } from "node:fs";
 import { lstat, readFile, readdir, readlink } from "node:fs/promises";
 import path from "node:path";
-import { sha256 } from "../utils/id.js";
+import { cooperativeSort } from "../utils/async.js";
+import { sha256Cooperative } from "../utils/id.js";
 import { WORKSPACE_STATE_FORMAT, type StagedWorkspaceState, type WorkspaceEntry, type WorkspaceState } from "./model.js";
 import type { WorkspaceStateStore } from "./store.js";
 
@@ -90,7 +91,7 @@ export class WorkspaceSnapshotter {
       await blobWrites.catch(() => undefined);
       throw cause;
     }
-    entries.sort((left, right) => left.path.localeCompare(right.path));
+    await cooperativeSort(entries, (left, right) => left.path.localeCompare(right.path));
     const state: WorkspaceState = {
       format: WORKSPACE_STATE_FORMAT,
       formatVersion: 1,
@@ -152,7 +153,7 @@ export class WorkspaceSnapshotter {
           return;
         }
         const content = await limit.run(() => readFile(absolute));
-        const blobId = sha256(content);
+        const blobId = await sha256Cooperative(content);
         scheduleBlob(blobId, content);
         const fingerprint: FileFingerprint = {
           dev: info.dev,

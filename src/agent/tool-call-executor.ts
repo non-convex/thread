@@ -35,6 +35,13 @@ function errorResult(error: unknown): ToolResult {
   return { content: error instanceof Error ? error.message : String(error), isError: true };
 }
 
+const UI_TOOL_ERROR_MAX_CHARACTERS = 8_000;
+
+function uiToolError(content: string): string {
+  if (content.length <= UI_TOOL_ERROR_MAX_CHARACTERS) return content;
+  return `${content.slice(0, UI_TOOL_ERROR_MAX_CHARACTERS)}\n[error output truncated for TUI]`;
+}
+
 /**
  * Owns one tool invocation's lifecycle but not batch scheduling.
  *
@@ -170,22 +177,24 @@ export class ToolCallExecutor {
     }
     const settled = result ?? { content: `Unknown tool: ${prepared.call.name}`, isError: true };
     let modelContent = settled.content;
-    try {
-      const visible = await this.extensions.emit("tool_result", {
-        toolName: prepared.call.name,
-        raw: structuredClone(settled),
-        modelContent,
-      });
-      modelContent = visible.modelContent;
-    } catch (error) {
-      modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
+    if (this.extensions.hasHandlers("tool_result")) {
+      try {
+        const visible = await this.extensions.emit("tool_result", {
+          toolName: prepared.call.name,
+          raw: structuredClone(settled),
+          modelContent,
+        });
+        modelContent = visible.modelContent;
+      } catch (error) {
+        modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
+      }
     }
     safeUiEvent(ui, {
       type: "tool_finished",
       id: prepared.call.id,
       name: prepared.call.name,
-      result: structuredClone(settled),
       isError: settled.isError,
+      ...(settled.isError ? { error: uiToolError(settled.content) } : {}),
     });
 
     return {
