@@ -641,11 +641,13 @@ export class ThreadApp {
   cleanupWorkspaceStates() {
     const referenced = this.agentTasks.referencedStateIds();
     for (const turn of this.sessionTree.projection.turns.values()) referenced.add(turn.workspaceStateId);
+    for (const stateId of this.workspaceState.referencedStateIds()) referenced.add(stateId);
     return this.workspaceState.cleanup(referenced);
   }
 
   async close(): Promise<void> {
     const failures: unknown[] = [];
+    await this.workspaceState.settle().catch((error) => failures.push(error));
     await this.agentTasks.close().catch((error) => failures.push(error));
     await this.repository.close().catch((error) => failures.push(error));
     if (failures.length === 1) throw failures[0];

@@ -1,5 +1,4 @@
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import type { BuiltContext } from "../context/builder.js";
 import type { CompactionResult } from "../context/compaction.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
@@ -36,21 +35,14 @@ export class AgentRuntime {
       input,
       sessionId: planned.sessionId,
     });
-    const workspaceCapture = this.workspace.captureStaged();
-    void workspaceCapture.catch(() => undefined);
-    let preparedContext: BuiltContext;
-    try {
-      preparedContext = await this.runner.prepareCurrent();
-      options.signal.throwIfAborted();
-    } catch (cause) {
-      const unused = await workspaceCapture.catch(() => undefined);
-      await unused?.persisted.catch(() => undefined);
-      throw cause;
-    }
-    const turnReady = workspaceCapture.then((capture) => this.tree.startPlannedTurn(
+    const baseline = this.workspace.baseline();
+    void baseline.catch(() => undefined);
+    const preparedContext = await this.runner.prepareCurrent();
+    options.signal.throwIfAborted();
+    const turnReady = baseline.then((checkpoint) => this.tree.startPlannedTurn(
       planned,
-      capture.state.id,
-      capture.persisted,
+      checkpoint.stateId,
+      checkpoint.persisted,
     )).then((turn) => {
       safeUiEvent(options.onUiEvent, {
         type: "turn_started",
@@ -84,7 +76,7 @@ export class AgentRuntime {
     }
     const turn = await turnReady;
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
-    this.workspace.prewarm();
+    await this.workspace.checkpoint();
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeUiEvent(options.onUiEvent, {
       type: "turn_finished",

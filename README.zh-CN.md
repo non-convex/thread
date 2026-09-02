@@ -58,28 +58,28 @@ thread logout openai-codex
 
 ### Turn 与工作区状态
 
-一个 turn 保存用户消息、assistant 消息、工具执行事实、工具结果、结束状态、父 turn 和工作区状态 ID。执行顺序固定为：
+一个 turn 保存用户消息、assistant 消息、工具执行事实、工具结果、结束状态、父 turn 和工作区状态 ID。该 ID 是上一轮保存的检查点：上一 turn 结束时的快照，或本进程第一个 turn 的一次性启动扫描。执行顺序固定为：
 
 ```text
 立即显示用户消息，并创建仅驻留运行时的 planned turn
-→ 工作区扫描与首次模型请求并行
+→ 复用上一检查点（尚不存在时才扫描）并与首次模型请求并行
 → state ID 就绪后，将 planned identity 绑定为正式 running turn
-→ 在后台写入工作区状态和 Session Tree
+→ 在后台写入 Session Tree
 → 任何工具副作用前，确保工作区状态和工具开始事实已可靠落盘
-→ 可靠提交 turn 结束状态并推进 Session live tip
+→ 可靠提交 turn 结束状态，扫描新检查点，并推进 Session live tip
 ```
 
 失败或中断的 turn 会保留在历史中，但不会推进 live tip。启动时遗留的 running turn 会被标记为 `interrupted`，已开始的工具绝不会自动重跑。
 
 工具调度同时考虑 effect 和资源冲突。只读 effect 在完整 tool call 流出且工具开始事实可靠落盘后即可启动；写入、进程和交互 effect 会等待完整 assistant 响应可靠落盘。资源互不冲突时并行执行，读写资源重叠或工具明确声明 sequential 时则保持 assistant 源顺序。完成事件按真实完成顺序发出，tool-result 消息仍按 assistant 源顺序提交；全部完成后才发起下一次模型请求。
 
-TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时，用来让首次模型请求与工作区扫描重叠；只有内容寻址的 workspace state ID 就绪后，它才成为 Session Tree 中的事实 Turn。随后记录同步进入内存投影，再由单一有序队列在后台写盘；工具执行和 turn 最终完成仍是必须等待的 durability barrier。
+TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时，用来让首次模型请求与检查点解析重叠；workspace state ID 就绪后，它才成为 Session Tree 中的事实 Turn。随后记录同步进入内存投影，再由单一有序队列在后台写盘；工具执行和 turn 最终完成仍是必须等待的 durability barrier。turn 结束时的扫描是下一轮发送要保存的检查点；blob 落盘可以在后台完成。
 
 工作区状态使用内容寻址的 manifest 与 blob，位于 `~/.thread/projects/<project-id>/workspace-states`。默认包含 ignored 文件和空目录；排除 `.git`、`.thread`、Thread 自身状态目录、项目外路径、进程、数据库、网络副作用及其他外部状态。嵌入方可通过 `ThreadAppOptions.workspaceExcludedPaths` 增加项目相对排除项。
 
 ### Rewind
 
-`/rewind` 只列出活动 live path 上的用户 turn。选择某个 turn 等价于“回到这条用户消息尚未执行的时刻”：
+`/rewind` 只列出活动 live path 上的用户 turn。选择某个 turn 等价于“恢复该 turn 开始前保存的检查点”：也就是上一 turn 结束时的快照，不包含那次快照之后、发送之前的手工修改。本进程的第一个 turn 仍在发送时做一次启动扫描。
 
 1. 校验并恢复该 turn 的工作区状态；
 2. 将当前 Session 的 live tip 移到该 turn 的父 turn；

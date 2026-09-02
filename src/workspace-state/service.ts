@@ -7,8 +7,35 @@ import type {
 } from "./model.js";
 import type { WorkspaceStateRepository } from "./repository.js";
 
+export interface WorkspaceCheckpoint {
+  stateId: string;
+  persisted: Promise<unknown>;
+}
+
 export class WorkspaceStateService {
+  private latest: WorkspaceCheckpoint | undefined;
+
   constructor(readonly repository: WorkspaceStateRepository) {}
+
+  async baseline(): Promise<WorkspaceCheckpoint> {
+    return this.latest ?? this.record(await this.repository.captureStaged());
+  }
+
+  async checkpoint(): Promise<void> {
+    try {
+      this.record(await this.repository.captureStaged());
+    } catch {
+      // Keep the last successful checkpoint if this scan fails.
+    }
+  }
+
+  referencedStateIds(): string[] {
+    return this.latest ? [this.latest.stateId] : [];
+  }
+
+  async settle(): Promise<void> {
+    await this.latest?.persisted.then(() => undefined, () => undefined);
+  }
 
   capture(): Promise<WorkspaceState> {
     return this.repository.capture();
@@ -16,10 +43,6 @@ export class WorkspaceStateService {
 
   captureStaged(): Promise<StagedWorkspaceState> {
     return this.repository.captureStaged();
-  }
-
-  prewarm(): void {
-    this.repository.prewarm();
   }
 
   captureFrom(rootPath: string): Promise<WorkspaceState> {
@@ -64,8 +87,9 @@ export class WorkspaceStateService {
     return path.join(this.repository.project.statePath, "agent-tasks", "workspaces", taskId);
   }
 
-  restore(stateId: string): Promise<void> {
-    return this.repository.restore(stateId);
+  async restore(stateId: string): Promise<void> {
+    await this.repository.restore(stateId);
+    this.latest = { stateId, persisted: Promise.resolve() };
   }
 
   verify(stateId: string): Promise<void> {
@@ -83,5 +107,11 @@ export class WorkspaceStateService {
 
   cleanup(referencedStateIds: ReadonlySet<string>): Promise<{ statesRemoved: number; blobsRemoved: number }> {
     return this.repository.garbageCollect(referencedStateIds);
+  }
+
+  private record(staged: StagedWorkspaceState): WorkspaceCheckpoint {
+    const checkpoint = { stateId: staged.state.id, persisted: staged.persisted };
+    this.latest = checkpoint;
+    return checkpoint;
   }
 }

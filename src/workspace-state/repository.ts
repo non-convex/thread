@@ -66,7 +66,6 @@ export class WorkspaceStateRepository {
   }
   capture(): Promise<WorkspaceState> { return this.snapshotter.capture(this.rootPath); }
   captureStaged(): Promise<StagedWorkspaceState> { return this.snapshotter.captureStaged(this.rootPath); }
-  prewarm(): void { this.snapshotter.prewarm(this.rootPath); }
   captureFrom(rootPath: string): Promise<WorkspaceState> { return this.snapshotter.capture(rootPath); }
   captureStagedFrom(rootPath: string): Promise<StagedWorkspaceState> { return this.snapshotter.captureStaged(rootPath); }
   read(stateId: string): Promise<WorkspaceState> { return this.store.read(stateId); }

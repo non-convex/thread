@@ -144,7 +144,7 @@ test("deleting compaction cache leaves full history rebuildable", async (t) => {
   });
 });
 
-test("rewind restores the selected user turn baseline and retains the abandoned path", async (t) => {
+test("rewind restores the previous turn checkpoint and retains the abandoned path", async (t) => {
   const values = await fixture("thread-rewind-");
   t.after(values.cleanup);
   await writeFile(path.join(values.root, "seed.txt"), "A\n");
@@ -173,9 +173,9 @@ test("rewind restores the selected user turn baseline and retains the abandoned 
       assert.deepEqual(candidates.map((item) => item.turnId), [first, second]);
       await app.handleInput(`/rewind ${second}`, { signal: new AbortController().signal });
       assert.equal(app.sessionTree.activeLiveTip, first);
-      assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "B\n");
-      assert.equal(await readFile(path.join(values.root, "new.txt"), "utf8"), "new\n");
-      await assert.rejects(readFile(path.join(values.root, "old.txt"), "utf8"), /ENOENT/);
+      assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "A\n");
+      assert.equal(await readFile(path.join(values.root, "old.txt"), "utf8"), "old\n");
+      await assert.rejects(readFile(path.join(values.root, "new.txt"), "utf8"), /ENOENT/);
       await assert.rejects(readFile(path.join(values.root, "later.txt"), "utf8"), /ENOENT/);
 
       await app.handleInput("replacement request", { signal: new AbortController().signal });

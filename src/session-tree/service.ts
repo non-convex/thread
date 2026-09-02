@@ -26,8 +26,8 @@ export interface RewindCandidate {
 }
 
 /**
- * Runtime-only identity for a user turn whose workspace state is still being
- * scanned. It is never written to the Session Tree on its own.
+ * Runtime-only identity for a user turn whose workspace checkpoint may still
+ * be resolving. It is never written to the Session Tree on its own.
  */
 export interface PlannedTurn {
   id: string;

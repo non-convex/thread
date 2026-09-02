@@ -59,14 +59,6 @@ export class WorkspaceSnapshotter {
     return staged.persisted;
   }
 
-  /**
-   * Warm fingerprints after a turn so the next start-of-turn capture only
-   * re-reads files that changed during the idle gap.
-   */
-  prewarm(rootPath: string): void {
-    void this.captureStaged(rootPath).catch(() => undefined);
-  }
-
   captureStaged(rootPath: string): Promise<StagedWorkspaceState> {
     const staged = this.enqueue(async () => {
       await this.lastPersist.then(() => undefined, () => undefined);

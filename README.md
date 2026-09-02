@@ -58,28 +58,28 @@ The model automatically sees only the active Session's current path. Other Sessi
 
 ### Turns and workspace states
 
-A turn contains its user message, assistant messages, tool execution facts, tool results, final status, parent turn, and a workspace-state ID. The order is fixed:
+A turn contains its user message, assistant messages, tool execution facts, tool results, final status, parent turn, and a workspace-state ID. That ID is the last saved checkpoint: the previous turn's end-of-turn snapshot, or a one-time bootstrap scan on the first turn of a process. The order is fixed:
 
 ```text
 show the user message and create a runtime-only planned turn
-→ scan the workspace and start the first model request concurrently
-→ bind the completed workspace-state ID and planned identity into a formal running turn
-→ persist workspace and Session Tree records in the background
+→ reuse the last checkpoint (scan only if none exists yet) and start the first model request concurrently
+→ bind that workspace-state ID and planned identity into a formal running turn
+→ persist Session Tree records in the background
 → before any tool side effect, durably flush the workspace state and tool-start fact
-→ durably finish the turn and advance the Session live tip
+→ durably finish the turn, scan a new checkpoint, and advance the Session live tip
 ```
 
 An interrupted or failed turn stays in history but does not advance the live tip. At startup, any turn left running is marked `interrupted`; tools are never automatically repeated.
 
 Tool scheduling is effect- and resource-aware. Read effects may start as soon as a complete streamed call and its tool-start fact are durable. Write, process, and interactive effects wait for the complete assistant response to be durable. Independent resources run concurrently; overlapping read/write resources and explicitly sequential tools retain assistant source order. Completion events follow real completion order, while tool-result messages are committed in assistant source order before the next model request.
 
-The TUI projects the submitted user message immediately. A planned turn is runtime-only and exists just long enough to let the first model request overlap the workspace scan; it becomes a factual Session Tree turn only after the content-addressed workspace-state ID is known. Session Tree records then enter the in-memory projection synchronously and are written by one ordered background queue. Tool execution and final turn completion are durability barriers.
+The TUI projects the submitted user message immediately. A planned turn is runtime-only and exists just long enough to let the first model request overlap checkpoint resolution; it becomes a factual Session Tree turn once the workspace-state ID is known. Session Tree records then enter the in-memory projection synchronously and are written by one ordered background queue. Tool execution and final turn completion are durability barriers. The end-of-turn scan is the saved checkpoint for the next send; blob persist may finish in the background.
 
 Workspace states are content-addressed manifests and blobs stored under `~/.thread/projects/<project-id>/workspace-states`. They include ignored files and empty directories. `.git`, `.thread`, Thread's own state path, paths outside the project, processes, databases, network effects, and other external state are excluded. Additional project-relative exclusions can be supplied through `ThreadAppOptions.workspaceExcludedPaths`.
 
 ### Rewind
 
-`/rewind` lists only user turns on the active live path. Selecting a turn means “return to the moment before this user message ran”:
+`/rewind` lists only user turns on the active live path. Selecting a turn means “restore the checkpoint saved before this turn”: the previous turn's end-of-turn snapshot, not edits made in the idle gap after that snapshot. The first turn in a process bootstraps from a scan at send time.
 
 1. Verify and restore that turn's workspace state.
 2. Move the active Session's live tip to the selected turn's parent.
