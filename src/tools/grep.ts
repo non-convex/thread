@@ -78,9 +78,10 @@ function clampInt(value: number | undefined, min: number, max: number, fallback:
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
-function posixRel(root: string, absolute: string): string | undefined {
-  const relative = path.relative(root, absolute);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+export function grepFilePath(root: string, absolute: string): string {
+  const resolved = path.resolve(absolute);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return resolved;
   return relative.split(path.sep).join("/");
 }
 
@@ -407,8 +408,7 @@ export function parseRgMatches(stdout: string, root: string): { matches: GrepMat
     const absolute = event.data?.path?.text;
     const lineNumber = event.data?.line_number;
     if (!absolute || typeof lineNumber !== "number") continue;
-    const file = posixRel(root, path.resolve(absolute));
-    if (!file) continue;
+    const file = grepFilePath(root, absolute);
     matches.push({ file, line: lineNumber, text: event.data?.lines?.text ?? "" });
     if (matches.length >= GREP_SCAN_CAP) {
       scanCapped = true;
@@ -450,10 +450,12 @@ async function mtimesFor(root: string, files: Iterable<string>): Promise<Map<str
 export const grepTool: AgentTool<GrepArgs> = {
   name: "grep",
   description:
-    "Search workspace text with ripgrep. Matches are grouped by file and ranked so git-changed and recently modified files come first, then paginated (default 20 matches, max 100). Use glob to narrow, outputMode=files for ranked paths only, and pass cursor unchanged to continue the same search. Hidden files are not searched; .gitignore is respected. Requires rg on PATH.",
+    "Search text with ripgrep. Defaults to the workspace root; absolute paths and paths outside the project are allowed. Matches are grouped by file and ranked so git-changed and recently modified files come first, then paginated (default 20 matches, max 100). Use glob to narrow, outputMode=files for ranked paths only, and pass cursor unchanged to continue the same search. Hidden files are not searched; .gitignore is respected. Requires rg on PATH.",
   parameters: Type.Object({
     pattern: Type.String({ description: "Search pattern (regex, or a literal string when literal is true)." }),
-    path: Type.Optional(Type.String({ description: "Directory or file to search; defaults to the workspace root." })),
+    path: Type.Optional(
+      Type.String({ description: "Directory or file to search; defaults to the workspace root." }),
+    ),
     glob: Type.Optional(Type.String({ description: "Limit files, e.g. '*.ts' or 'src/**/*.ts'." })),
     ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search; default false." })),
     literal: Type.Optional(Type.Boolean({ description: "Treat pattern as a literal string; default false." })),
@@ -487,7 +489,10 @@ export const grepTool: AgentTool<GrepArgs> = {
     effect: "read",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", { scope: "subtree" }),
+      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", {
+        allowOutside: true,
+        scope: "subtree",
+      }),
     ],
   },
   async execute(args, context) {
@@ -500,7 +505,7 @@ export const grepTool: AgentTool<GrepArgs> = {
       const search = cursor?.search ?? searchFromArgs({ ...args, pattern });
       const offset = cursor?.offset ?? 0;
       const limit = clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT);
-      const target = await resolveWorkspacePath(context.rootPath, search.path);
+      const target = await resolveWorkspacePath(context.rootPath, search.path, { allowOutside: true });
       const rgArgs = ["--json", "--line-number", "--color", "never"];
       if (search.ignoreCase) rgArgs.push("--ignore-case");
       if (search.literal) rgArgs.push("--fixed-strings");

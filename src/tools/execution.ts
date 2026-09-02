@@ -115,9 +115,12 @@ export async function workspacePathClaim(
   rootPath: string,
   inputPath: string,
   access: ToolResourceAccess,
-  options: { forWrite?: boolean; scope?: ToolResourceScope } = {},
+  options: { forWrite?: boolean; allowOutside?: boolean; scope?: ToolResourceScope } = {},
 ): Promise<ToolResourceClaim> {
-  const target = await resolveWorkspacePath(rootPath, inputPath, options.forWrite === true);
+  const target = await resolveWorkspacePath(rootPath, inputPath, {
+    forWrite: options.forWrite === true,
+    allowOutside: options.allowOutside === true,
+  });
   return claim("workspace", await canonicalTarget(target), access, options.scope ?? "exact");
 }
 

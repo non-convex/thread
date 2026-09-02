@@ -68,7 +68,7 @@ export function presentList(entries: ListEntry[], limit: number): { content: str
 export const listTool: AgentTool<ListArgs> = {
   name: "list",
   description:
-    "List one workspace directory. Does not recurse. Large directories are capped (default 200 entries) and the remainder is reported. Gitignored names are included.",
+    "List one directory. Does not recurse. Defaults to the workspace root. Absolute paths and paths outside the project are allowed. Large directories are capped (default 200 entries) and the remainder is reported. Gitignored names are included.",
   parameters: Type.Object({
     path: Type.Optional(Type.String({ description: "Directory to list; defaults to the workspace root." })),
     limit: Type.Optional(
@@ -84,14 +84,17 @@ export const listTool: AgentTool<ListArgs> = {
     effect: "read",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", { scope: "subtree" }),
+      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", {
+        allowOutside: true,
+        scope: "subtree",
+      }),
     ],
   },
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
       const inputPath = args.path?.trim() ? args.path.trim() : ".";
-      const target = await resolveWorkspacePath(context.rootPath, inputPath);
+      const target = await resolveWorkspacePath(context.rootPath, inputPath, { allowOutside: true });
       const limit = clampInt(args.limit, 1, LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT);
       let dirents;
       try {

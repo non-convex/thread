@@ -76,7 +76,7 @@ export const editTool: AgentTool<EditArgs> = {
       if (!oldText) throw new Error("oldText cannot be empty");
       if (oldText === newText) throw new Error("oldText and newText are identical; nothing to change");
 
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, true);
+      const target = await resolveWorkspacePath(context.rootPath, inputPath, { forWrite: true });
       let info;
       try {
         info = await lstat(target);

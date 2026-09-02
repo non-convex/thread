@@ -172,7 +172,7 @@ async function streamWindow(
 export const readTool: AgentTool<ReadArgs> = {
   name: "read",
   description:
-    "Read a UTF-8 text file inside the workspace. Large files are returned in line pages (default 2000 lines, 64KB) with a continuation offset. Binary files are rejected. Does not add line numbers.",
+    "Read a UTF-8 text file. Absolute paths and paths outside the project are allowed. Large files are returned in line pages (default 2000 lines, 64KB) with a continuation offset. Binary files are rejected. Does not add line numbers.",
   parameters: Type.Object({
     path: Type.String({ description: "File to read." }),
     offset: Type.Optional(
@@ -190,7 +190,9 @@ export const readTool: AgentTool<ReadArgs> = {
   execution: {
     effect: "read",
     mode: "parallel",
-    resources: async (args, context) => [await workspacePathClaim(context.rootPath, args.path, "read")],
+    resources: async (args, context) => [
+      await workspacePathClaim(context.rootPath, args.path, "read", { allowOutside: true }),
+    ],
   },
   async execute(args, context) {
     try {
@@ -199,7 +201,7 @@ export const readTool: AgentTool<ReadArgs> = {
       if (!inputPath) throw new Error("path cannot be empty");
       const offset = clampInt(args.offset, 1, Number.MAX_SAFE_INTEGER, 1);
       const limit = clampInt(args.limit, 1, READ_MAX_LIMIT, READ_DEFAULT_LIMIT);
-      const target = await resolveWorkspacePath(context.rootPath, inputPath);
+      const target = await resolveWorkspacePath(context.rootPath, inputPath, { allowOutside: true });
       const info = await stat(target);
       if (info.isDirectory() || !info.isFile()) throw new Error(`Not a file: ${inputPath}`);
       if (info.size === 0) return ok("(empty file)", { offset, shown: 0, total: 0 });
