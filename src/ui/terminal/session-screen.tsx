@@ -145,14 +145,14 @@ function Status(props: { state: Accessor<UiState>; resources: ThreadViewResource
         <SpinnerText fg={theme().spark} />
         <text width={1} height={1}> </text>
       </Show>
+      <Show when={parts().elapsed}>
+        <text height={1} wrapMode="none" fg={theme().faint}>{parts().elapsed} </text>
+      </Show>
       <text flexGrow={1} height={1} wrapMode="none" fg={color()} truncate={true}>
         {parts().main}
       </text>
-      <Show when={parts().elapsed}>
-        <text height={1} wrapMode="none" fg={theme().faint}> {parts().elapsed}</text>
-      </Show>
       <Show when={state().busy}>
-        <text height={1} wrapMode="none" fg={theme().faint}>  esc interrupt</text>
+        <text height={1} wrapMode="none" fg={theme().faint}>esc interrupt</text>
       </Show>
     </box>
   );
