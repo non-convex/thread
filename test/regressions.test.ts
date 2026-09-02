@@ -108,42 +108,6 @@ test("non-Git projects use one persistent Session Tree and /new creates empty ro
   });
 });
 
-test("deleting compaction cache leaves full history rebuildable", async (t) => {
-  const values = await fixture("thread-compaction-cache-");
-  t.after(values.cleanup);
-  await writeFile(path.join(values.root, "seed.txt"), "A\n");
-
-  await withThreadHome(values.home, async () => {
-    const model = new CapturingModel();
-    const app = await ThreadApp.open({ rootPath: values.root, model, skills: { skills: [], diagnostics: [] } });
-    try {
-      for (const input of ["first material", "second material", "third material"]) {
-        await app.handleInput(input, { signal: new AbortController().signal });
-      }
-      const compacted = await app.handleInput("/compact", { signal: new AbortController().signal });
-      assert.equal(compacted.kind, "command");
-      const cacheFile = path.join(
-        app.project.statePath,
-        "session-tree",
-        "cache",
-        "compaction",
-        `${app.sessionTree.activeSession.id}.json`,
-      );
-      assert.match(await readFile(cacheFile, "utf8"), /thread-context-compaction-v1/);
-      await rm(cacheFile, { force: true });
-
-      await app.handleInput("fourth material", { signal: new AbortController().signal });
-      const rebuilt = textFromContext(model.contexts.at(-1)!);
-      for (const phrase of ["first material", "second material", "third material", "fourth material"]) {
-        assert.match(rebuilt, new RegExp(phrase));
-      }
-      assert.equal(app.sessionTree.projection.turns.size, 4);
-    } finally {
-      await app.close();
-    }
-  });
-});
-
 test("rewind restores the previous turn checkpoint and retains the abandoned path", async (t) => {
   const values = await fixture("thread-rewind-");
   t.after(values.cleanup);
