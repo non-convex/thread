@@ -54,7 +54,8 @@ export function createSessionSearchTool(search: SessionSearchService): AgentTool
   return {
     name: "session_search",
     description:
-      "Search the entire project Session Tree, including other root Sessions and paths retained after rewind. " +
+      "Search the entire project Session Tree, including compacted-away turns, other root Sessions, and paths retained after rewind. " +
+      "Use this instead of guessing when a question depends on earlier project decisions that are not in the current context. " +
       "Use several literal alternative wordings when recalling an earlier decision or attempt.",
     parameters: Type.Object({
       queries: Type.Array(Type.String(), { minItems: 1, description: "Literal keywords or alternative phrasings." }),
