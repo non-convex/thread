@@ -48,6 +48,18 @@ Project
 | Parallelize bounded implementation work | Optional workers handle one or two non-overlapping leaf tasks in the shared workspace. |
 | Use different model backends | ChatGPT subscription login and configurable OpenAI- or Anthropic-compatible providers are supported. |
 
+## Design philosophy
+
+The core idea is simple: every project owns one persistent Session Tree. It is the spine of the project's history; every interaction with the agent and every agent execution trace together represent the complete project history. That history is project-level memory. The agent can search and recall it today; a form of project-wide awareness across the whole tree is still planned.
+
+Cross-project global memory and a **Dreamer** mechanism are in active development.
+
+Three principles guide the design:
+
+- **Keep it small.** Avoid over-design and introduce no new entity unless it is necessary.
+- **Protect context and cache locality.** Context management and compaction should be deliberate, preserving stable prefixes and prompt-cache hits whenever possible.
+- **Earn every token.** Only information that must affect the current step should enter the active context, so the window does not grow prematurely. More selective context admission is still planned.
+
 Thread is not a replacement for version control. It rewinds the managed workspace, not commits, branches, processes, databases, remote services, or other external effects.
 
 ## Quick start
