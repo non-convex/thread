@@ -26,7 +26,7 @@ export interface LiveTool {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  status: "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed";
   result?: ToolResult;
   startedAt: number;
   finishedAt?: number;
@@ -345,16 +345,30 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
         return;
       }
       if (!state.liveTurn) return;
-      const closed = endStreaming(state.liveTurn);
-      state.liveTurn = {
-        ...closed,
-        blocks: [...closed.blocks, {
-          id: `tool:${event.id}`,
-          kind: "tool",
-          content: "",
-          tool: { id: event.id, name: event.name, args: event.args, status: "running", startedAt: Date.now() },
-        }],
-      };
+      const phase = event.phase ?? "running";
+      const existing = state.liveTurn.blocks.findIndex((block) => block.tool?.id === event.id);
+      if (existing >= 0) {
+        const current = state.liveTurn.blocks[existing]!.tool!;
+        if (current.status === "completed" || current.status === "failed") return;
+        if (phase === "queued" && current.status === "running") return;
+        state.liveTurn = {
+          ...state.liveTurn,
+          blocks: state.liveTurn.blocks.map((block, index) => index === existing
+            ? { ...block, tool: { ...current, name: event.name, args: event.args, status: phase } }
+            : block),
+        };
+      } else {
+        const closed = endStreaming(state.liveTurn);
+        state.liveTurn = {
+          ...closed,
+          blocks: [...closed.blocks, {
+            id: `tool:${event.id}`,
+            kind: "tool",
+            content: "",
+            tool: { id: event.id, name: event.name, args: event.args, status: phase, startedAt: Date.now() },
+          }],
+        };
+      }
       state.activity = event.name;
       return;
     }

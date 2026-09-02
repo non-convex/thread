@@ -44,13 +44,25 @@ function printableKey(key: TerminalKey): string | undefined {
   return code >= 0x20 && code !== 0x7f ? key.sequence : undefined;
 }
 
-type Listener = () => void;
+export type UiNotifyKind = "live" | "full";
+type Listener = (kind: UiNotifyKind) => void;
+
+function notifyKind(type: UiEvent["type"]): UiNotifyKind {
+  switch (type) {
+    case "command_started":
+    case "command_finished":
+    case "session_changed":
+      return "full";
+    default:
+      return "live";
+  }
+}
 
 export interface ThreadTuiViewModel {
   readonly state: UiState;
   readonly meta: TerminalMeta;
   readonly slashSuggestions: readonly SlashSuggestion[];
-  subscribe(listener: Listener): () => void;
+  subscribe(listener: (kind: UiNotifyKind) => void): () => void;
   interrupt(): boolean;
   idleCtrlC(): boolean;
   cancelIdleExitGesture(): void;
@@ -245,7 +257,7 @@ export class ThreadTuiController {
   private applyUiEvent(event: UiEvent): void {
     reduceUiEvent(this.state, event);
     if (event.type === "context_updated") this.meta.contextPercent = event.percent;
-    this.notify();
+    this.notify(notifyKind(event.type));
   }
 
   private presentCommand(result: CommandResult): void {
@@ -405,9 +417,9 @@ export class ThreadTuiController {
     this.meta.cacheMissReason = latestCacheMissReason(messages, scan);
   }
 
-  private notify(): void {
+  private notify(kind: UiNotifyKind = "full"): void {
     for (const listener of this.listeners) {
-      try { listener(); } catch { /* renderer errors do not alter state */ }
+      try { listener(kind); } catch { /* renderer errors do not alter state */ }
     }
   }
 }

@@ -18,6 +18,10 @@ export class WorkspaceStateService {
     return this.repository.captureStaged();
   }
 
+  prewarm(): void {
+    this.repository.prewarm();
+  }
+
   captureFrom(rootPath: string): Promise<WorkspaceState> {
     return this.repository.captureFrom(rootPath);
   }

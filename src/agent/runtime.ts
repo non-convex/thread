@@ -84,6 +84,7 @@ export class AgentRuntime {
     }
     const turn = await turnReady;
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
+    this.workspace.prewarm();
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeUiEvent(options.onUiEvent, {
       type: "turn_finished",

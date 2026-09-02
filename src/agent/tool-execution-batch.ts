@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Message, ToolCall } from "@earendil-works/pi-ai";
-import type { UiEventSink } from "../ui/events.js";
+import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
 import { ToolScheduler } from "./tool-scheduler.js";
@@ -40,6 +40,15 @@ export class ToolExecutionBatch {
 
   observe(call: ToolCall, contentIndex: number): Promise<void> {
     const stableCall = structuredClone(call);
+    if (!this.prepared.has(stableCall.id)) {
+      safeUiEvent(this.input.ui, {
+        type: "tool_started",
+        id: stableCall.id,
+        name: stableCall.name,
+        args: (stableCall.arguments ?? {}) as Record<string, unknown>,
+        phase: "queued",
+      });
+    }
     const operation = this.prepareTail.then(async () => {
       await this.input.journal.ready;
       this.input.signal.throwIfAborted();

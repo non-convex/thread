@@ -455,7 +455,7 @@ function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadView
   const block = props.block;
   const theme = props.resources.theme;
   const tool = () => block().tool;
-  const running = () => tool()?.status === "running";
+  const running = () => tool()?.status === "queued" || tool()?.status === "running";
   const failed = () => tool()?.status === "failed";
   const elapsed = () => elapsedLabel(tool()?.startedAt, tool()?.finishedAt);
   return (

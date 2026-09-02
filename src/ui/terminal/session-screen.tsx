@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
-import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SubagentSettingsScreen, UiState } from "../state.js";
+import type { AskScreen, LiveTurn, ModelPickerScreen, RewindScreen, SubagentSettingsScreen, TranscriptItem, UiState } from "../state.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -524,6 +524,8 @@ function AskOverlay(props: {
 export function SessionScreen(props: {
   controller: ThreadTuiViewModel;
   state: Accessor<UiState>;
+  transcript: Accessor<readonly TranscriptItem[]>;
+  liveTurn: Accessor<LiveTurn | undefined>;
   meta: Accessor<TerminalMeta>;
   resources: ThreadViewResources;
   composer: () => TextareaRenderable | undefined;
@@ -546,7 +548,7 @@ export function SessionScreen(props: {
   const theme = props.resources.theme;
   // status line + composer (border + textarea row) + footer
   const controlsHeight = () => props.composerHeight() + 4;
-  const hasTranscript = () => state().transcript.length > 0 || state().liveTurn !== undefined;
+  const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
   const subagentSettings = (): SubagentSettingsScreen | undefined =>
@@ -614,8 +616,8 @@ export function SessionScreen(props: {
           verticalScrollbarOptions={{ visible: false }}
           paddingTop={1}
         >
-          <TranscriptTurnsView items={state().transcript} resources={props.resources} />
-          <Show when={state().liveTurn}>
+          <TranscriptTurnsView items={props.transcript()} resources={props.resources} />
+          <Show when={props.liveTurn()}>
             {(live: Accessor<LiveTurn>) => (
               <LiveTurnView turn={live} label="thread" resources={props.resources} />
             )}

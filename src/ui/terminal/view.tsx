@@ -7,7 +7,7 @@ import type {
 } from "@opentui/core";
 import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { moveSelection, type UiScreen } from "../state.js";
+import { moveSelection, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -20,7 +20,8 @@ export function ThreadRoot(props: {
   resources: ThreadViewResources;
 }) {
   const dimensions = useTerminalDimensions();
-  const [revision, setRevision] = createSignal(0);
+  const [fullRevision, setFullRevision] = createSignal(0);
+  const [liveRevision, setLiveRevision] = createSignal(0);
   const [composerText, setComposerText] = createSignal("");
   const [composerCursor, setComposerCursor] = createSignal(0);
   const [forcePathCompletion, setForcePathCompletion] = createSignal(false);
@@ -39,13 +40,23 @@ export function ThreadRoot(props: {
   let sessionScroll: ScrollBoxRenderable | undefined;
   let screenScroll: ScrollBoxRenderable | undefined;
   const state = () => {
-    revision();
+    liveRevision();
+    fullRevision();
     return props.controller.state;
   };
   const meta = () => {
-    revision();
+    liveRevision();
+    fullRevision();
     return props.controller.meta;
   };
+  const transcript = createMemo((): readonly TranscriptItem[] => {
+    fullRevision();
+    return props.controller.state.transcript;
+  });
+  const liveTurn = createMemo((): LiveTurn | undefined => {
+    liveRevision();
+    return props.controller.state.liveTurn;
+  });
   const screen = () => state().screen;
   const suggestions = createMemo(() => composerSuggestions({
     input: composerText(),
@@ -58,7 +69,13 @@ export function ThreadRoot(props: {
     COMPOSER_MIN_LINES,
     Math.min(COMPOSER_MAX_LINES, estimatedWrappedLines(composerText(), Math.max(12, dimensions().width - 8))),
   ));
-  const unsubscribe = props.controller.subscribe(() => setRevision((value) => value + 1));
+  const unsubscribe = props.controller.subscribe((kind) => {
+    if (kind === "live") setLiveRevision((value) => value + 1);
+    else {
+      setLiveRevision((value) => value + 1);
+      setFullRevision((value) => value + 1);
+    }
+  });
   onCleanup(unsubscribe);
 
   createEffect(() => {
@@ -241,6 +258,8 @@ export function ThreadRoot(props: {
           <SessionScreen
             controller={props.controller}
             state={state}
+            transcript={transcript}
+            liveTurn={liveTurn}
             meta={meta}
             resources={props.resources}
             composer={() => composer}
