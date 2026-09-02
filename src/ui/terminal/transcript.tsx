@@ -363,9 +363,8 @@ function CompactionInfo(props: { content: string; detail?: string | undefined; r
 }
 
 function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResources["theme"]): { icon: string; color: string } {
-  if (summary.status === "preparing" || summary.status === "running") return { icon: "◌", color: theme.spark };
-  if (summary.status === "applied") return { icon: "✓", color: theme.success };
-  if (summary.status === "awaiting_review") return { icon: "◇", color: theme.warning };
+  if (summary.status === "running") return { icon: "◌", color: theme.spark };
+  if (summary.status === "completed") return { icon: "✓", color: theme.success };
   if (summary.status === "failed") return { icon: "×", color: theme.error };
   return { icon: "−", color: theme.muted };
 }
@@ -395,7 +394,7 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
           {summary().title}
         </text>
         <text height={1} wrapMode="none" fg={props.resources.theme.muted}>
-          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} · {summary().changedFiles} files {expanded() ? "▾" : "▸"}
+          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} {expanded() ? "▾" : "▸"}
         </text>
       </box>
       <Show when={expanded()}>
@@ -403,9 +402,6 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
           <Index each={props.card().trace}>
             {(block) => <LiveBlockView block={block} resources={props.resources} />}
           </Index>
-          <Show when={summary().scopeViolations.length}>
-            <text fg={props.resources.theme.error} wrapMode="word">scope violations: {summary().scopeViolations.join(", ")}</text>
-          </Show>
           <Show when={summary().error}>
             {(error: Accessor<string>) => <text fg={props.resources.theme.error} wrapMode="word">{error()}</text>}
           </Show>

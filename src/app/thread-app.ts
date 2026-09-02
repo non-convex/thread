@@ -149,7 +149,7 @@ export class ThreadApp {
     this.agentTasks = new AgentTaskOrchestrator(
       values.agentTaskRepository,
       new AgentProfileRegistry(workerProfile ? [workerProfile] : [], options.agentProfileDiagnostics),
-      values.workspace,
+      values.project.rootPath,
     );
 
     registerBuiltinTools(this.tools);
@@ -248,10 +248,6 @@ export class ThreadApp {
         task: structuredClone(task),
         summary: this.agentTasks.repository.projection.summary(task.id),
       }));
-  }
-
-  readAgentTask(taskId: string, view: "summary" | "diff" | "trace", options?: { path?: string; cursor?: number; limit?: number; fullTrace?: boolean }) {
-    return this.agentTasks.inspect(taskId, view, options);
   }
 
   setAskPresenter(presenter: AskPresenter | undefined): () => void {
@@ -639,7 +635,7 @@ export class ThreadApp {
   }
 
   cleanupWorkspaceStates() {
-    const referenced = this.agentTasks.referencedStateIds();
+    const referenced = new Set<string>();
     for (const turn of this.sessionTree.projection.turns.values()) referenced.add(turn.workspaceStateId);
     for (const stateId of this.workspaceState.referencedStateIds()) referenced.add(stateId);
     return this.workspaceState.cleanup(referenced);

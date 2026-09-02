@@ -1,17 +1,12 @@
-import { rm } from "node:fs/promises";
+import path from "node:path";
 import type { UiEventSink } from "../ui/events.js";
 import { safeUiEvent } from "../ui/events.js";
 import { createId } from "../utils/id.js";
-import type { WorkspaceChangeSet } from "../workspace-state/model.js";
-import type { WorkspaceStateService } from "../workspace-state/service.js";
 import { AgentTaskJournal } from "./journal.js";
-import type { AgentTask, AgentTaskStatus, AgentTaskSummary, ImplementationTaskSpec } from "./model.js";
+import type { AgentProfile, AgentTask, AgentTaskSummary, AgentTaskWriteScope, ImplementationTaskSpec } from "./model.js";
 import { IMPLEMENTATION_WORKER_PROFILE_ID, type AgentProfileRegistry } from "./profile.js";
 import type { AgentTaskRepository } from "./repository.js";
 import { ImplementationTaskRunner } from "./task-runner.js";
-
-const SETTLED_RUN_STATUSES = new Set<AgentTaskStatus>(["awaiting_review", "applied", "failed", "cancelled", "discarded"]);
-const FINAL_STATUSES = new Set<AgentTaskStatus>(["applied", "failed", "cancelled", "discarded"]);
 
 export interface DelegateTaskContext {
   parentTurnId: string;
@@ -20,17 +15,8 @@ export interface DelegateTaskContext {
   ui?: UiEventSink;
 }
 
-export interface TaskInspection {
-  task: AgentTask;
-  summary: AgentTaskSummary;
-  content: string;
-  nextCursor?: number;
-}
-
 export interface AgentTaskOutcome {
   summary: AgentTaskSummary;
-  changedPaths: string[];
-  scopeViolations: string[];
   finalResponse?: string;
 }
 
@@ -39,17 +25,14 @@ export class AgentTaskOrchestrator {
   private readonly controllers = new Map<string, AbortController>();
   private readonly runs = new Map<string, Promise<void>>();
   private readonly turnTasks = new Map<string, Set<string>>();
-  private readonly reviewedChangeSets = new Set<string>();
-  private readonly diffReviewProgress = new Map<string, number>();
-  private applyQueue: Promise<void> = Promise.resolve();
   private closing = false;
 
   constructor(
     readonly repository: AgentTaskRepository,
     readonly profiles: AgentProfileRegistry,
-    private readonly workspace: WorkspaceStateService,
+    rootPath: string,
   ) {
-    this.runner = new ImplementationTaskRunner(repository, workspace);
+    this.runner = new ImplementationTaskRunner(repository, rootPath);
   }
 
   get enabled(): boolean {
@@ -58,24 +41,13 @@ export class AgentTaskOrchestrator {
 
   async initialize(): Promise<void> {
     for (const task of this.repository.projection.tasks.values()) {
-      if (task.status === "preparing" || task.status === "running") {
-        await this.captureStaleTask(task).catch(() => undefined);
-        await this.repository.append({
-          type: "status_changed",
-          taskId: task.id,
-          status: "cancelled",
-          reason: "Thread restarted before the Agent Task completed",
-        }, true);
-        this.cleanupWorkspace(task.id);
-      } else if (task.status === "awaiting_review") {
-        await this.repository.append({
-          type: "status_changed",
-          taskId: task.id,
-          status: "discarded",
-          reason: "Unmerged Agent Tasks cannot continue across Thread restarts",
-        }, true);
-        this.cleanupWorkspace(task.id);
-      }
+      if (task.status !== "running") continue;
+      await this.repository.append({
+        type: "status_changed",
+        taskId: task.id,
+        status: "cancelled",
+        reason: "Thread restarted before the Agent Task completed; workspace changes were preserved",
+      }, true);
     }
   }
 
@@ -86,21 +58,17 @@ export class AgentTaskOrchestrator {
     if (normalized.length < 1 || normalized.length > 2) throw new Error("delegate_tasks accepts one or two tasks");
     for (let left = 0; left < normalized.length; left++) {
       for (let right = left + 1; right < normalized.length; right++) {
-        if (this.workspace.scopesOverlap(normalized[left]!.writeScope, normalized[right]!.writeScope)) {
+        if (scopesOverlap(normalized[left]!.writeScope, normalized[right]!.writeScope)) {
           throw new Error(`Task write scopes overlap: ${normalized[left]!.title} / ${normalized[right]!.title}`);
         }
       }
     }
-    const unresolved = [...this.repository.projection.tasks.values()].filter((task) =>
-      task.status === "preparing" || task.status === "running" || task.status === "awaiting_review"
-    );
+    const running = [...this.repository.projection.tasks.values()].filter((task) => task.status === "running");
     for (const spec of normalized) {
-      const overlap = unresolved.find((task) => this.workspace.scopesOverlap(spec.writeScope, task.spec.writeScope));
-      if (overlap) throw new Error(`Task ${spec.title} overlaps unresolved task ${overlap.id} (${overlap.spec.title})`);
+      const overlap = running.find((task) => scopesOverlap(spec.writeScope, task.spec.writeScope));
+      if (overlap) throw new Error(`Task ${spec.title} overlaps running task ${overlap.id} (${overlap.spec.title})`);
     }
-    const active = [...this.repository.projection.tasks.values()].filter((task) =>
-      task.profileId === profile.id && (task.status === "preparing" || task.status === "running")
-    ).length;
+    const active = running.filter((task) => task.profileId === profile.id).length;
     if (active + normalized.length > profile.limits.maxConcurrent) {
       throw new Error(`implementation-worker capacity is ${profile.limits.maxConcurrent}; wait for active tasks before delegating more`);
     }
@@ -116,13 +84,12 @@ export class AgentTaskOrchestrator {
         providerId: profile.model.providerId,
         modelId: profile.model.modelId,
         spec,
-        status: "preparing",
+        status: "running",
         createdAt: now,
         updatedAt: now,
         revision: 0,
         runs: [],
         trace: [],
-        changeSetIds: [],
         reviewFeedback: [],
       };
       await this.repository.append({ type: "task_created", task }, true);
@@ -131,20 +98,7 @@ export class AgentTaskOrchestrator {
       ids.add(task.id);
       this.turnTasks.set(context.parentTurnId, ids);
       safeUiEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
-    }
-
-    const staged = await this.workspace.captureStaged();
-    for (const task of tasks) {
-      const workspacePath = this.workspace.taskWorkspacePath(task.id);
-      await this.repository.append({
-        type: "task_prepared",
-        taskId: task.id,
-        baseStateId: staged.state.id,
-        workspacePath,
-      }, false, staged.persisted);
-      this.launch(task.id, profile, context.signal, context.ui, staged.persisted.then(() =>
-        this.workspace.materialize(staged.state.id, workspacePath)
-      ));
+      this.launch(task.id, profile, context.signal, context.ui);
     }
     return tasks.map((task) => this.repository.projection.summary(task.id));
   }
@@ -153,12 +107,11 @@ export class AgentTaskOrchestrator {
     const unique = [...new Set(taskIds)];
     if (unique.length === 0) throw new Error("wait_tasks requires at least one task id");
     for (const id of unique) this.repository.projection.require(id);
-    const alreadySettled = unique.some((id) => SETTLED_RUN_STATUSES.has(this.repository.projection.require(id).status));
-    if (returnWhen === "first" && alreadySettled) return unique.map((id) => this.outcome(id));
-    const pending = unique.filter((id) => !SETTLED_RUN_STATUSES.has(this.repository.projection.require(id).status));
+    const pending = unique.filter((id) => this.repository.projection.require(id).status === "running");
+    if (returnWhen === "first" && pending.length < unique.length) return unique.map((id) => this.outcome(id));
     if (pending.length > 0) {
       const waits = pending.map((id) => this.runs.get(id) ?? Promise.resolve());
-      await this.abortable(returnWhen === "first" ? Promise.race(waits) : Promise.all(waits).then(() => undefined), signal);
+      await abortable(returnWhen === "first" ? Promise.race(waits) : Promise.all(waits).then(() => undefined), signal);
     }
     return unique.map((id) => this.outcome(id));
   }
@@ -166,111 +119,32 @@ export class AgentTaskOrchestrator {
   async requestRevision(taskId: string, feedback: string, signal: AbortSignal, ui?: UiEventSink): Promise<AgentTaskSummary> {
     const task = this.repository.projection.require(taskId);
     const profile = this.profiles.require(task.profileId);
-    if (task.status !== "awaiting_review") throw new Error(`Task ${taskId} is not awaiting review`);
+    if (task.status !== "completed") throw new Error(`Task ${taskId} is not completed`);
     if (task.revision >= profile.limits.maxRevisions) throw new Error(`Task ${taskId} reached its revision limit`);
-    const active = [...this.repository.projection.tasks.values()].filter((candidate) =>
-      candidate.profileId === profile.id && (candidate.status === "preparing" || candidate.status === "running")
-    ).length;
-    if (active >= profile.limits.maxConcurrent) {
+    if (!feedback.trim()) throw new Error("Revision feedback cannot be empty");
+    const running = [...this.repository.projection.tasks.values()].filter((candidate) => candidate.status === "running");
+    if (running.filter((candidate) => candidate.profileId === profile.id).length >= profile.limits.maxConcurrent) {
       throw new Error(`implementation-worker capacity is ${profile.limits.maxConcurrent}; wait before requesting a revision`);
     }
-    if (!feedback.trim()) throw new Error("Revision feedback cannot be empty");
+    const overlap = running.find((candidate) => candidate.id !== taskId && scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
+    if (overlap) throw new Error(`Task ${taskId} overlaps running task ${overlap.id} (${overlap.spec.title})`);
     await this.repository.append({ type: "revision_requested", taskId, feedback: feedback.trim() }, true);
     await new AgentTaskJournal(this.repository, taskId).appendUser(`Review feedback from the main agent:\n\n${feedback.trim()}`);
-    await this.repository.append({ type: "status_changed", taskId, status: "preparing" }, true);
+    await this.repository.append({ type: "status_changed", taskId, status: "running" }, true);
     this.launch(taskId, profile, signal, ui);
     return this.repository.projection.summary(taskId);
   }
 
-  async applyTask(taskId: string, changeSetId: string, ui?: UiEventSink): Promise<{ summary: AgentTaskSummary; conflicts: string[] }> {
-    let output: { summary: AgentTaskSummary; conflicts: string[] } | undefined;
-    const operation = this.applyQueue.then(async () => {
-      const task = this.repository.projection.require(taskId);
-      if (task.status === "applied" && task.currentChangeSetId === changeSetId) {
-        output = { summary: this.repository.projection.summary(taskId), conflicts: [] };
-        return;
-      }
-      if (task.status !== "awaiting_review") throw new Error(`Task ${taskId} is not awaiting review`);
-      if (task.currentChangeSetId !== changeSetId) throw new Error(`ChangeSet ${changeSetId} is not the latest candidate for ${taskId}`);
-      const changeSet = await this.repository.readChangeSet(changeSetId);
-      if (changeSet.scopeViolations.length) throw new Error(`Task ${taskId} changed paths outside its scope: ${changeSet.scopeViolations.join(", ")}`);
-      if (!this.reviewedChangeSets.has(changeSetId)) throw new Error(`Inspect the complete diff for ${changeSetId} before applying it`);
-      let applied;
-      try {
-        applied = await this.workspace.applyChangeSet(changeSet);
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        await this.repository.append({ type: "integration_failed", taskId, changeSetId, conflicts: [message] }, true);
-        safeUiEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
-        throw cause;
-      }
-      if (applied.conflicts.length) {
-        const conflicts = applied.conflicts.map((conflict) => `${conflict.path}: ${conflict.reason}`);
-        await this.repository.append({ type: "integration_failed", taskId, changeSetId, conflicts }, true);
-        safeUiEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
-        output = {
-          summary: this.repository.projection.summary(taskId),
-          conflicts,
-        };
-        return;
-      }
-      await this.repository.append({ type: "task_applied", taskId, changeSetId, stateId: applied.mergedStateId }, true);
-      const summary = this.repository.projection.summary(taskId);
-      safeUiEvent(ui, { type: "agent_task_updated", summary });
-      output = { summary, conflicts: [] };
-      this.cleanupWorkspace(taskId);
-    });
-    this.applyQueue = operation.then(() => undefined, () => undefined);
-    await operation;
-    return output!;
-  }
-
   async cancelTask(taskId: string, reason: string, ui?: UiEventSink): Promise<AgentTaskSummary> {
     const task = this.repository.projection.require(taskId);
-    if (task.status === "preparing" || task.status === "running") {
-      this.controllers.get(taskId)?.abort(new DOMException(reason, "AbortError"));
-      await this.runs.get(taskId);
-    } else if (task.status === "awaiting_review") {
-      await this.repository.append({ type: "status_changed", taskId, status: "discarded", reason }, true);
-      this.cleanupWorkspace(taskId);
+    if (task.status !== "running") {
+      throw new Error(`Task ${taskId} is not running; cancellation does not revert workspace changes`);
     }
+    this.controllers.get(taskId)?.abort(new DOMException(reason, "AbortError"));
+    await this.runs.get(taskId);
     const summary = this.repository.projection.summary(taskId);
     safeUiEvent(ui, { type: "agent_task_updated", summary });
     return summary;
-  }
-
-  async inspect(taskId: string, view: "summary" | "diff" | "trace", options: { path?: string; cursor?: number; limit?: number; fullTrace?: boolean } = {}): Promise<TaskInspection> {
-    const task = structuredClone(this.repository.projection.require(taskId));
-    const summary = this.repository.projection.summary(taskId);
-    let source: string;
-    if (view === "summary") {
-      source = JSON.stringify({ summary, spec: task.spec, runs: task.runs, scopeViolations: this.currentChangeSet(taskId)?.scopeViolations ?? [] }, null, 2);
-    } else if (view === "diff") {
-      const changeSet = this.currentChangeSet(taskId);
-      if (!changeSet) source = "(task has no captured ChangeSet)";
-      else source = await this.workspace.reviewDiff(changeSet, options.path);
-    } else {
-      source = task.trace.map((entry) => {
-        if (entry.kind === "tool_execution") return `[tool] ${entry.fact.toolName} ${JSON.stringify(entry.fact.effectiveArgs)}`;
-        const text = this.messageText(entry.message);
-        return options.fullTrace
-          ? `[${entry.message.role}] ${text}`
-          : `[${entry.message.role}] ${text.replace(/\s+/g, " ").slice(0, 240)}${text.length > 240 ? "…" : ""}`;
-      }).join("\n\n") || "(empty trace)";
-    }
-    const cursor = Math.max(0, options.cursor ?? 0);
-    const limit = Math.min(64_000, Math.max(1_000, options.limit ?? 16_000));
-    const content = source.slice(cursor, cursor + limit);
-    const nextCursor = cursor + content.length < source.length ? cursor + content.length : undefined;
-    if (view === "diff" && !options.path && task.currentChangeSetId) {
-      const reviewedThrough = this.diffReviewProgress.get(task.currentChangeSetId) ?? 0;
-      if (cursor <= reviewedThrough) {
-        const next = Math.max(reviewedThrough, cursor + content.length);
-        this.diffReviewProgress.set(task.currentChangeSetId, next);
-        if (next >= source.length) this.reviewedChangeSets.add(task.currentChangeSetId);
-      }
-    }
-    return { task, summary, content, ...(nextCursor !== undefined ? { nextCursor } : {}) };
   }
 
   summariesForTurn(turnId: string): AgentTaskSummary[] {
@@ -283,65 +157,34 @@ export class AgentTaskOrchestrator {
   async finishParentTurn(turnId: string, reason: string, ui?: UiEventSink): Promise<void> {
     const taskIds = [...(this.turnTasks.get(turnId) ?? [])];
     for (const taskId of taskIds) {
-      const status = this.repository.projection.require(taskId).status;
-      if (status === "preparing" || status === "running") {
-        this.controllers.get(taskId)?.abort(new DOMException(reason, "AbortError"));
+      if (this.repository.projection.require(taskId).status === "running") {
+        await this.cancelTask(taskId, reason, ui);
       }
-    }
-    for (const taskId of taskIds) {
-      const status = this.repository.projection.require(taskId).status;
-      if (!FINAL_STATUSES.has(status)) await this.cancelTask(taskId, reason, ui);
     }
     this.turnTasks.delete(turnId);
   }
 
   async close(): Promise<void> {
     this.closing = true;
-    for (const controller of this.controllers.values()) controller.abort(new DOMException("Thread application closed", "AbortError"));
-    await Promise.allSettled(this.runs.values());
-    await this.applyQueue;
-    for (const task of this.repository.projection.tasks.values()) {
-      if (task.status !== "awaiting_review") continue;
-      await this.repository.append({
-        type: "status_changed",
-        taskId: task.id,
-        status: "discarded",
-        reason: "Thread application closed before the task was applied",
-      }, true);
-      this.cleanupWorkspace(task.id);
+    for (const controller of this.controllers.values()) {
+      controller.abort(new DOMException("Thread application closed; workspace changes were preserved", "AbortError"));
     }
+    await Promise.allSettled(this.runs.values());
     await this.repository.close();
   }
 
-  referencedStateIds(): Set<string> {
-    const ids = new Set<string>();
-    for (const task of this.repository.projection.tasks.values()) {
-      if (task.baseStateId) ids.add(task.baseStateId);
-      if (task.appliedStateId) ids.add(task.appliedStateId);
-      for (const changeSetId of task.changeSetIds) {
-        const changeSet = this.repository.projection.changeSets.get(changeSetId);
-        if (changeSet) {
-          ids.add(changeSet.baseStateId);
-          ids.add(changeSet.resultStateId);
-        }
-      }
-    }
-    return ids;
-  }
-
-  private launch(taskId: string, profile: ReturnType<AgentProfileRegistry["require"]>, signal: AbortSignal, ui?: UiEventSink, prepare?: Promise<void>): void {
+  private launch(taskId: string, profile: AgentProfile, signal: AbortSignal, ui?: UiEventSink): void {
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
     this.controllers.set(taskId, controller);
     const run = (async () => {
       try {
-        if (prepare) await this.abortable(prepare, combined);
         combined.throwIfAborted();
         await this.runner.run(taskId, profile, combined, ui);
       } catch (cause) {
         const error = cause instanceof Error ? cause : new Error(String(cause));
         const task = this.repository.projection.require(taskId);
-        if (task.status === "preparing" || task.status === "running") {
+        if (task.status === "running") {
           await this.repository.append({
             type: "status_changed",
             taskId,
@@ -352,30 +195,18 @@ export class AgentTaskOrchestrator {
         }
       } finally {
         this.controllers.delete(taskId);
-        const summary = this.repository.projection.summary(taskId);
-        safeUiEvent(ui, { type: "agent_task_updated", summary });
-        if (summary.status === "failed" || summary.status === "cancelled") {
-          void (prepare ?? Promise.resolve()).finally(() => this.cleanupWorkspace(taskId));
-        }
+        safeUiEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
       }
     })();
     this.runs.set(taskId, run);
     void run.catch(() => undefined);
   }
 
-  private currentChangeSet(taskId: string): WorkspaceChangeSet | undefined {
-    const task = this.repository.projection.require(taskId);
-    return task.currentChangeSetId ? this.repository.projection.changeSets.get(task.currentChangeSetId) : undefined;
-  }
-
   private outcome(taskId: string): AgentTaskOutcome {
     const task = this.repository.projection.require(taskId);
-    const changeSet = this.currentChangeSet(taskId);
     const finalResponse = task.runs.at(-1)?.finalResponse;
     return {
       summary: this.repository.projection.summary(taskId),
-      changedPaths: changeSet?.operations.map((operation) => operation.path) ?? [],
-      scopeViolations: [...(changeSet?.scopeViolations ?? [])],
       ...(finalResponse ? { finalResponse } : {}),
     };
   }
@@ -389,9 +220,10 @@ export class AgentTaskOrchestrator {
       throw new Error(`${label} requires guidance, acceptanceCriteria and a non-empty writeScope`);
     }
     const writeScope = spec.writeScope.map((scope) => {
-      const normalized = scope.path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
-      if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.split("/").includes("..") ||
-          (scope.kind !== "file" && scope.kind !== "subtree")) throw new Error(`${label} has an invalid write scope`);
+      const input = scope.path.replaceAll("\\", "/").replace(/^\.\//, "");
+      const normalized = path.posix.normalize(input).replace(/\/$/, "");
+      if (!normalized || normalized === "." || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || input.split("/").includes("..") ||
+          (scope.kind !== "file" && scope.kind !== "directory")) throw new Error(`${label} has an invalid write scope`);
       return { path: normalized, kind: scope.kind };
     });
     const guidance = spec.guidance.map((item) => String(item).trim()).filter(Boolean);
@@ -399,44 +231,30 @@ export class AgentTaskOrchestrator {
     if (guidance.length === 0 || acceptanceCriteria.length === 0) {
       throw new Error(`${label} requires at least one non-empty guidance item and acceptance criterion`);
     }
-    return {
-      title,
-      objective,
-      guidance,
-      acceptanceCriteria,
-      writeScope,
-    };
+    return { title, objective, guidance, acceptanceCriteria, writeScope };
   }
+}
 
-  private async captureStaleTask(task: AgentTask): Promise<void> {
-    if (!task.baseStateId || !task.workspacePath) return;
-    const result = await this.workspace.captureFrom(task.workspacePath);
-    const changeSet = await this.workspace.createChangeSet(task.id, task.baseStateId, result.id, task.spec.writeScope);
-    await this.repository.storeChangeSet(changeSet);
-    await this.repository.append({ type: "changeset_created", taskId: task.id, changeSetId: changeSet.id }, true);
-  }
+function scopesOverlap(left: readonly AgentTaskWriteScope[], right: readonly AgentTaskWriteScope[]): boolean {
+  return left.some((leftScope) => right.some((rightScope) => scopeContains(leftScope, rightScope) || scopeContains(rightScope, leftScope)));
+}
 
-  private cleanupWorkspace(taskId: string): void {
-    const target = this.workspace.taskWorkspacePath(taskId);
-    void rm(target, { recursive: true, force: true }).catch(() => undefined);
-  }
+function scopeContains(container: AgentTaskWriteScope, candidate: AgentTaskWriteScope): boolean {
+  const containerPath = comparableScopePath(container.path);
+  const candidatePath = comparableScopePath(candidate.path);
+  if (container.kind === "file") return containerPath === candidatePath;
+  return candidatePath === containerPath || candidatePath.startsWith(`${containerPath}/`);
+}
 
-  private abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-    signal.throwIfAborted();
-    return new Promise<T>((resolve, reject) => {
-      const abort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      signal.addEventListener("abort", abort, { once: true });
-      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-    });
-  }
+function comparableScopePath(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value;
+}
 
-  private messageText(message: import("@earendil-works/pi-ai").Message): string {
-    if (typeof message.content === "string") return message.content;
-    return message.content.map((content) => {
-      if (content.type === "text") return content.text;
-      if (content.type === "thinking") return content.thinking;
-      if (content.type === "toolCall") return `${content.name} ${JSON.stringify(content.arguments)}`;
-      return "";
-    }).filter(Boolean).join("\n");
-  }
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }

@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { entireWorkspaceClaim, noResources, singletonResource } from "../tools/execution.js";
+import { noResources, singletonResource } from "../tools/execution.js";
 import type { AgentTool, ToolContext, ToolResult } from "../tools/types.js";
 import type { ImplementationTaskSpec } from "./model.js";
 import type { AgentTaskOrchestrator } from "./orchestrator.js";
@@ -18,8 +18,8 @@ function ownTask(orchestrator: AgentTaskOrchestrator, taskId: string, context: T
 }
 
 const scopeSchema = Type.Object({
-  path: Type.String({ description: "Project-relative file or subtree path." }),
-  kind: Type.Union([Type.Literal("file"), Type.Literal("subtree")]),
+  path: Type.String({ description: "Project-relative file or directory path." }),
+  kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
 });
 
 const specSchema = Type.Object({
@@ -33,10 +33,10 @@ const specSchema = Type.Object({
 export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): AgentTool[] {
   const delegate: AgentTool<{ tasks: ImplementationTaskSpec[] }> = {
     name: "delegate_tasks",
-    description: "Delegate one or two independent, non-overlapping implementation tasks to isolated implementation workers. Provide detailed guidance and mechanically checkable acceptance criteria.",
+    description: "Delegate one or two independent implementation tasks with non-overlapping write scopes. Workers edit the current project workspace directly, so their changes are immediately visible.",
     parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 2 }) }),
     replay: "never",
-    execution: { effect: "process", mode: "sequential", resources: () => [entireWorkspaceClaim("read")] },
+    execution: { effect: "process", mode: "sequential", resources: () => noResources() },
     async execute(args, context) {
       try {
         const summaries = await orchestrator.delegate(args.tasks, {
@@ -45,14 +45,14 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
           signal: context.signal,
           ...(context.onUiEvent ? { ui: context.onUiEvent } : {}),
         });
-        return ok({ tasks: summaries, note: "Workers are running in the background. Continue independent work or call wait_tasks when their results are needed." });
+        return ok({ tasks: summaries, note: "Workers are editing the shared workspace. Do not edit their write scopes while they run; inspect current files after they complete." });
       } catch (error) { return fail(error); }
     },
   };
 
   const wait: AgentTool<{ taskIds: string[]; returnWhen: "first" | "all" }> = {
     name: "wait_tasks",
-    description: "Wait for delegated tasks only when the next decision depends on their results.",
+    description: "Wait for the first or all delegated tasks to finish, returning status, resource usage, and each worker's final response.",
     parameters: Type.Object({
       taskIds: Type.Array(Type.String(), { minItems: 1 }),
       returnWhen: Type.Union([Type.Literal("first"), Type.Literal("all")]),
@@ -67,31 +67,9 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     },
   };
 
-  const inspect: AgentTool<{ taskId: string; view: "summary" | "diff" | "trace"; path?: string; cursor?: number; limit?: number; fullTrace?: boolean }> = {
-    name: "inspect_task",
-    description: "Inspect a task summary, its mechanical workspace diff, or its child trace. Diff and trace output are cursor-paginated.",
-    parameters: Type.Object({
-      taskId: Type.String(),
-      view: Type.Union([Type.Literal("summary"), Type.Literal("diff"), Type.Literal("trace")]),
-      path: Type.Optional(Type.String()),
-      cursor: Type.Optional(Type.Integer({ minimum: 0 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 64_000 })),
-      fullTrace: Type.Optional(Type.Boolean({ description: "For trace view only: return full child messages instead of structured previews." })),
-    }),
-    replay: "safe",
-    execution: { effect: "read", mode: "parallel", resources: (args) => singletonResource("agent-task", args.taskId, "read") },
-    async execute(args, context) {
-      try {
-        ownTask(orchestrator, args.taskId, context);
-        const result = await orchestrator.inspect(args.taskId, args.view, args);
-        return ok(`${result.content}${result.nextCursor === undefined ? "" : `\n\n[next cursor: ${result.nextCursor}]`}`);
-      } catch (error) { return fail(error); }
-    },
-  };
-
   const revise: AgentTool<{ taskId: string; feedback: string }> = {
     name: "request_revision",
-    description: "Continue the same worker, sandbox, and child context with concrete review feedback. The task specification and write scope remain fixed.",
+    description: "Continue a completed worker in the same shared workspace with concrete review feedback. The task specification and write scope remain fixed.",
     parameters: Type.Object({ taskId: Type.String(), feedback: Type.String() }),
     replay: "never",
     execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
@@ -103,36 +81,20 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     },
   };
 
-  const apply: AgentTool<{ taskId: string; changeSetId: string }> = {
-    name: "apply_task",
-    description: "Transactionally apply the latest reviewed ChangeSet after conservative three-way conflict checking. Inspect the full diff first.",
-    parameters: Type.Object({ taskId: Type.String(), changeSetId: Type.String() }),
-    replay: "never",
-    execution: { effect: "write", mode: "sequential", resources: () => [entireWorkspaceClaim("write")] },
-    async execute(args, context) {
-      try {
-        ownTask(orchestrator, args.taskId, context);
-        const result = await orchestrator.applyTask(args.taskId, args.changeSetId, context.onUiEvent);
-        return result.conflicts.length
-          ? { content: `ChangeSet was not applied because of conflicts:\n${result.conflicts.join("\n")}`, isError: true }
-          : ok(result.summary);
-      } catch (error) { return fail(error); }
-    },
-  };
-
   const cancel: AgentTool<{ taskId: string; reason: string }> = {
     name: "cancel_task",
-    description: "Cancel a running task or discard an unmerged task that is awaiting review.",
+    description: "Interrupt a running task. Files already changed in the shared workspace are preserved and must be reviewed by the main agent.",
     parameters: Type.Object({ taskId: Type.String(), reason: Type.String() }),
     replay: "never",
     execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
     async execute(args, context) {
       try {
         ownTask(orchestrator, args.taskId, context);
-        return ok(await orchestrator.cancelTask(args.taskId, args.reason, context.onUiEvent));
+        const summary = await orchestrator.cancelTask(args.taskId, args.reason, context.onUiEvent);
+        return ok({ task: summary, note: "The worker was interrupted. Existing workspace changes were preserved and must be reviewed." });
       } catch (error) { return fail(error); }
     },
   };
 
-  return [delegate, wait, inspect, revise, apply, cancel];
+  return [delegate, wait, revise, cancel];
 }

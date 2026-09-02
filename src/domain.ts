@@ -17,10 +17,6 @@ export type {
   WorkspaceEntry,
   WorkspaceState,
   WorkspaceStatePolicy,
-  WorkspaceScope,
-  WorkspaceOperation,
-  WorkspaceChangeSet,
-  WorkspaceMergeConflict,
 } from "./workspace-state/model.js";
 export type {
   AgentProfile,
@@ -30,6 +26,7 @@ export type {
   AgentTaskStatus,
   AgentTaskSummary,
   AgentTaskTraceEntry,
+  AgentTaskWriteScope,
   ImplementationTaskSpec,
 } from "./agent-task/model.js";
 export type { Project, ProjectManifest } from "./project/model.js";

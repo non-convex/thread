@@ -31,31 +31,3 @@ export interface StagedWorkspaceState {
   /** Resolves only after blobs, manifest, and integrity verification are durable. */
   persisted: Promise<WorkspaceState>;
 }
-
-export const WORKSPACE_CHANGE_SET_FORMAT = "thread-change-set-v1" as const;
-
-export type WorkspaceScope = {
-  path: string;
-  kind: "file" | "subtree";
-};
-
-export type WorkspaceOperation =
-  | { kind: "create"; path: string; after: WorkspaceEntry }
-  | { kind: "modify"; path: string; before: WorkspaceEntry; after: WorkspaceEntry }
-  | { kind: "delete"; path: string; before: WorkspaceEntry };
-
-export interface WorkspaceChangeSet {
-  format: typeof WORKSPACE_CHANGE_SET_FORMAT;
-  formatVersion: 1;
-  id: string;
-  taskId: string;
-  baseStateId: string;
-  resultStateId: string;
-  operations: WorkspaceOperation[];
-  scopeViolations: string[];
-}
-
-export interface WorkspaceMergeConflict {
-  path: string;
-  reason: "parent-modified" | "parent-created" | "parent-deleted";
-}

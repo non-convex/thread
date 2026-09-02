@@ -100,9 +100,11 @@ Every candidate must have a material estimated benefit, measured through the sam
 
 ### Implementation workers
 
-Thread can delegate one or two independent leaf implementation tasks to `implementation-worker` agents after subagents are explicitly enabled with `/subagent`. Selecting `On` opens the worker model picker; selecting `Off` removes delegation tools and their system-prompt instructions from the main agent. Each worker receives only its task specification and a private workspace materialized from one shared base state. It uses only `read`, `list`, `grep`, `write`, `edit`, and `bash`; child traces never enter the parent Session context.
+Thread can delegate one or two independent leaf implementation tasks to `implementation-worker` agents after subagents are explicitly enabled with `/subagent`. Selecting `On` opens the worker model picker; selecting `Off` removes delegation tools and their system-prompt instructions from the main agent. Each worker receives only its task specification and uses `read`, `list`, `grep`, `write`, `edit`, and `bash`; child traces never enter the parent Session context.
 
-Workers produce mechanical `thread-change-set-v1` manifests. The main agent must inspect the complete diff, may continue the same worker with concrete revision feedback, and applies an approved candidate through conservative three-way conflict checking. Workers never edit the current project directly. Apply is serialized and transactional, with a durable recovery record and rollback on failure. The parent turn owns every task: interruption or turn completion cancels or discards anything not already applied or terminal. `/rewind` restores the single pre-turn workspace state, so it also removes worker changes applied during that turn.
+Workers edit the current project workspace directly, so completed changes need no inspect/apply protocol. `writeScope` is a coordination boundary: Thread rejects overlapping running tasks, while prompts require the main agent and workers to stay out of one another's active scopes. The main agent reviews current files with its ordinary tools and can ask a completed worker for a revision in the same directory and child context. Cancelling interrupts only a running worker and preserves files already written. Every worker belongs to its parent turn; turn completion, interruption, application shutdown, or a restart cancels unfinished work. `/rewind` remains the way to restore the whole pre-turn workspace state.
+
+The main agent receives four task tools: `delegate_tasks`, `wait_tasks`, `request_revision`, and `cancel_task`.
 
 Task events and child traces are stored separately from the Session Tree. The TUI anchors expandable task cards at the originating `delegate_tasks` call; the parent context receives only compact task-tool results.
 
@@ -157,14 +159,11 @@ session-tree/
 workspace-states/
   states/
   blobs/
-  apply-recovery/
 agent-tasks/
   events.jsonl
-  changesets/
-  workspaces/
 ```
 
-The Session Tree and Agent Task logs are independent append-only JSONL streams. ChangeSet manifests reference the shared content-addressed workspace blob store. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, `thread-workspace-state-v1`, `thread-agent-task-v1`, and `thread-change-set-v1` formats. Old data is not read, migrated, upgraded, or partially interpreted.
+The Session Tree and Agent Task logs are independent append-only JSONL streams. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, `thread-workspace-state-v2`, and `thread-agent-task-v2` formats. Old data is not read, migrated, upgraded, or partially interpreted; in particular, a pre-v2 Agent Task event log fails startup instead of being silently deleted.
 
 ## Configuration
 
@@ -187,10 +186,10 @@ The main boundaries are:
 ```text
 src/project/          project identity and lifecycle
 src/session-tree/     persistent Sessions, Turns, Entries, paths, history, search
-src/workspace-state/  state store, capture, materialization, diff and transactional apply
+src/workspace-state/  checkpoint store, capture, restore, verification, and garbage collection
 src/context/          live-path projection, budget, and compaction entries
 src/agent/            shared model-step, journal, tool scheduling, and parent-turn runtime
-src/agent-task/       profiles, task journal/projection, isolated workers, review and apply
+src/agent-task/       profiles, task journal/projection, shared-workspace worker lifecycle
 src/app/              façade, input routing, main-model state, runtime composition, use cases
 src/commands/         command interface
 src/ui/               plain and full-screen interfaces

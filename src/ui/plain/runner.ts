@@ -53,12 +53,10 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
             const previous = taskStatuses.get(event.summary.taskId);
             if (previous === event.summary.status) return;
             taskStatuses.set(event.summary.taskId, event.summary.status);
-            const label = event.summary.status === "awaiting_review" ? "worker completed"
+            const label = event.summary.status === "completed" ? "worker completed"
               : event.summary.status === "running" && event.summary.revision > 0 ? "worker revision"
-              : event.summary.status === "applied" ? "worker applied"
               : event.summary.status === "failed" ? "worker failed"
               : event.summary.status === "cancelled" ? "worker cancelled"
-              : event.summary.status === "discarded" ? "worker discarded"
               : undefined;
             if (label) output.write(`\n[${label}] ${event.summary.taskId} ${event.summary.title}\n`);
           },

@@ -305,7 +305,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "agent_task_updated": {
       updateTaskCard(state, event.summary.taskId, (card) => ({ ...card, summary: event.summary }));
       const running = state.liveTurn?.blocks.filter((block) =>
-        block.agentTask && (block.agentTask.summary.status === "preparing" || block.agentTask.summary.status === "running")
+        block.agentTask && block.agentTask.summary.status === "running"
       ).length ?? 0;
       if (running > 0 && (state.activity === "wait_tasks" || state.activity?.startsWith("workers "))) {
         state.activity = `workers ${running} running`;
@@ -430,7 +430,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       if (AGENT_TASK_TOOL_NAMES.has(event.name)) {
         if (event.name === "wait_tasks") {
           const running = state.liveTurn?.blocks.filter((block) =>
-            block.agentTask && (block.agentTask.summary.status === "preparing" || block.agentTask.summary.status === "running")
+            block.agentTask && block.agentTask.summary.status === "running"
           ).length ?? 0;
           state.activity = running > 0 ? `workers ${running} running` : "waiting for workers";
         } else state.activity = event.name;

@@ -49,8 +49,6 @@ test("worker tool queue and start events update one live row", () => {
     updatedAt: 1,
     elapsedMs: 0,
     contextTokens: 0,
-    changedFiles: 0,
-    scopeViolations: [],
   };
   reduceUiEvent(state, { type: "turn_preparing", input: "go", sessionId: "session" });
   reduceUiEvent(state, { type: "agent_task_created", summary });
@@ -74,6 +72,31 @@ test("worker tool queue and start events update one live row", () => {
   assert.equal(card?.trace.length, 1);
   assert.equal(card?.trace[0]?.tool?.status, "failed");
   assert.equal(card?.trace[0]?.tool?.error, "failed");
+});
+
+test("worker cards retain the four task lifecycle statuses", () => {
+  for (const status of ["running", "completed", "failed", "cancelled"] as const) {
+    const state = createUiState("session", null, []);
+    const summary: AgentTaskSummary = {
+      taskId: `task-${status}`,
+      parentTurnId: "turn",
+      toolCallId: "delegate",
+      title: status,
+      status,
+      profileId: "implementation-worker",
+      providerId: "test",
+      modelId: "test",
+      revision: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      elapsedMs: 10,
+      contextTokens: 20,
+      ...(status === "failed" ? { error: "failed" } : {}),
+    };
+    reduceUiEvent(state, { type: "turn_preparing", input: "go", sessionId: "session" });
+    reduceUiEvent(state, { type: "agent_task_created", summary });
+    assert.equal(state.liveTurn?.blocks.find((block) => block.agentTask)?.agentTask?.summary.status, status);
+  }
 });
 
 test("turn_finished does not drop the live turn before history is committed", () => {

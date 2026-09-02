@@ -67,7 +67,7 @@ export class AgentRuntime {
     try {
       await this.agentTasks?.finishParentTurn(
         planned.id,
-        outcome === "completed" ? "Parent turn ended before this task was applied" : `Parent turn ${outcome}`,
+        outcome === "completed" ? "Parent turn ended" : `Parent turn ${outcome}`,
         options.onUiEvent,
       );
     } catch (cause) {

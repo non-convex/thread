@@ -3,7 +3,6 @@ import { AgentStepRunner } from "../agent/step-runner.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { safeUiEvent, type AgentTaskLiveEvent, type UiEvent, type UiEventSink } from "../ui/events.js";
-import type { WorkspaceStateService } from "../workspace-state/service.js";
 import { AgentTaskJournal } from "./journal.js";
 import type { AgentProfile, AgentTaskRun } from "./model.js";
 import { taskSpecMessage } from "./prompt.js";
@@ -41,12 +40,11 @@ function childEvent(event: UiEvent): AgentTaskLiveEvent | undefined {
 export class ImplementationTaskRunner {
   constructor(
     private readonly repository: AgentTaskRepository,
-    private readonly workspace: WorkspaceStateService,
+    private readonly rootPath: string,
   ) {}
 
   async run(taskId: string, profile: AgentProfile, parentSignal: AbortSignal, ui?: UiEventSink): Promise<void> {
     const task = this.repository.projection.require(taskId);
-    if (!task.baseStateId || !task.workspacePath) throw new Error(`Agent Task ${taskId} is not prepared`);
     const revision = task.runs.length;
     const startedAt = Date.now();
     const run: AgentTaskRun = { revision, startedAt };
@@ -56,8 +54,8 @@ export class ImplementationTaskRunner {
     const timeout = AbortSignal.timeout(profile.limits.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const journal = new AgentTaskJournal(this.repository, taskId);
-    if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, task.workspacePath));
-    const toolRunner = new ToolCallExecutor(task.workspacePath, profile.tools, new ExtensionEvents());
+    if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
+    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents());
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     const maxOutputTokens = Math.min(profile.model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)));
     const stepRunner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
@@ -92,21 +90,18 @@ export class ImplementationTaskRunner {
         if (step === profile.limits.maxSteps) throw new Error(`Worker exceeded ${profile.limits.maxSteps} model steps`);
       }
       signal.throwIfAborted();
-      const resultState = await this.workspace.captureFrom(task.workspacePath);
-      signal.throwIfAborted();
-      const changeSet = await this.workspace.createChangeSet(taskId, task.baseStateId, resultState.id, task.spec.writeScope);
-      await this.repository.storeChangeSet(changeSet);
-      await this.repository.append({ type: "changeset_created", taskId, changeSetId: changeSet.id }, true);
       await this.repository.append({
         type: "run_finished",
         taskId,
         run: { revision, startedAt, finishedAt: Date.now(), outcome: "completed", usage, finalResponse },
       });
-      await this.repository.append({ type: "status_changed", taskId, status: "awaiting_review" }, true);
+      await this.repository.append({ type: "status_changed", taskId, status: "completed" }, true);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       const cancelled = parentSignal.aborted;
-      await this.captureFailureArtifact(taskId, task.baseStateId, task.workspacePath, task.spec.writeScope).catch(() => undefined);
+      const errorMessage = timeout.aborted && !parentSignal.aborted
+        ? `Worker exceeded ${profile.limits.maxRuntimeMs}ms runtime limit`
+        : error.message;
       await this.repository.append({
         type: "run_finished",
         taskId,
@@ -117,26 +112,19 @@ export class ImplementationTaskRunner {
           outcome: cancelled ? "cancelled" : "failed",
           usage,
           finalResponse,
-          error: timeout.aborted && !parentSignal.aborted ? `Worker exceeded ${profile.limits.maxRuntimeMs}ms runtime limit` : error.message,
+          error: errorMessage,
         },
       });
       await this.repository.append({
         type: "status_changed",
         taskId,
         status: cancelled ? "cancelled" : "failed",
-        error: error.message,
+        error: errorMessage,
         ...(cancelled ? { reason: String(parentSignal.reason ?? "Parent turn ended") } : {}),
       }, true);
     } finally {
       this.updated(taskId, ui);
     }
-  }
-
-  private async captureFailureArtifact(taskId: string, baseStateId: string, workspacePath: string, scopes: import("../workspace-state/model.js").WorkspaceScope[]): Promise<void> {
-    const result = await this.workspace.captureFrom(workspacePath);
-    const changeSet = await this.workspace.createChangeSet(taskId, baseStateId, result.id, scopes);
-    await this.repository.storeChangeSet(changeSet);
-    await this.repository.append({ type: "changeset_created", taskId, changeSetId: changeSet.id }, true);
   }
 
   private updated(taskId: string, ui?: UiEventSink): void {

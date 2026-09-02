@@ -19,7 +19,7 @@ export {
 export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./agent/execution-journal.js";
-export { AgentTaskOrchestrator, type AgentTaskOutcome, type TaskInspection } from "./agent-task/orchestrator.js";
+export { AgentTaskOrchestrator, type AgentTaskOutcome } from "./agent-task/orchestrator.js";
 export { AgentTaskRepository } from "./agent-task/repository.js";
 export {
   AgentProfileRegistry,
