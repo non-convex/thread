@@ -99,7 +99,7 @@ export class WorkspaceMaterializer {
     for (const child of children) {
       const absolute = path.join(directory, child.name);
       const relative = slash(path.relative(root, absolute));
-      if (this.store.policy.excludedPaths.some((prefix) => relative === prefix || relative.startsWith(`${prefix}/`))) continue;
+      if (this.store.exclusions.matches(relative, child.isDirectory() || child.isSymbolicLink())) continue;
       const info = await lstat(absolute);
       const mode = info.mode & 0o777;
       if (child.isSymbolicLink()) output.push({ path: relative, kind: "symlink", mode, target: await readlink(absolute) });

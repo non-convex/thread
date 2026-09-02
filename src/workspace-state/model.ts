@@ -1,8 +1,11 @@
-export const WORKSPACE_STATE_FORMAT = "thread-workspace-state-v1" as const;
+export const WORKSPACE_STATE_FORMAT = "thread-workspace-state-v2" as const;
 
 export interface WorkspaceStatePolicy {
   /** Paths are project-relative, slash-separated directory prefixes. */
   excludedPaths: string[];
+  /** Directory basenames excluded at every depth of the project. */
+  excludedDirectoryNames: string[];
+  /** `.gitignore` is not otherwise used to define checkpoint contents. */
   includeIgnoredFiles: true;
   includeProjectMetadata: false;
 }
@@ -14,7 +17,7 @@ export type WorkspaceEntry =
 
 export interface WorkspaceState {
   format: typeof WORKSPACE_STATE_FORMAT;
-  formatVersion: 1;
+  formatVersion: 2;
   id: string;
   projectId: string;
   capturedAt: number;

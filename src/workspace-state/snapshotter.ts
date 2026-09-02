@@ -94,7 +94,7 @@ export class WorkspaceSnapshotter {
     await cooperativeSort(entries, (left, right) => left.path.localeCompare(right.path));
     const state: WorkspaceState = {
       format: WORKSPACE_STATE_FORMAT,
-      formatVersion: 1,
+      formatVersion: 2,
       id: this.store.stateId(entries),
       projectId: this.store.project.id,
       capturedAt: Date.now(),
@@ -133,7 +133,7 @@ export class WorkspaceSnapshotter {
         await maybeYield();
         const absolute = path.join(directory, child.name);
         const relative = slash(path.relative(rootPath, absolute));
-        if (this.excluded(relative)) return;
+        if (this.store.exclusions.matches(relative, child.isDirectory() || child.isSymbolicLink())) return;
         const info = await limit.run(() => lstat(absolute));
         const mode = info.mode & 0o777;
         if (child.isSymbolicLink()) {
@@ -169,11 +169,5 @@ export class WorkspaceSnapshotter {
     };
 
     await visit(rootPath);
-  }
-
-  private excluded(relativePath: string): boolean {
-    return this.store.policy.excludedPaths.some((prefix) =>
-      relativePath === prefix || relativePath.startsWith(`${prefix}/`)
-    );
   }
 }

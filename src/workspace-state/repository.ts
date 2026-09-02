@@ -3,6 +3,7 @@ import type { Project } from "../project/model.js";
 import { WorkspaceChangeApplier } from "./applier.js";
 import { WorkspaceDiffer } from "./differ.js";
 import { WorkspaceMaterializer } from "./materializer.js";
+import { DEFAULT_WORKSPACE_EXCLUDED_DIRECTORY_NAMES } from "./policy.js";
 import type {
   StagedWorkspaceState,
   WorkspaceChangeSet,
@@ -46,6 +47,7 @@ export class WorkspaceStateRepository {
     if (relativeStatePath && !relativeStatePath.startsWith("../") && relativeStatePath !== "..") excluded.add(relativeStatePath);
     this.policy = {
       excludedPaths: [...excluded].sort(),
+      excludedDirectoryNames: [...DEFAULT_WORKSPACE_EXCLUDED_DIRECTORY_NAMES],
       includeIgnoredFiles: true,
       includeProjectMetadata: false,
     };

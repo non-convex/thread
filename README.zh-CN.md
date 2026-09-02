@@ -75,7 +75,7 @@ thread logout openai-codex
 
 TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时，用来让首次模型请求与检查点解析重叠；workspace state ID 就绪后，它才成为 Session Tree 中的事实 Turn。随后记录同步进入内存投影，再由单一有序队列在后台写盘；工具执行和 turn 最终完成仍是必须等待的 durability barrier。turn 结束时的扫描是下一轮发送要保存的检查点；blob 落盘可以在后台完成。
 
-工作区状态使用内容寻址的 manifest 与 blob，位于 `~/.thread/projects/<project-id>/workspace-states`。默认包含 ignored 文件和空目录；排除 `.git`、`.thread`、Thread 自身状态目录、项目外路径、进程、数据库、网络副作用及其他外部状态。嵌入方可通过 `ThreadAppOptions.workspaceExcludedPaths` 增加项目相对排除项。
+工作区状态使用内容寻址的 manifest 与 blob，位于 `~/.thread/projects/<project-id>/workspace-states`。检查点包含空目录，并且不会笼统套用 `.gitignore`；但会在项目任意层级按目录名排除常见依赖、构建产物和缓存目录：`.build`、`.cache`、`.dart_tool`、`.gradle`、`.mypy_cache`、`.next`、`.nox`、`.nuxt`、`.nx`、`.output`、`.parcel-cache`、`.pytest_cache`、`.ruff_cache`、`.svelte-kit`、`.tox`、`.turbo`、`.venv`、`__pycache__`、`bower_components`、`build`、`coverage`、`dist`、`node_modules`、`out`、`target` 和 `venv`。此外还会排除 `.git`、`.thread`、Thread 自身状态目录、项目外路径、进程、数据库、网络副作用及其他外部状态。嵌入方可通过 `ThreadAppOptions.workspaceExcludedPaths` 增加项目相对排除项。
 
 ### Rewind
 

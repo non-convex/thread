@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Project } from "../project/model.js";
 import { sha256 } from "../utils/id.js";
 import { WORKSPACE_STATE_FORMAT, type WorkspaceEntry, type WorkspaceState, type WorkspaceStatePolicy } from "./model.js";
+import { WorkspacePathExclusions } from "./policy.js";
 
 function assertStateId(stateId: string): void {
   if (!/^state_[0-9a-f]{64}$/.test(stateId)) throw new Error(`Invalid workspace state id: ${stateId}`);
@@ -29,12 +30,14 @@ export class WorkspaceStateStore {
   readonly statesPath: string;
   readonly blobsPath: string;
   readonly policyPath: string;
+  readonly exclusions: WorkspacePathExclusions;
   private initialized = false;
 
   constructor(readonly project: Project, readonly policy: WorkspaceStatePolicy) {
     this.statesPath = path.join(project.statePath, "workspace-states", "states");
     this.blobsPath = path.join(project.statePath, "workspace-states", "blobs");
     this.policyPath = path.join(project.statePath, "workspace-states", "policy.json");
+    this.exclusions = new WorkspacePathExclusions(policy);
   }
 
   async initialize(): Promise<void> {
@@ -50,7 +53,7 @@ export class WorkspaceStateStore {
     if (existing === undefined) {
       await this.atomicWrite(this.policyPath, Buffer.from(`${JSON.stringify(this.policy, null, 2)}\n`, "utf8"));
     } else if (JSON.stringify(existing) !== JSON.stringify(this.policy)) {
-      throw new Error(`Workspace capture policy differs from the stored policy at ${this.policyPath}`);
+      throw new Error(`Unsupported workspace capture policy at ${this.policyPath}; old workspace states are not migrated or loaded`);
     }
     this.initialized = true;
   }
@@ -92,7 +95,7 @@ export class WorkspaceStateStore {
     }
     if (typeof parsed !== "object" || parsed === null) throw new Error(`Workspace state is invalid: ${stateId}`);
     const state = parsed as Partial<WorkspaceState>;
-    if (state.format !== WORKSPACE_STATE_FORMAT || state.formatVersion !== 1 || state.id !== stateId ||
+    if (state.format !== WORKSPACE_STATE_FORMAT || state.formatVersion !== 2 || state.id !== stateId ||
         state.projectId !== this.project.id || !Array.isArray(state.entries)) {
       throw new Error(`Workspace state is corrupt or belongs to another project: ${stateId}`);
     }
@@ -111,7 +114,7 @@ export class WorkspaceStateStore {
           !entry.path || path.isAbsolute(entry.path) || entry.path.split("/").includes("..")) {
         throw new Error(`Workspace state ${stateId} contains an unsafe path`);
       }
-      if (this.policy.excludedPaths.some((prefix) => entry.path === prefix || entry.path.startsWith(`${prefix}/`))) {
+      if (this.exclusions.matches(entry.path, entry.kind !== "file")) {
         throw new Error(`Workspace state ${stateId} contains excluded path ${entry.path}`);
       }
       if (paths.has(entry.path)) throw new Error(`Workspace state ${stateId} contains duplicate path ${entry.path}`);
