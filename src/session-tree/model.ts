@@ -56,18 +56,23 @@ export interface ToolExecutionEntry extends EntryBase {
   replay: "safe" | "never";
 }
 
-export type CompactionReason = "manual" | "threshold" | "overflow";
-
 export interface RetainedTurn {
   turnId: string;
   messages: Message[];
 }
 
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
 export interface CompactionEntry extends EntryBase {
   type: "compaction";
+  /** Cumulative cross-turn project-state document. */
   summary: string;
+  /** Model-visible retained turns, starting from the retention cut point. */
   retainedTurns: RetainedTurn[];
+  /** Optional in-turn progress summary when retention starts mid-turn. */
+  progressSummary?: string;
   tokensBefore: number;
+  tokensAfter: number;
   reason: CompactionReason;
 }
 

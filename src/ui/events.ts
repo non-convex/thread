@@ -44,7 +44,15 @@ export type UiEvent =
   | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string }
   | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }
   | { type: "compaction_finished"; reason: "threshold" | "overflow" | "manual"; ok: false }
-  | { type: "compaction_finished"; reason: "threshold" | "overflow" | "manual"; ok: true; entryId?: string; summary?: string }
+  | {
+      type: "compaction_finished";
+      reason: "threshold" | "overflow" | "manual";
+      ok: true;
+      entryId?: string;
+      summarizedSteps?: number;
+      retainedSteps?: number;
+      tokensSaved?: number;
+    }
   | { type: "workspace_checkpoint_started" }
   | {
       type: "turn_finished";

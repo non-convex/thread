@@ -90,9 +90,13 @@ TUI 会立即投影刚提交的用户消息。planned turn 只存在于运行时
 
 ### Context compaction
 
-Compaction 是追加写入 Session Tree 的一种 entry，保存摘要、逐字保留的完整 turn 后缀、压缩前 token 估算和触发原因。`/compact` 会把它追加到当前 live tip；模型窗口达到 78%，或 provider 报告 overflow 时，也会追加同一种 entry。
+Compaction 是追加写入 Session Tree 的一种 entry，保存累积的项目状态文档、保留的 turn 投影、可选的 turn 内进度 checkpoint、经过验证的压缩前后 token 估算和触发原因。`/compact` 会把它追加到当前 live tip；模型窗口达到 78%，或 provider 报告 overflow 时，也会在完整模型 step 边界追加同一种 entry。每次触发只处理一遍。
 
-生成摘要前，Thread 会先估算实际的 system/tool 开销，并固定为摘要预留 4K token；然后在 `system + summary + retained turns ≈ 20K` 的预算内，从最新 turn 向前保留尽可能多的完整 turn，同时无论是否超预算都至少保留最近两个 turn。每次模型请求都会重新遍历当前路径的 entries 来构建 live context。路径存在 compaction 时，只投影最新一条，形成 `summary + retained turns + 该 entry 之后追加的消息`。更早的原始 entry 不会被删除或改写，因此 rewind、分支、历史和搜索仍使用完整 Session Tree。
+保留的单位是一个完整 step：一条 assistant 响应连同它全部匹配的 tool result。一趟压缩至少保留最近 5 个 step，并在约 20K 工作集预算允许的范围内继续往前多留——预算已扣除项目状态文档的 4K 和进度 checkpoint 的 1K。step 下限优先于预算，因为单个工具输出本身有上限，而工作集过短比略微超预算更糟。尚未完成的 tool batch 永不切分。
+
+切点之前的内容全部折进项目状态文档，其中也包括上一份文档本身——它会被重新评估，而不是照抄。当切点落在某个 turn 内部时，该 turn 的用户请求会被复制到保留窗口，并在请求与保留 step 之间插入一份独立的进度 checkpoint，让模型无需重读刚刚舍弃的轨迹即可继续。两种摘要都以自己上一轮的输出作为输入向前滚动。每次摘要请求最多静默重试 3 次；重试耗尽则让本次压缩失败，而不是丢掉它本要移除的那段内容。
+
+每个候选压缩都必须有显著的预计收益，并且通过 builder 之后重放的同一套投影来测量。更早的原始 entry 不会被删除或改写，因此 rewind、分支、历史、搜索和 `session_read` 仍使用完整 Session Tree。
 
 ## 命令
 

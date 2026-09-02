@@ -526,8 +526,8 @@ export class ThreadApp {
           const result = await new Compact(this.runtime).execute(options);
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
           return { kind: "command", result: ephemeral(result.compacted
-            ? `Compaction entry appended: ${result.summarizedTurns} turn(s) summarized; ${result.retainedTurns} retained`
-            : "Nothing to compact without removing one of the newest two complete turns", result.compacted) };
+            ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
+            : "Nothing can be compacted with a meaningful estimated token reduction", result.compacted) };
         } catch (error) {
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: false });
           throw error;

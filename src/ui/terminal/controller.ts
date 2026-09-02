@@ -96,7 +96,7 @@ export class ThreadTuiController {
   constructor(private readonly app: ThreadApp) {
     this.slashSuggestions = [
       { name: "clear", description: "Clear the visible transcript" },
-      { name: "compact", description: "Append a compaction checkpoint to the current path" },
+      { name: "compact", description: "Compact the current path's live context" },
       { name: "model", description: "Choose the active model" },
       { name: "new", description: "Create an empty Session from the project Root" },
       { name: "session", description: "List or resume root Sessions" },

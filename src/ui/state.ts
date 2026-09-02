@@ -198,6 +198,23 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
   }
 }
 
+/**
+ * One-line detail for a finished compaction. The summaries themselves are large
+ * and already visible through the persisted entry, so the live row reports the
+ * shape of the pass instead of its prose.
+ */
+function compactionDetail(event: {
+  summarizedSteps?: number;
+  retainedSteps?: number;
+  tokensSaved?: number;
+}): string | undefined {
+  const parts: string[] = [];
+  if (event.summarizedSteps !== undefined) parts.push(`${event.summarizedSteps} step(s) summarized`);
+  if (event.retainedSteps !== undefined) parts.push(`${event.retainedSteps} retained`);
+  if (event.tokensSaved !== undefined) parts.push(`~${event.tokensSaved} tokens freed`);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
 function inFlightToolActivity(live: LiveTurn | undefined): string {
   const names = live?.blocks
     .filter((block) => block.tool?.status === "queued" || block.tool?.status === "running")
@@ -474,6 +491,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.activity = event.ok ? (event.entryId ? "context compacted" : "context unchanged") : "compaction failed";
       if (event.ok && event.entryId && state.liveTurn) {
         const closed = endStreaming(state.liveTurn);
+        const detail = compactionDetail(event);
         state.liveTurn = {
           ...closed,
           blocks: [
@@ -482,7 +500,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
               id: `compaction:${event.entryId}`,
               kind: "compaction",
               content: `context compacted · ${event.reason}`,
-              ...(event.summary ? { detail: event.summary } : {}),
+              ...(detail ? { detail } : {}),
             },
           ],
         };

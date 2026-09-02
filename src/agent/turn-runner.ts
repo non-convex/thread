@@ -1,7 +1,10 @@
 import { type AssistantMessage, type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
-import type { ContextCompactionService, CompactionResult } from "../context/compaction.js";
+import {
+  type ContextCompactionService,
+  type CompactionResult,
+} from "../context/compaction/index.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { Turn } from "../session-tree/model.js";
 import type { PlannedTurn, SessionTreeService } from "../session-tree/service.js";
@@ -61,10 +64,8 @@ export class TurnRunner {
         ? await this.assemblePlanned(prepared, planned)
         : await this.assemble(planned.id);
       const budget = this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
-      // Automatic compaction is inline at a model-step boundary. It appends a
-      // checkpoint to this running turn, rebuilds its live context, then starts
-      // the same pending step without finishing or replacing the turn.
-      if (budget.requestTokens > Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO) &&
+      const threshold = Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
+      if (budget.requestTokens > threshold &&
           this.compaction.needsCompaction(assembled.built, budget.overheadTokens, planned.id)) {
         const compacted = await this.compactBuilt(assembled, options, {
           reason: "threshold",
@@ -74,9 +75,7 @@ export class TurnRunner {
         });
         if (compacted.compacted) {
           assembled = await this.assemble(planned.id);
-          if (options.onUiEvent) {
-            this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
-          }
+          this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
         }
       }
       const journal = new SessionTurnJournal(this.tree, planned.id, turnReady);
@@ -105,13 +104,37 @@ export class TurnRunner {
       if (this.stepRunner.isContextOverflow(response)) {
         if (overflowRecoveryUsed) throw new Error("Context overflow remained after compaction; use /rewind or /new");
         overflowRecoveryUsed = true;
-        const overflowContext = await this.assemble(planned.id);
+        let overflowContext = await this.assemble(planned.id);
+        const overflowBudget = this.reportContextUsage(
+          overflowContext.context,
+          overflowContext.built.messages,
+          options.onUiEvent,
+        );
+        if (!this.compaction.needsCompaction(
+          overflowContext.built,
+          overflowBudget.overheadTokens,
+          planned.id,
+        )) {
+          throw new Error("Context overflow cannot be reduced by compaction; use /rewind or /new");
+        }
         const recovered = await this.compactBuilt(overflowContext, options, {
           reason: "overflow",
           turnId: planned.id,
           appendAfter: turnReady,
+          budget: overflowBudget,
         });
-        if (!recovered.compacted) throw new Error("Context overflow cannot be compacted while retaining the newest two turns");
+        if (!recovered.compacted) {
+          throw new Error("Context overflow cannot be reduced by compaction; use /rewind or /new");
+        }
+        overflowContext = await this.assemble(planned.id);
+        const recoveredBudget = this.reportContextUsage(
+          overflowContext.context,
+          overflowContext.built.messages,
+          options.onUiEvent,
+        );
+        if (recoveredBudget.requestTokens >= this.model.contextWindow) {
+          throw new Error("Context remains above the model window after compaction; use /rewind or /new");
+        }
         continue;
       }
       if (response.stopReason === "aborted" || options.signal.aborted) {
@@ -216,7 +239,14 @@ export class TurnRunner {
         type: "compaction_finished",
         reason: invocation.reason,
         ok: true,
-        ...(result.compacted ? { entryId: result.entryId, summary: result.summary } : {}),
+        ...(result.compacted
+          ? {
+              entryId: result.entryId,
+              summarizedSteps: result.summarizedSteps,
+              retainedSteps: result.retainedSteps,
+              tokensSaved: result.tokensBefore - result.tokensAfter,
+            }
+          : {}),
       });
       return result;
     } catch (error) {

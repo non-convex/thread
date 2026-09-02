@@ -1,4 +1,4 @@
-import type { SessionEntry, ToolExecutionEntry } from "../../session-tree/model.js";
+import type { CompactionEntry, SessionEntry, ToolExecutionEntry } from "../../session-tree/model.js";
 import { AGENT_TASK_TOOL_NAMES, type AgentTask, type AgentTaskSummary } from "../../agent-task/model.js";
 import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 
@@ -17,6 +17,13 @@ function textContent(content: unknown): string {
 function summarizeArgs(args: Record<string, unknown>): string {
   const rendered = JSON.stringify(args);
   return rendered.length > 160 ? `${rendered.slice(0, 157)}…` : rendered;
+}
+
+function compactionEntryDetail(entry: CompactionEntry): string | undefined {
+  const summary = entry.summary.trim();
+  if (summary) return summary;
+  if (entry.progressSummary) return entry.progressSummary.trim();
+  return undefined;
 }
 
 export function projectLiveUser(turn: Pick<LiveTurn, "id" | "input">): TranscriptItem {
@@ -86,11 +93,12 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
       continue;
     }
     if (entry.type === "compaction") {
+      const detail = compactionEntryDetail(entry);
       output.push({
         id: entry.id,
         kind: "compaction",
         content: `context compacted · ${entry.reason}`,
-        detail: entry.summary,
+        ...(detail ? { detail } : {}),
       });
       continue;
     }

@@ -10,11 +10,12 @@ export { WorkspaceStateRepository } from "./workspace-state/repository.js";
 export { ContextBuilder, type BuiltContext } from "./context/builder.js";
 export {
   ContextCompactionService,
-  COMPACTION_MIN_RETAINED_TURNS,
-  COMPACTION_SUMMARY_RESERVE_TOKENS,
+  COMPACTION_MIN_RETAINED_STEPS,
+  COMPACTION_HISTORY_RESERVE_TOKENS,
+  COMPACTION_PROGRESS_RESERVE_TOKENS,
   COMPACTION_TARGET_TOKENS,
   type CompactionResult,
-} from "./context/compaction.js";
+} from "./context/compaction/index.js";
 export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./agent/execution-journal.js";

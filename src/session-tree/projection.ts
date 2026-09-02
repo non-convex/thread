@@ -18,6 +18,8 @@ function assertUnused<T>(values: Map<string, T>, id: string, label: string): voi
   if (values.has(id)) throw new SessionTreeCorruptionError(`Duplicate ${label}: ${id}`);
 }
 
+
+
 export class SessionTreeProjection {
   tree: SessionTree | undefined;
   activeSessionId: string | undefined;
@@ -118,15 +120,24 @@ export class SessionTreeProjection {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not begin with its user entry`);
         }
         if (entry.type === "compaction") {
-          const retainedTurnsValid = Array.isArray(entry.retainedTurns) && entry.retainedTurns.length >= 2 &&
+          const retainedTurnsValid = Array.isArray(entry.retainedTurns) &&
+            entry.retainedTurns.length >= 1 &&
             entry.retainedTurns[entry.retainedTurns.length - 1]?.turnId === turn.id &&
             entry.retainedTurns.every((retained, index) => {
-              if (!retained || typeof retained.turnId !== "string" || !Array.isArray(retained.messages)) return false;
+              if (!retained || typeof retained.turnId !== "string") return false;
+              if (!Array.isArray(retained.messages) || retained.messages.length === 0) return false;
+              if (retained.messages[0]?.role !== "user") return false;
               const source = this.turns.get(retained.turnId);
               if (!source || source.sessionId !== turn.sessionId) return false;
               return index === 0 || source.parentTurnId === entry.retainedTurns[index - 1]!.turnId;
             });
-          if (!entry.summary.trim() || !retainedTurnsValid ||
+          const tokenResultValid = Number.isFinite(entry.tokensAfter) && 
+            entry.tokensAfter >= 0 && 
+            entry.tokensAfter < entry.tokensBefore;
+          const progressSummaryValid = entry.progressSummary === undefined ||
+            (typeof entry.progressSummary === "string" && entry.progressSummary.trim().length > 0);
+          if (!retainedTurnsValid || !tokenResultValid || !progressSummaryValid ||
+              typeof entry.summary !== "string" ||
               !Number.isFinite(entry.tokensBefore) || entry.tokensBefore < 0 ||
               !["manual", "threshold", "overflow"].includes(entry.reason)) {
             throw new SessionTreeCorruptionError(`Invalid compaction entry: ${entry.id}`);

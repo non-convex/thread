@@ -239,7 +239,9 @@ export class SessionTreeService {
     summary: string;
     retainedTurns: RetainedTurn[];
     tokensBefore: number;
+    tokensAfter: number;
     reason: CompactionReason;
+    progressSummary?: string;
   }): Promise<CompactionEntry> {
     const turn = this.projection.turns.get(input.turnId);
     if (!turn) throw new Error(`Unknown compaction turn: ${input.turnId}`);
@@ -258,7 +260,9 @@ export class SessionTreeService {
       summary: input.summary.trim(),
       retainedTurns: structuredClone(input.retainedTurns),
       tokensBefore: input.tokensBefore,
+      tokensAfter: input.tokensAfter,
       reason: input.reason,
+      ...(input.progressSummary ? { progressSummary: input.progressSummary.trim() } : {}),
     };
     await this.repository.append(() => ({ type: "entry_appended", entry }));
     return structuredClone(entry);

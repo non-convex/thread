@@ -5,7 +5,7 @@ import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { TurnRunner } from "../agent/turn-runner.js";
 import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { ContextBuilder } from "../context/builder.js";
-import { ContextCompactionService } from "../context/compaction.js";
+import { ContextCompactionService } from "../context/compaction/index.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";

@@ -146,9 +146,11 @@ test("compaction rows keep the full summary for expansion", () => {
     reason: "manual",
     ok: true,
     entryId: "entry-live",
-    summary: "## Current project state\n\nstill going",
+    summarizedSteps: 7,
+    retainedSteps: 5,
+    tokensSaved: 42_000,
   });
   const block = state.liveTurn?.blocks.find((item) => item.kind === "compaction");
   assert.equal(block?.content, "context compacted · manual");
-  assert.equal(block?.detail, "## Current project state\n\nstill going");
+  assert.equal(block?.detail, "7 step(s) summarized · 5 retained · ~42000 tokens freed");
 });

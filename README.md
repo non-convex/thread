@@ -90,9 +90,13 @@ The next user message naturally creates a new child path. A missing or corrupt w
 
 ### Context compaction
 
-Compaction is an append-only Session Tree entry. It stores a summary, a verbatim suffix of complete turns, the pre-compaction token estimate, and the trigger reason. `/compact` appends one to the current live tip; automatic compaction appends the same entry type at 78% of the model window and after a provider reports overflow.
+Compaction is an append-only Session Tree entry. It stores the cumulative project-state document, the retained turn projections, an optional in-turn progress checkpoint, verified before/after token estimates, and the trigger reason. `/compact` appends one to the current live tip; automatic compaction runs at complete model-step boundaries at 78% of the model window and after a provider reports overflow. Each trigger is a single pass.
 
-Before generating a summary, Thread estimates the actual system/tool overhead and reserves 4K tokens for the summary. It then retains the largest suffix of whole turns that keeps `system + summary + retained turns` near 20K tokens, while always retaining at least the newest two turns. Every model request rebuilds live context from the current path's entries. If the path contains compactions, only the newest one is projected as `summary + retained turns`, followed by messages appended after that entry. Earlier entries are not deleted or rewritten, so rewind, branching, history, and search continue to use the complete Session Tree.
+The unit of retention is one complete step: an assistant response together with every matching tool result. A pass keeps at least the newest five steps and extends further back only while a roughly 20K working-set budget allows, after reserving 4K for the project-state document and 1K for the progress checkpoint. The step floor wins over the budget, because per-tool output is capped and a starved working set is worse than a slightly over-budget one. An in-flight tool batch is never split.
+
+Everything before the cut is folded into the project-state document, including the previous document, which is re-evaluated rather than copied. When the cut lands inside a turn, that turn's request is copied into the retained window and a separate progress checkpoint is inserted between the request and the retained steps, so the model can continue without re-reading the trajectory it just gave up. Both summaries roll forward from their own previous output. Each summary request is retried silently up to three times; exhausting the retries fails the compaction rather than dropping the region it was about to remove.
+
+Every candidate must have a material estimated benefit, measured through the same projection the builder replays on later requests. Earlier entries are not deleted or rewritten, so rewind, branching, history, search, and `session_read` continue to use the complete Session Tree.
 
 ### Implementation workers
 
