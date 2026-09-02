@@ -2,9 +2,9 @@
 
 # Thread
 
-**围绕持久化 Session Tree 构建、支持 turn 级工作区回退的 coding-agent runtime。**
+**Coding agent 的项目记忆：每个项目一棵持久化 Session Tree。**
 
-[English](./README.md) · [Releases](https://github.com/non-convex/thread/releases) · [架构](#架构)
+[English](./README.md) · [Releases](https://github.com/non-convex/thread/releases) · [开发](#开发)
 
 [![CI](https://github.com/non-convex/thread/actions/workflows/ci.yml/badge.svg)](https://github.com/non-convex/thread/actions/workflows/ci.yml)
 [![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-f9f1e1?logo=bun)](https://bun.sh)
@@ -12,65 +12,56 @@
 
 </div>
 
-Thread 为每个项目维护一棵持久化对话树。它保留你走过的完整路径，可以在不改动文件的情况下开启独立 Session，也可以把工作区精确恢复到某条用户消息执行之前。
+一个软件项目不只有当前文件。与 agent 的每次交互、每个决策、每次工具调用和执行结果，都是项目历史的一部分。
 
-项目目录仍是普通磁盘状态，Git 也仍然只负责 Git 的事情。Thread 在它们之外增加一份只追加的 agent 工作记录，以及内容寻址的工作区检查点。
+Thread 为每个项目维护一棵持久化的 **Session Tree**，把这些历史记录下来。历史本身就是项目记忆，不需要再创造一套必须与真实历史同步的“记忆实体”。Agent 可以搜索和召回不同 Session 与历史分支中的 turn，再用当前工作区核对召回的证据。
+
+目前，agent 通过显式搜索与召回使用这份记忆；跨整棵树的某种项目级全局感知仍待实现。跨项目的全局记忆和 **Dreamer** 机制正在开发中。
 
 ```text
 Project
 ├── Current workspace
 └── Persistent Session Tree
-    ├── Root
-    ├── Session A: Turn 1 → Turn 2 → Turn 3
-    │                            └────→ rewind 后的 Turn 3′
-    └── Session B: /new 创建的独立空上下文
+    ├── Session A
+    │   ├── Turn 1: request → agent messages → execution trace
+    │   ├── Turn 2
+    │   └── Turn 3 ──────┐
+    │                    └── rewind 后的 Turn 3′
+    └── Session B: /new 创建的独立上下文
 ```
 
-## 界面展示
+Thread 有意保持概念精简：Project → Session Tree → Session → Turn 与 Entry。工作区检查点把历史连接到可恢复的文件状态；Git、进程、数据库和远程服务继续作为外部系统存在，而不是变成新的 Thread 实体。
+
+## 界面
 
 ![Thread 欢迎界面](docs/assets/thread-welcome.png)
 
-<p align="center"><em>全屏 TUI 直接打开当前项目的持久化 Session Tree。</em></p>
+<p align="center"><em>打开项目，直接进入它的持久化 Session Tree。</em></p>
 
 ![Thread 执行编码任务](docs/assets/thread-session.png)
 
-<p align="center"><em>在一个界面中查看流式思考、工具活动、耗时、上下文用量、模型和 thinking level。</em></p>
+<p align="center"><em>在一个界面中查看思考、工具活动、耗时、上下文用量、模型和 thinking level。</em></p>
 
-## 为什么是 Thread
+## 当前能力
 
-| 需求 | Thread 的做法 |
-| --- | --- |
-| 隔天继续项目工作 | 按项目持久化 Session、turn、消息、工具事实和 live tip。 |
-| 安全尝试另一条路线 | `/rewind` 恢复 turn 前的工作区，并从那里分叉，不删除旧路径。 |
-| 从干净上下文开始 | `/new` 创建空的根 Session，但保持项目文件不变。 |
-| 找回当前路径之外的工作 | Agent 可以搜索并读取其他 Session 和历史分支中的 turn。 |
-| 支撑长任务 | 手动或自动压缩 live context，不重写 Session Tree。 |
-| 并行处理边界清晰的实现工作 | 可选 worker 在共享工作区执行一到两个互不重叠的叶子任务。 |
-| 接入不同模型后端 | 支持 ChatGPT 订阅登录，以及可配置的 OpenAI / Anthropic 兼容 provider。 |
-
-## 设计主张
-
-核心想法很简单：每个项目只有一棵持久化 Session Tree。它是项目历史的主干；所有与 agent 的交互和 agent 的执行轨迹，共同代表这个项目的全部历史。这就是项目级记忆。Agent 目前可以搜索和召回这份记忆；跨整棵树的某种项目级全局感知仍待实现。
-
-跨项目的全局记忆和 **Dreamer** 机制正在开发中。
-
-设计遵循三个原则：
-
-- **保持精简。** 不过度设计；如无必要，勿增实体。
-- **保护上下文与缓存局部性。** 精心设计上下文管理和压缩策略，尽量保持稳定前缀，避免无谓破坏 prompt cache 命中。
-- **让每个 token 都有进入上下文的理由。** 只有确实需要影响当前步骤的信息才进入 active context，避免窗口过早膨胀；更细粒度的上下文准入机制仍待实现。
-
-Thread 不是版本控制替代品。它恢复的是受管理的工作区，而不是 commit、branch、进程、数据库、远程服务或其他外部副作用。
+- **持久化项目历史。** Session、turn、消息、工具事实、结果、状态、分支和 live tip 都能跨重启保留。
+- **项目记忆召回。** `session_search` 与 `session_read` 可以访问其他 Session 和 rewind 后离开当前路径的历史。
+- **Turn 级工作区回退。** `/rewind` 恢复所选用户 turn 之前的检查点，同时保留原路径。
+- **克制的上下文管理。** 普通模型请求只接收 active live path；compaction 缩减长上下文，但不改写历史。
+- **可靠执行。** 工具副作用发生前，工具开始事实与工作区状态必须越过持久化屏障；中断的工作会被封口，绝不自动重放。
+- **可选 implementation worker。** 一到两个互不重叠的叶子任务可以在共享工作区运行。
+- **灵活的模型接入。** 支持 ChatGPT 订阅，以及可配置的 OpenAI / Anthropic 兼容 provider。
+- **两种终端模式。** 交互式终端使用全屏 TUI，非 TTY 场景自动回退到 plain 模式。
 
 ## 快速开始
 
 ### 环境要求
 
-- 使用 [standalone release](https://github.com/non-convex/thread/releases)，或在从源码运行时准备 Bun 1.3+
-- 已配置的模型 provider，或 ChatGPT 订阅登录
+- 使用 [standalone release](https://github.com/non-convex/thread/releases)，或从源码运行时准备 Bun 1.3+
+- 模型 provider 或 ChatGPT 订阅登录
 - 内置代码搜索工具需要 [ripgrep](https://github.com/BurntSushi/ripgrep)（`rg`）
 
-不要求 Git，任何已有目录都可以作为项目打开。
+不要求 Git，Thread 可以把任意已有目录作为项目打开。
 
 ### 使用发行版
 
@@ -80,7 +71,7 @@ Thread 不是版本控制替代品。它恢复的是受管理的工作区，而�
 thread --root /path/to/project
 ```
 
-交互式 TTY 默认进入全屏界面；管道或重定向场景会自动使用 plain 模式，也可通过 `--tui plain` 强制指定。
+使用 `--tui plain` 可以强制进入 plain 模式。
 
 ### 从源码运行
 
@@ -91,11 +82,11 @@ bun install
 bun run dev --root /path/to/project
 ```
 
-后文示例默认使用发行版命令；从源码运行时，把命令开头的 `thread` 替换为 `bun run dev`。
+后文示例默认使用发行版命令；从源码运行时，把开头的 `thread` 替换为 `bun run dev`。
 
 ### 连接模型
 
-ChatGPT 订阅用户最快可以使用内置的 `openai-codex` OAuth provider：
+ChatGPT 订阅用户可以使用内置的 `openai-codex` OAuth provider：
 
 ```bash
 thread login openai-codex
@@ -109,164 +100,136 @@ thread --root /path/to/project
 thread --root /path/to/project --provider openai-codex --model <model-id>
 ```
 
-这份登录由 Thread 独立持有，不与 Codex CLI 共用凭据文件。凭据保存在 `~/.thread/auth.json`（或 `$THREAD_HOME/auth.json`），应按密码文件保护。使用 `thread logout openai-codex` 可以删除登录信息。
+Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/auth.json`（或 `$THREAD_HOME/auth.json`），应按密码文件保护。使用 `thread logout openai-codex` 可以删除登录信息。
 
-如果使用 API key 或兼容中转服务，把 [`thread.config.example.json`](./thread.config.example.json) 复制到 `~/.thread/config.json`，修改 provider 与 model，然后设置 `apiKeyEnv` 指定的环境变量。自定义 provider 支持：
+如果使用 API key 或兼容中转服务，把 [`thread.config.example.json`](./thread.config.example.json) 复制到 `~/.thread/config.json`，修改 provider 与 model，再设置 `apiKeyEnv` 指定的环境变量。自定义 provider 支持 `openai-responses`、`openai-completions` 和 `anthropic-messages`。
 
-- `openai-responses`
-- `openai-completions`
-- `anthropic-messages`
+## 项目记忆
 
-## 核心概念
+### Session 是同一份历史中的不同路径
 
-### 一个项目，一棵 Session Tree
-
-项目身份只取决于规范化后的项目路径。每个项目只有一个虚拟 Root，可以拥有任意数量的顶层 Session。
+一个项目只有一个虚拟 Root，可以拥有任意数量的顶层 Session。Session 不是工作区副本，而是项目历史中的一条独立路径。
 
 - `/new` 创建并激活空 Session；它不复制消息、不调用模型、不总结历史，也不修改文件。
-- `/session` 列出所有 Session。
-- `/session <id>` 从某个 Session 保存的 live tip 继续，但不改变当前工作区。
+- `/session` 列出 Session。
+- `/session <id>` 从保存的 live tip 继续，同样不改变文件。
 
-模型默认只看到活动 Session 的当前路径。历史分支和其他 Session 仍会作为项目记忆保留，agent 可以通过 `session_search` 和 `session_read` 搜索、读取；当正确性依赖这些可能过时的证据时，agent 会被要求重新核对当前文件。
+模型默认只看到活动 Session 的 live path，其他内容继续留在项目记忆中，需要时再召回。
 
-### Turn 与工作区检查点
+### Turn 连接交互、执行与工作区状态
 
-每个 turn 保存用户消息、assistant 输出、工具调用与结果、父 turn、结束状态和 workspace-state ID。这个 workspace state 表示用户 turn 开始前的检查点。
+每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和 workspace-state ID。这个 workspace state 是用户 turn 开始前的检查点。
 
-Turn 结束时，Thread 会捕获供下一次发送使用的新检查点；后续 turn 直接复用它，只有进程中的第一个 turn 需要做启动扫描。这样首次模型请求可以与检查点解析重叠，同时所有工具副作用之前仍存在可靠的 turn 前边界。
+Turn 结束时，Thread 捕获供下一次发送使用的新检查点；进程中的第一个 turn 会先做启动扫描。失败或中断的 turn 会被补成合法对话前缀并继续作为 live tip，让下一条请求从真实发生过的历史继续。
 
-失败或中断的 turn 会被补成合法对话前缀，并继续作为 live tip。重启时，仍标记为 running 的 turn 也会按相同方式封口；已经启动过的工具绝不会自动重放。
+Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进父 agent 上下文。父 agent 只接收精简任务结果，并直接检查共享工作区。Session Tree、任务轨迹与工作区检查点共同构成这个项目被记录下来的历史。
 
-### Rewind 不会抹掉历史
+### Rewind 产生分支
 
-`/rewind` 只展示当前 live path 上的用户 turn。选择一个 turn 后，Thread 会依次：
+`/rewind` 列出 active live path 上的用户 turn。选择一个 turn 后，Thread 会：
 
-1. 校验并恢复该 turn 开始前保存的检查点；
-2. 把 Session live tip 移到它的父 turn；
-3. 从新的 live path 重建模型上下文；
-4. 在 Session Tree 中保留所选 turn 及其全部后续历史。
+1. 校验并恢复它的 turn 前工作区检查点；
+2. 把 Session live tip 移到该 turn 的父节点；
+3. 从新路径重建上下文；
+4. 在历史中保留所选 turn 及其所有后续内容。
 
-你的下一条消息会自然生成新分支。如果检查点缺失或损坏，rewind 会在移动 live tip 之前失败。
+下一条消息会自然生成新的子路径。检查点缺失或损坏时，操作会在 live tip 移动之前失败。
 
-需要注意一个精确边界：检查点来自上一个已完成 turn。Thread 空闲期间、检查点生成之后、下一次发送之前发生的手工修改，不属于下一 turn 的“turn 前状态”。
+检查点来自上一个已完成 turn。Thread 空闲期间、检查点生成之后发生的手工修改，不属于下一 turn 的“turn 前状态”。
 
-### Context compaction
+### 搜索、召回与未来的全局感知
 
-Compaction 是另一种只追加的 Session Tree entry，不会重写历史。它保存滚动的项目状态摘要、保留的完整模型 step，以及切点落在 turn 内部时使用的独立进度 checkpoint。
+`session_search` 搜索所有 Session 和历史分支；`session_read` 读取一个命中 turn，或它附近的一段有界路径。召回的信息可能已经过时，因此正确性依赖它时，agent 会重新核对当前文件。
 
-- `/compact` 手动请求一次压缩。
-- 上下文达到 78%，或 provider 报告 overflow 时，会在完整 model-step 边界自动压缩。
-- 每次至少保留最新五个完整 step，并在约 20K token 的工作集预算允许时向前扩展。
-- 更早的 turn 仍然可用于 rewind、history、search 和 `session_read`。
+搜索与召回是目前使用项目记忆的接口。计划中的项目级全局感知，会让 agent 在不把所有旧 turn 塞进 active context 的前提下感知相关历史。跨项目全局记忆和 Dreamer 机制也沿用同一个原则：从已记录的历史中提炼有用记忆，而不是建立第二个事实源。
 
-### 可选 implementation worker
+## 上下文策略
 
-Subagent 默认关闭。运行 `/subagent`，选择 **On**，再显式选择 worker model。主 agent 随后可以把一到两个写入范围互不重叠的独立叶子任务委派出去。
+上下文是有限的工作集，不是项目记忆的完整镜像。
 
-Worker 直接编辑同一项目目录，不存在私有副本或 apply 步骤。`writeScope` 是协调边界，不是文件系统沙箱。主 agent 仍负责检查当前文件、运行测试，并可以在同一 worker 上下文中请求返工。
+- 普通请求只包含 active live path；路径之外的历史通过显式召回按需进入。
+- Skills 只在启动时加载一次，成为稳定的 system-prompt 前缀。
+- Compaction 只发生在完整 model-step 边界，并作为新的 append-only tree entry 保存。
+- 尽量保持稳定前缀和 prompt cache 局部性；没有显著上下文收益时，不应通过压缩无谓破坏缓存命中。
+- 目标策略会更加严格：只有必须影响当前步骤的信息才进入上下文。更细粒度的准入机制仍待实现，用来避免窗口过早膨胀。
 
-Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，同时保留已经写入的文件。需要恢复整个工作区时使用 `/rewind`。完整设计见 [Subagent 架构](./docs/subagent-architecture.md)。
+`/compact` 手动请求一次压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 工作集预算允许时向前扩展。更早的历史仍可用于 rewind、搜索和召回。
+
+## Implementation worker
+
+Subagent 默认关闭。运行 `/subagent`，选择 **On**，再显式选择 worker model。主 agent 随后可以委派一到两个 `writeScope` 互不重叠的独立叶子任务。
+
+Worker 直接编辑当前项目，不存在私有副本或 apply 步骤；`writeScope` 是协调边界，不是文件系统沙箱。主 agent 负责检查文件与测试，也可以在同一 worker 上下文中要求返工。
+
+Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，同时保留已经写入的文件。需要恢复整个工作区时使用 `/rewind`。完整说明见 [Subagent 架构](./docs/subagent-architecture.md)。
 
 ## 命令
-
-### 认证命令
 
 | 命令 | 用途 |
 | --- | --- |
 | `thread login <provider>` | 启动受支持的订阅登录。 |
 | `thread logout <provider>` | 删除 provider 凭据。 |
 | `thread auth status` | 查看订阅认证状态。 |
-
-### 交互命令
-
-| 命令 | 用途 |
-| --- | --- |
-| `/new` | 从 Root 创建空 Session，保持工作区文件不变。 |
-| `/session [<session-id>]` | 列出 Session，或从保存的 tip 继续。 |
+| `/new` | 创建空 Session，保持工作区文件不变。 |
+| `/session [<session-id>]` | 列出或恢复 Session。 |
 | `/rewind [<turn-id-or-user-entry-id>]` | 选择或直接恢复 turn 前检查点。 |
-| `/compact` | 压缩活动路径的 live model context。 |
+| `/compact` | 压缩 active live context。 |
 | `/model [all\|list [provider]\|<provider>/<model>]` | 查看或切换主模型。 |
 | `/subagent [off\|on [all]\|<provider>/<model>]` | 配置 implementation worker。 |
 | `/skill [<name> [extra instruction]]` | 列出或调用已加载 skill。 |
-| `/thread status` | 查看项目和活动 Session Tree 状态。 |
-| `/thread sessions` | 列出根 Session 与保存的 live tip。 |
+| `/thread status` | 查看项目和活动树状态。 |
+| `/thread sessions` | 列出 Session 与保存的 live tip。 |
 | `/thread open <session-id>` | 恢复 Session，不改变文件。 |
-| `/thread history` | 浏览整棵项目树中的 turn。 |
-| `/thread search <query> [<query> ...]` | 搜索所有 Session 和历史路径。 |
-| `/clear` | 只清空当前可见 transcript。 |
+| `/thread history` | 浏览整棵树中的 turn。 |
+| `/thread search <query> [<query> ...]` | 搜索所有 Session 和分支。 |
+| `/clear` | 清空当前可见 transcript。 |
 | `/exit` | 退出 Thread。 |
 
 全屏 TUI 中，`Shift+Tab` 循环切换模型支持的 thinking level，`Esc` 中断当前 turn。
 
-## 配置与状态
+## 配置与存储
 
-Thread 默认读取 `~/.thread/config.json`。如果该文件不存在，会回退到 `~/.pi/agent` 下兼容的 provider 与默认模型配置。
-
-模型选择优先级为：
+Thread 默认读取 `~/.thread/config.json`；该文件不存在时，会回退到 `~/.pi/agent` 下的兼容设置。主模型选择优先级为：
 
 ```text
 --provider/--model 或 THREAD_PROVIDER/THREAD_MODEL
-→ ~/.thread/state.json 中记住的交互式选择
+→ ~/.thread/state.json 中记住的选择
 → ~/.thread/config.json 中的 model
 ```
 
-常用环境变量：
+`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。主模型、thinking level、subagent 开关和 worker model 会保存在 `~/.thread/state.json`。
 
-| 变量 | 用途 |
-| --- | --- |
-| `THREAD_HOME` | 修改状态目录，默认为 `~/.thread`。 |
-| `THREAD_CONFIG` | 使用其他配置文件。 |
-| `THREAD_PROVIDER` | 选择主 provider，需要与 `THREAD_MODEL` 同时使用。 |
-| `THREAD_MODEL` | 选择主模型，需要与 `THREAD_PROVIDER` 同时使用。 |
-
-Thinking level、主模型选择、subagent 开关和 worker model 会保存在 `~/.thread/state.json`。Skills 在启动时加载一次。Extensions 可以通过导出 API 注册工具、Session Tree 命令和 runtime hook。
-
-## 持久化与安全边界
-
-项目状态保存在工作区之外的 `~/.thread/projects/<project-id>`：
+项目状态位于工作区之外：
 
 ```text
-project.json
-session-tree/
-  tree.json
-  events.jsonl
-workspace-states/
-  states/
-  blobs/
-agent-tasks/
-  events.jsonl
+~/.thread/projects/<project-id>/
+├── project.json
+├── session-tree/{tree.json,events.jsonl}
+├── workspace-states/{states,blobs}
+└── agent-tasks/events.jsonl
 ```
 
-Session Tree 与 Agent Task 分别使用独立的只追加 JSONL 事件流。Workspace state 由内容寻址的 manifest 和 blob 组成，并记录空目录。
+Session Tree 与 Agent Task 分别使用独立的 append-only log，workspace state 使用内容寻址。检查点会排除 Thread 元数据和常见生成目录，例如 `.git`、`.thread`、`node_modules`、`dist`、`build`、`coverage`、`target`、虚拟环境和框架缓存。
 
-检查点不会简单套用 `.gitignore`，但会在任意层级排除 Thread 元数据和常见生成目录，例如 `.git`、`.thread`、`node_modules`、`dist`、`build`、`coverage`、`target`、虚拟环境和常见框架缓存。嵌入方可以通过 `ThreadAppOptions.workspaceExcludedPaths` 增加项目相对排除项。
+`/rewind` 永远不会恢复排除路径、项目外路径、进程、数据库、网络副作用或其他外部状态。Thread 不实现通用版本控制。
 
-项目外路径、排除目录、进程、数据库、网络副作用和其他外部状态永远不会被 `/rewind` 恢复。
+## 开发
 
-Loader 只接受当前的 `thread-project-v1`、`thread-session-tree-v1`、`thread-workspace-state-v2` 和 `thread-agent-task-v2` 格式。旧数据不会被静默迁移，也不会被部分解释。
+```bash
+bun run check
+bun test test --timeout 30000
+bun run build
+```
 
-## 执行模型
-
-工具调度同时考虑 effect 和资源冲突：
-
-- 只读 effect 在完整流式 tool call 与工具开始事实可靠落盘后即可启动。
-- 写入、进程和交互 effect 会等待完整 assistant 响应可靠落盘。
-- 资源互不冲突时可以并行；读写范围重叠时保持 assistant 源顺序。
-- 完成事件按真实完成顺序出现，tool-result 消息仍按 assistant 源顺序提交，之后才会开始下一次模型请求。
-
-因此 TUI 可以尽早展示进度并保持响应，同时不削弱副作用之前的持久化边界。
-
-## 架构
+主要代码边界：
 
 ```text
-src/project/          项目身份与生命周期
-src/session-tree/     Session、Turn、Entry、路径、历史与搜索
+src/session-tree/     持久化项目历史、路径、搜索与召回
 src/workspace-state/  检查点捕获、校验、恢复与 GC
-src/context/          live-path 投影、预算与 compaction
-src/agent/            模型 step、journal、调度与 turn runtime
+src/context/          live-path 投影与 compaction
+src/agent/            模型 step、工具调度、journal 与 turn
 src/agent-task/       共享工作区 worker 生命周期与任务 journal
-src/app/              runtime 组装、输入路由与 use case
-src/commands/         Session Tree 命令接口
+src/app/              runtime 组装与输入路由
 src/tools/            内置 agent 工具与执行策略
 src/ui/               plain 与全屏终端界面
 ```
@@ -277,16 +240,6 @@ Thread 也导出了 runtime、store、model catalog、tool、command、skills lo
 
 - [Subagent 架构](./docs/subagent-architecture.md)
 - [给模型用的 grep](./docs/grep.md)
-
-## 开发
-
-```bash
-bun run check
-bun test test --timeout 30000
-bun run build
-```
-
-CI 会执行类型检查、测试、生产构建和 CLI smoke test。带 tag 的 release 会为 Windows、Linux 与 macOS 编译 x64 / ARM64 standalone binary。
 
 ## License
 
