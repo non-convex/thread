@@ -47,12 +47,13 @@ function printableKey(key: TerminalKey): string | undefined {
 export type UiNotifyKind = "live" | "full";
 type Listener = (kind: UiNotifyKind) => void;
 
-function notifyKind(type: UiEvent["type"]): UiNotifyKind {
-  switch (type) {
+function notifyKind(event: UiEvent): UiNotifyKind {
+  switch (event.type) {
     case "command_started":
     case "command_finished":
-    case "session_changed":
       return "full";
+    case "session_changed":
+      return event.reason === "turn" ? "live" : "full";
     default:
       return "live";
   }
@@ -257,7 +258,7 @@ export class ThreadTuiController {
   private applyUiEvent(event: UiEvent): void {
     reduceUiEvent(this.state, event);
     if (event.type === "context_updated") this.meta.contextPercent = event.percent;
-    this.notify(notifyKind(event.type));
+    this.notify(notifyKind(event));
   }
 
   private presentCommand(result: CommandResult): void {

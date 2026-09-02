@@ -160,6 +160,18 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
   }
 }
 
+function inFlightToolActivity(live: LiveTurn | undefined): string {
+  const names = live?.blocks
+    .filter((block) => block.tool?.status === "queued" || block.tool?.status === "running")
+    .map((block) => block.tool!.name) ?? [];
+  if (names.length === 0) return "thinking";
+  if (names.length === 1) return names[0]!;
+  const unique = [...new Set(names)];
+  if (unique.length === 1) return `${unique[0]} ×${names.length}`;
+  if (unique.length <= 3) return unique.join(" · ");
+  return `${unique[0]} · ${unique[1]} +${unique.length - 2}`;
+}
+
 function endStreaming(live: LiveTurn): LiveTurn {
   const last = live.blocks.at(-1);
   if (!last?.streaming) return live;
@@ -369,7 +381,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
           }],
         };
       }
-      state.activity = event.name;
+      state.activity = inFlightToolActivity(state.liveTurn);
       return;
     }
     case "tool_finished":
@@ -380,6 +392,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
             ? { ...block, tool: { ...block.tool, status: event.isError ? "failed" : "completed", result: event.result, finishedAt: Date.now() } }
             : block),
         };
+        state.activity = inFlightToolActivity(state.liveTurn);
       }
       return;
     case "compaction_started":
@@ -405,8 +418,6 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       return;
     }
     case "turn_finished":
-      state.busy = false;
-      state.activity = undefined;
       if (event.error) state.notice = { level: "error", text: event.error };
       return;
   }

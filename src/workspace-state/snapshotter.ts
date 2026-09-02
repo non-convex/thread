@@ -129,6 +129,7 @@ export class WorkspaceSnapshotter {
       await maybeYield();
       const children = await limit.run(() => readdir(directory, { withFileTypes: true }));
       await Promise.all(children.map(async (child) => {
+        await maybeYield();
         const absolute = path.join(directory, child.name);
         const relative = slash(path.relative(rootPath, absolute));
         if (this.excluded(relative)) return;
