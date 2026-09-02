@@ -364,19 +364,25 @@ export class ThreadTuiController {
     const question = screen.request.questions[screen.questionIndex];
     if (!question) return true;
     const optionCount = question.options.length;
+    // Check for printable character first to enter or continue custom text mode
+    const typed = printableKey(key);
+    if (typed) {
+      if (screen.customText === undefined) screen.customText = "";
+      screen.customText += typed;
+      this.notify();
+      return true;
+    }
+    // Handle special keys in custom text mode
     if (screen.customText !== undefined) {
       if (key.name === "escape") screen.customText = undefined;
       else if (keys.enter) {
         const value = screen.customText.trim();
         if (value) this.commitAskAnswer(screen, [value]);
       } else if (key.name === "backspace") screen.customText = screen.customText.slice(0, -1);
-      else {
-        const typed = printableKey(key);
-        if (typed) screen.customText += typed;
-      }
       this.notify();
       return true;
     }
+    // Handle keys in option selection mode
     if (key.name === "escape") this.pendingAsk?.reject(new AskDismissedError());
     else if ((keys.up || keys.down) && optionCount > 0) {
       screen.selected = (screen.selected + (keys.up ? -1 : 1) + optionCount) % optionCount;
@@ -389,9 +395,6 @@ export class ThreadTuiController {
       const chosen = screen.chosen[screen.questionIndex] ?? [];
       const picked = question.multiple && chosen.length ? chosen : [screen.selected];
       this.commitAskAnswer(screen, picked.map((index) => question.options[index]!.label));
-    } else {
-      const typed = printableKey(key);
-      if (typed) screen.customText = typed;
     }
     this.notify();
     return true;
