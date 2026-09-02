@@ -1,8 +1,20 @@
-# thread
+<div align="center">
 
-`thread` is a coding-agent runtime with one persistent **Session Tree** per project and a safe, turn-level `/rewind`.
+# Thread
 
-The project directory is ordinary disk state. Conversation history is an append-only tree. Before every user turn, Thread captures the managed workspace so that the exact pre-turn state can be recovered later.
+**A coding-agent runtime with a persistent Session Tree and turn-level workspace rewind.**
+
+[简体中文](./README.zh-CN.md) · [Releases](https://github.com/non-convex/thread/releases) · [Architecture](#architecture)
+
+[![CI](https://github.com/non-convex/thread/actions/workflows/ci.yml/badge.svg)](https://github.com/non-convex/thread/actions/workflows/ci.yml)
+[![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-f9f1e1?logo=bun)](https://bun.sh)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+</div>
+
+Thread gives every project one durable conversation tree. It remembers the complete path you took, lets you open an independent Session without touching the files, and can restore the workspace to exactly before a selected user turn.
+
+The project directory remains ordinary disk state. Git remains Git. Thread adds a separate, append-only record of agent work and content-addressed workspace checkpoints around it.
 
 ```text
 Project
@@ -14,142 +26,192 @@ Project
     └── Session B: an independent empty context created by /new
 ```
 
-Thread does not implement its own general-purpose version control. Project Git, if present, is just another external tool available to the agent.
+## See it in action
 
-## Requirements
+![Thread welcome screen](docs/assets/thread-welcome.png)
 
-- Bun 1.3 or newer
-- A model configured through `~/.thread/config.json`, the compatible pi fallback, `--provider` and `--model`, or a ChatGPT subscription login
+<p align="center"><em>A full-screen TUI that opens directly on the project's persistent Session Tree.</em></p>
 
-Git is not required. Any existing directory can be opened as a project.
+![Thread working through a coding task](docs/assets/thread-session.png)
+
+<p align="center"><em>Streaming thinking, tool activity, elapsed time, context usage, model, and thinking level in one view.</em></p>
+
+## Why Thread
+
+| Need | Thread's answer |
+| --- | --- |
+| Continue project work later | Sessions, turns, messages, tool facts, and live tips are persisted per project. |
+| Try a different direction safely | `/rewind` restores the pre-turn workspace and branches the conversation without deleting the old path. |
+| Start with a clean context | `/new` creates an empty root Session while leaving project files unchanged. |
+| Recall work outside the current path | The agent can search and read turns from other Sessions and abandoned branches. |
+| Survive long tasks | Manual and automatic compaction reduce live context without rewriting the Session Tree. |
+| Parallelize bounded implementation work | Optional workers handle one or two non-overlapping leaf tasks in the shared workspace. |
+| Use different model backends | ChatGPT subscription login and configurable OpenAI- or Anthropic-compatible providers are supported. |
+
+Thread is not a replacement for version control. It rewinds the managed workspace, not commits, branches, processes, databases, remote services, or other external effects.
+
+## Quick start
+
+### Requirements
+
+- A [standalone release](https://github.com/non-convex/thread/releases), or Bun 1.3+ when running from source
+- A configured model provider or a ChatGPT subscription login
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the built-in code-search tool
+
+Git is optional. Any existing directory can be opened as a project.
+
+### Run a release build
+
+Download the archive for your platform, extract it, and put `thread` (or `thread.exe`) on your `PATH`.
 
 ```bash
+thread --root /path/to/project
+```
+
+An interactive TTY opens the full-screen interface. Piped or redirected use selects plain mode automatically; `--tui plain` forces it.
+
+### Run from source
+
+```bash
+git clone https://github.com/non-convex/thread.git
+cd thread
 bun install
 bun run dev --root /path/to/project
 ```
 
-An interactive TTY opens the full-screen terminal. Non-TTY use selects plain mode automatically. Use `--tui plain` to force it.
+For the remaining examples, replace `thread` with `bun run dev` when running from source.
 
-### ChatGPT subscription
+### Connect a model
 
-Thread can use Codex access included with a ChatGPT subscription through the built-in `openai-codex` OAuth provider. The login is owned by Thread and stored separately from Codex CLI credentials:
+The fastest path for a ChatGPT subscriber is the built-in `openai-codex` OAuth provider:
 
 ```bash
 thread login openai-codex
 thread auth status
-thread --provider openai-codex --model gpt-5.6-terra
+thread --root /path/to/project
 ```
 
-After the first successful login, `openai-codex` models appear in the normal `/model` picker and OAuth tokens refresh automatically. Credentials are stored in `~/.thread/auth.json` (or `$THREAD_HOME/auth.json`); treat that file like a password. To remove them:
+Inside the TUI, run `/model all` to choose an available model. You can also select one at startup:
 
 ```bash
-thread logout openai-codex
+thread --root /path/to/project --provider openai-codex --model <model-id>
 ```
 
-## Core behavior
+Thread owns this login separately from Codex CLI. Credentials live in `~/.thread/auth.json` (or `$THREAD_HOME/auth.json`) and should be protected like a password. Remove them with `thread logout openai-codex`.
 
-### Sessions
+For API keys or a compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, then set the configured `apiKeyEnv` environment variable. Supported custom APIs are:
 
-One project owns one persistent Session Tree with a virtual Root. Each top-level Session is created directly from that Root.
+- `openai-responses`
+- `openai-completions`
+- `anthropic-messages`
 
-`/new` creates an empty Session, activates it, and leaves project files untouched. It does not copy messages, generate a summary, call the model, or restore files. `/session` lists Sessions; `/session <id>` resumes one at its saved live tip without changing the workspace.
+## Core concepts
 
-The model automatically sees only the active Session's current path. Other Sessions and abandoned paths remain project memory and can be recalled through `session_search` and `session_read`.
+### One project, one Session Tree
 
-### Turns and workspace states
+Project identity depends only on the normalized project path. Every project has one virtual Root and any number of top-level Sessions.
 
-A turn contains its user message, assistant messages, tool execution facts, tool results, final status, parent turn, and a workspace-state ID. That ID is the last saved checkpoint: the previous turn's end-of-turn snapshot, or a one-time bootstrap scan on the first turn of a process. The order is fixed:
+- `/new` creates and activates an empty Session. It does not copy messages, call the model, summarize history, or alter files.
+- `/session` lists Sessions.
+- `/session <id>` resumes a Session at its saved live tip without changing the current workspace.
 
-```text
-show the user message and create a runtime-only planned turn
-→ reuse the last checkpoint (scan only if none exists yet) and start the first model request concurrently
-→ bind that workspace-state ID and planned identity into a formal running turn
-→ persist Session Tree records in the background
-→ before any tool side effect, durably flush the workspace state and tool-start fact
-→ durably finish the turn, scan a new checkpoint, and advance the Session live tip
-```
+The model sees only the active Session's current path by default. Historical branches and other Sessions remain searchable project memory through `session_search` and `session_read`; the agent is told to verify current files before relying on stale historical evidence.
 
-An interrupted or failed turn is sealed into a valid conversation prefix (placeholder assistant and aborted tool results as needed) and becomes the Session live tip, so the next prompt continues from that point. At startup, any turn left running is sealed the same way; tools are never automatically repeated.
+### Turns and workspace checkpoints
 
-Tool scheduling is effect- and resource-aware. Read effects may start as soon as a complete streamed call and its tool-start fact are durable. Write, process, and interactive effects wait for the complete assistant response to be durable. Independent resources run concurrently; overlapping read/write resources and explicitly sequential tools retain assistant source order. Completion events follow real completion order, while tool-result messages are committed in assistant source order before the next model request.
+Each turn records its user message, assistant output, tool calls and results, parent turn, final status, and a workspace-state ID. That workspace state represents the checkpoint before the user turn.
 
-The TUI projects the submitted user message immediately. A planned turn is runtime-only and exists just long enough to let the first model request overlap checkpoint resolution; it becomes a factual Session Tree turn once the workspace-state ID is known. Session Tree records then enter the in-memory projection synchronously and are written by one ordered background queue. Tool execution and final turn completion are durability barriers. The end-of-turn scan is the saved checkpoint for the next send; blob persist may finish in the background.
+At the end of a turn, Thread captures the next checkpoint. The following send reuses it; only the first turn in a process needs a bootstrap scan. This lets the initial model request overlap checkpoint resolution while preserving a durable pre-turn boundary before any tool side effect.
 
-Workspace states are content-addressed manifests and blobs stored under `~/.thread/projects/<project-id>/workspace-states`. They include empty directories and do not otherwise follow `.gitignore`, but common dependency, build-output, and cache directories are excluded by basename at every depth: `.build`, `.cache`, `.dart_tool`, `.gradle`, `.mypy_cache`, `.next`, `.nox`, `.nuxt`, `.nx`, `.output`, `.parcel-cache`, `.pytest_cache`, `.ruff_cache`, `.svelte-kit`, `.tox`, `.turbo`, `.venv`, `__pycache__`, `bower_components`, `build`, `coverage`, `dist`, `node_modules`, `out`, `target`, and `venv`. `.git`, `.thread`, Thread's own state path, paths outside the project, processes, databases, network effects, and other external state are also excluded. Additional project-relative exclusions can be supplied through `ThreadAppOptions.workspaceExcludedPaths`.
+Interrupted and failed turns are sealed into valid conversation prefixes and remain the live tip. A restart seals any turn that was still marked running. Started tools are never replayed automatically.
 
-### Rewind
+### Rewind without erasing history
 
-`/rewind` lists only user turns on the active live path. Selecting a turn means “restore the checkpoint saved before this turn”: the previous turn's end-of-turn snapshot, not edits made in the idle gap after that snapshot. The first turn in a process bootstraps from a scan at send time.
+`/rewind` shows user turns on the active live path. Selecting a turn performs these operations in order:
 
-1. Verify and restore that turn's workspace state.
-2. Move the active Session's live tip to the selected turn's parent.
-3. Rebuild live context from the new path; off-path compaction entries stop applying naturally.
-4. Keep the selected turn and all later turns in the Session Tree.
+1. Verify and restore the checkpoint saved before that turn.
+2. Move the Session's live tip to the turn's parent.
+3. Rebuild model context from the new live path.
+4. Keep the selected turn and every later turn in the Session Tree.
 
-The next user message naturally creates a new child path. A missing or corrupt workspace state causes rewind to fail before the live tip moves.
+Your next message creates a new branch naturally. If the checkpoint is missing or corrupt, rewind fails before the live tip moves.
+
+One subtle boundary matters: a checkpoint comes from the previous completed turn. Manual edits made while Thread was idle after that checkpoint and before the next send are not part of the selected turn's pre-turn state.
 
 ### Context compaction
 
-Compaction is an append-only Session Tree entry. It stores the cumulative project-state document, the retained turn projections, an optional in-turn progress checkpoint, verified before/after token estimates, and the trigger reason. `/compact` appends one to the current live tip; automatic compaction runs at complete model-step boundaries at 78% of the model window and after a provider reports overflow. Each trigger is a single pass.
+Compaction is another append-only Session Tree entry, not a rewrite of history. It stores a rolling project-state summary, retained complete model steps, and—when the cut falls inside a turn—a separate progress checkpoint.
 
-The unit of retention is one complete step: an assistant response together with every matching tool result. A pass keeps at least the newest five steps and extends further back only while a roughly 20K working-set budget allows, after reserving 4K for the project-state document and 1K for the progress checkpoint. The step floor wins over the budget, because per-tool output is capped and a starved working set is worse than a slightly over-budget one. An in-flight tool batch is never split.
+- `/compact` requests a manual pass.
+- Automatic compaction runs at complete model-step boundaries when the context reaches 78% or the provider reports overflow.
+- A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows.
+- Earlier turns remain available to rewind, history, search, and `session_read`.
 
-Everything before the cut is folded into the project-state document, including the previous document, which is re-evaluated rather than copied. When the cut lands inside a turn, that turn's request is copied into the retained window and a separate progress checkpoint is inserted between the request and the retained steps, so the model can continue without re-reading the trajectory it just gave up. Both summaries roll forward from their own previous output. Each summary request is retried silently up to three times; exhausting the retries fails the compaction rather than dropping the region it was about to remove.
+### Optional implementation workers
 
-Every candidate must have a material estimated benefit, measured through the same projection the builder replays on later requests. Earlier entries are not deleted or rewritten, so rewind, branching, history, search, and `session_read` continue to use the complete Session Tree.
+Subagents start disabled. Run `/subagent`, choose **On**, then select an explicit worker model. The main agent can delegate one or two independent leaf tasks with non-overlapping write scopes.
 
-### Implementation workers
+Workers edit the same project workspace directly; there is no private clone or apply step. `writeScope` is a coordination boundary rather than a filesystem sandbox. The main agent remains responsible for reviewing current files and running tests, and can request a revision in the same worker context.
 
-Thread can delegate one or two independent leaf implementation tasks to `implementation-worker` agents after subagents are explicitly enabled with `/subagent`. Selecting `On` opens the worker model picker; selecting `Off` removes delegation tools and their system-prompt instructions from the main agent. Each worker receives only its task specification and uses `read`, `list`, `grep`, `write`, `edit`, and `bash`; child traces never enter the parent Session context.
-
-Workers edit the current project workspace directly, so completed changes need no inspect/apply protocol. `writeScope` is a coordination boundary: Thread rejects overlapping running tasks, while prompts require the main agent and workers to stay out of one another's active scopes. The main agent reviews current files with its ordinary tools and can ask a completed worker for a revision in the same directory and child context. Cancelling interrupts only a running worker and preserves files already written. Every worker belongs to its parent turn; turn completion, interruption, application shutdown, or a restart cancels unfinished work. `/rewind` remains the way to restore the whole pre-turn workspace state.
-
-The main agent receives four task tools: `delegate_tasks`, `wait_tasks`, `request_revision`, and `cancel_task`.
-
-Task events and child traces are stored separately from the Session Tree. The TUI anchors expandable task cards at the originating `delegate_tasks` call; the parent context receives only compact task-tool results.
+Workers belong to the parent turn. Finishing the turn, interrupting it, closing Thread, or restarting cancels unfinished work while preserving any files already written. Use `/rewind` when the whole workspace must be restored. See [the subagent architecture](./docs/subagent-architecture.md) for the full design.
 
 ## Commands
 
-Top-level authentication commands:
+### Authentication
+
+| Command | Purpose |
+| --- | --- |
+| `thread login <provider>` | Start a supported subscription login. |
+| `thread logout <provider>` | Remove the provider credential. |
+| `thread auth status` | Show subscription authentication status. |
+
+### Interactive commands
+
+| Command | Purpose |
+| --- | --- |
+| `/new` | Create an empty Session from Root; keep workspace files as-is. |
+| `/session [<session-id>]` | List Sessions or resume one at its saved tip. |
+| `/rewind [<turn-id-or-user-entry-id>]` | Choose or directly restore a pre-turn checkpoint. |
+| `/compact` | Compact the active path's live model context. |
+| `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or change the main model. |
+| `/subagent [off\|on [all]\|<provider>/<model>]` | Configure implementation workers. |
+| `/skill [<name> [extra instruction]]` | List or invoke a loaded skill. |
+| `/thread status` | Show project and active Session Tree status. |
+| `/thread sessions` | List root Sessions and saved live tips. |
+| `/thread open <session-id>` | Resume a Session without changing files. |
+| `/thread history` | Browse turns across the whole project tree. |
+| `/thread search <query> [<query> ...]` | Search all Sessions and historical paths. |
+| `/clear` | Clear the visible transcript only. |
+| `/exit` | Exit Thread. |
+
+In the full-screen TUI, `Shift+Tab` cycles supported thinking levels and `Esc` interrupts the active turn.
+
+## Configuration and state
+
+Thread reads `~/.thread/config.json` by default. If it is absent, compatible provider and default-model settings under `~/.pi/agent` are used as a fallback.
+
+Model selection priority is:
 
 ```text
-thread login <provider>
-thread logout <provider>
-thread auth status
+--provider/--model or THREAD_PROVIDER/THREAD_MODEL
+→ remembered interactive choice in ~/.thread/state.json
+→ model in ~/.thread/config.json
 ```
 
-Interactive commands:
+Useful environment variables:
 
-```text
-/new
-/session [<session-id>]
-/rewind [<turn-id-or-user-entry-id>]
-/compact
-/model [all|list [provider]|<provider>/<model>]
-/subagent [off|on [all]|<provider>/<model>]
-/skill [<name> [extra instruction]]
-/clear
-/exit
+| Variable | Purpose |
+| --- | --- |
+| `THREAD_HOME` | Override the state directory (default `~/.thread`). |
+| `THREAD_CONFIG` | Use a different configuration file. |
+| `THREAD_PROVIDER` | Select the main provider; use with `THREAD_MODEL`. |
+| `THREAD_MODEL` | Select the main model; use with `THREAD_PROVIDER`. |
 
-/thread status
-/thread sessions
-/thread open <session-id>
-/thread history
-/thread search <query> [<query> ...]
-```
+Thinking level, main-model selection, subagent on/off state, and worker-model selection are remembered in `~/.thread/state.json`. Skills are loaded once at startup. Extensions can register tools, Session Tree commands, and runtime hooks through the exported API.
 
-Removed version-management commands are intentionally not recognized.
+## Persistence and safety boundary
 
-## Project memory tools
-
-- `session_search` searches every turn across all Sessions and historical paths. Results include the Session, turn, timestamp, status, and relationship to the current path.
-- `session_read` reads one matching turn or a bounded contiguous path around it. Narrative is returned by default; thinking, tool calls, and tool results are opt-in.
-
-Historical evidence may be stale relative to the current workspace, so the agent is instructed to verify files when correctness depends on them.
-
-## Persistence and compatibility
-
-Project identity depends only on the normalized project path, never on a repository or worktree. New-format state lives under `~/.thread/projects/<project-id>` (or `$THREAD_HOME/projects/<project-id>`):
+Project state is stored outside the workspace under `~/.thread/projects/<project-id>`:
 
 ```text
 project.json
@@ -163,15 +225,46 @@ agent-tasks/
   events.jsonl
 ```
 
-The Session Tree and Agent Task logs are independent append-only JSONL streams. The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, `thread-workspace-state-v2`, and `thread-agent-task-v2` formats. Old data is not read, migrated, upgraded, or partially interpreted; in particular, a pre-v2 Agent Task event log fails startup instead of being silently deleted.
+Session Tree and Agent Task records are independent append-only JSONL streams. Workspace states are content-addressed manifests and blobs and include empty directories.
 
-## Configuration
+Checkpoints do not blindly follow `.gitignore`, but they exclude Thread metadata and common generated-directory names at every depth, including `.git`, `.thread`, `node_modules`, `dist`, `build`, `coverage`, `target`, virtual environments, and common framework caches. Embedders can add project-relative exclusions with `ThreadAppOptions.workspaceExcludedPaths`.
 
-The unified Thread configuration is `~/.thread/config.json`. See `thread.config.example.json`. `THREAD_HOME`, `THREAD_CONFIG`, `THREAD_PROVIDER`, and `THREAD_MODEL` are supported. Interactive main-model, thinking-level, subagent on/off, and worker-model choices are remembered in `~/.thread/state.json`; command-line selection can still override the main model.
+Paths outside the project, excluded directories, processes, databases, network effects, and other external state are never restored by `/rewind`.
 
-Subagents start `Off`. Run `/subagent`, choose `On`, then choose an explicit worker model; that selection is never inferred from the main model. The optional `agents.implementation-worker` config supplies the initial worker-model highlight and execution limits, but does not enable delegation by itself. An unavailable remembered worker model produces a non-fatal startup diagnostic and leaves task-management tools unregistered. `/model` changes only the main model.
+The loader accepts only the current `thread-project-v1`, `thread-session-tree-v1`, `thread-workspace-state-v2`, and `thread-agent-task-v2` formats. Old data is not silently migrated or partially interpreted.
 
-Skills are loaded once at startup and become part of the stable system-prompt prefix. Extensions can register tools, Session Tree commands, and runtime hooks through the exported API.
+## Execution model
+
+Tool scheduling is effect- and resource-aware:
+
+- Read effects may start as soon as a complete streamed tool call and its start fact are durable.
+- Write, process, and interactive effects wait for the complete assistant response to be durable.
+- Independent resources can run concurrently; overlapping read/write resources retain source order.
+- Completion events follow actual completion order, while tool-result messages are committed in assistant source order before the next model request.
+
+The TUI can therefore stay responsive and expose work early without weakening the durability boundary around side effects.
+
+## Architecture
+
+```text
+src/project/          project identity and lifecycle
+src/session-tree/     Sessions, Turns, Entries, paths, history, and search
+src/workspace-state/  checkpoint capture, verification, restore, and GC
+src/context/          live-path projection, budgets, and compaction
+src/agent/            model steps, journaling, scheduling, and turn runtime
+src/agent-task/       shared-workspace worker lifecycle and task journal
+src/app/              runtime composition, input routing, and use cases
+src/commands/         Session Tree command interface
+src/tools/            built-in agent tools and execution policies
+src/ui/               plain and full-screen terminal interfaces
+```
+
+Thread also exports its runtime, stores, model catalog, tools, commands, skills loader, extension API, and UI types for embedding. See [`src/index.ts`](./src/index.ts) for the public surface.
+
+Further reading:
+
+- [Subagent architecture](./docs/subagent-architecture.md)
+- [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 
 ## Development
 
@@ -181,20 +274,8 @@ bun test test --timeout 30000
 bun run build
 ```
 
-The main boundaries are:
-
-```text
-src/project/          project identity and lifecycle
-src/session-tree/     persistent Sessions, Turns, Entries, paths, history, search
-src/workspace-state/  checkpoint store, capture, restore, verification, and garbage collection
-src/context/          live-path projection, budget, and compaction entries
-src/agent/            shared model-step, journal, tool scheduling, and parent-turn runtime
-src/agent-task/       profiles, task journal/projection, shared-workspace worker lifecycle
-src/app/              façade, input routing, main-model state, runtime composition, use cases
-src/commands/         command interface
-src/ui/               plain and full-screen interfaces
-```
+CI runs type-checking, tests, a production build, and a CLI smoke test. Tagged releases compile standalone Windows, Linux, and macOS binaries for x64 and ARM64.
 
 ## License
 
-MIT. See `LICENSE`.
+[MIT](./LICENSE)
