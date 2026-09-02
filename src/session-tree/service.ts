@@ -1,5 +1,12 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { createId, stableId } from "../utils/id.js";
+import {
+  abortedToolResult,
+  needsPlaceholderAssistant,
+  placeholderAssistant,
+  toolResultTextFor,
+  unmatchedToolCalls,
+} from "./conversation-seal.js";
 import { livePath, pathToTurn } from "./live-path.js";
 import {
   SESSION_TREE_FORMAT,
@@ -236,7 +243,7 @@ export class SessionTreeService {
   }): Promise<CompactionEntry> {
     const turn = this.projection.turns.get(input.turnId);
     if (!turn) throw new Error(`Unknown compaction turn: ${input.turnId}`);
-    const appendsToLiveTip = turn.status === "completed" && this.projection.liveTips.get(turn.sessionId) === turn.id;
+    const appendsToLiveTip = turn.status !== "running" && this.projection.liveTips.get(turn.sessionId) === turn.id;
     if (turn.status !== "running" && !appendsToLiveTip) {
       throw new Error(`Compaction target is not the running turn or current live tip: ${turn.id}`);
     }
@@ -269,9 +276,7 @@ export class SessionTreeService {
         finishedAt,
         ...(errorValue ? { error: errorValue } : {}),
       },
-      ...(status === "completed"
-        ? [{ type: "live_tip_changed" as const, sessionId: turn.sessionId, turnId, reason: "turn" as const }]
-        : []),
+      { type: "live_tip_changed", sessionId: turn.sessionId, turnId, reason: "turn" },
     ], true);
     return structuredClone(this.projection.turns.get(turnId)!);
   }
@@ -342,16 +347,38 @@ export class SessionTreeService {
     return turn;
   }
 
+  /**
+   * Make a running turn a valid conversation prefix before it is closed:
+   * unmatched tool calls get aborted results, and a turn that never produced an
+   * assistant message gets a placeholder so the next user turn can continue.
+   */
+  async sealRunningTurn(
+    turnId: string,
+    status: Exclude<TurnStatus, "running">,
+    error?: Error,
+  ): Promise<void> {
+    this.runningTurn(turnId);
+    const prior = this.pathToTurn(turnId).flatMap((turn) => this.messagesForTurn(turn.id));
+    if (needsPlaceholderAssistant(this.messagesForTurn(turnId))) {
+      await this.appendMessage({
+        turnId,
+        message: placeholderAssistant({ messages: prior, status, ...(error ? { error } : {}) }),
+      });
+    }
+    const missing = unmatchedToolCalls(this.messagesForTurn(turnId));
+    const text = toolResultTextFor(status, error);
+    for (const call of missing) {
+      await this.appendMessage({ turnId, message: abortedToolResult(call, text) });
+    }
+  }
+
   private async interruptRunningTurns(): Promise<string[]> {
     const running = [...this.projection.turns.values()].filter((turn) => turn.status === "running");
+    const error = new Error("Thread stopped before this turn completed");
+    error.name = "Interrupted";
     for (const turn of running) {
-      await this.repository.append(() => ({
-        type: "turn_finished",
-        turnId: turn.id,
-        status: "interrupted",
-        finishedAt: Date.now(),
-        error: { code: "Interrupted", message: "Thread stopped before this turn completed" },
-      }), true);
+      await this.sealRunningTurn(turn.id, "interrupted", error);
+      await this.finishTurn(turn.id, "interrupted", error);
     }
     return running.map((turn) => turn.id);
   }

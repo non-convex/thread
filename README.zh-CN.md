@@ -69,7 +69,7 @@ thread logout openai-codex
 → 可靠提交 turn 结束状态，扫描新检查点，并推进 Session live tip
 ```
 
-失败或中断的 turn 会保留在历史中，但不会推进 live tip。启动时遗留的 running turn 会被标记为 `interrupted`，已开始的工具绝不会自动重跑。
+失败或中断的 turn 会先补成合法对话前缀（缺 assistant 时写入占位，未完成的 tool call 写入中断结果），再推进为 Session live tip，所以下一句用户输入从中断点继续。启动时遗留的 running turn 同样如此处理；已开始的工具绝不会自动重跑。
 
 工具调度同时考虑 effect 和资源冲突。只读 effect 在完整 tool call 流出且工具开始事实可靠落盘后即可启动；写入、进程和交互 effect 会等待完整 assistant 响应可靠落盘。资源互不冲突时并行执行，读写资源重叠或工具明确声明 sequential 时则保持 assistant 源顺序。完成事件按真实完成顺序发出，tool-result 消息仍按 assistant 源顺序提交；全部完成后才发起下一次模型请求。
 

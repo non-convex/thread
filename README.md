@@ -69,7 +69,7 @@ show the user message and create a runtime-only planned turn
 → durably finish the turn, scan a new checkpoint, and advance the Session live tip
 ```
 
-An interrupted or failed turn stays in history but does not advance the live tip. At startup, any turn left running is marked `interrupted`; tools are never automatically repeated.
+An interrupted or failed turn is sealed into a valid conversation prefix (placeholder assistant and aborted tool results as needed) and becomes the Session live tip, so the next prompt continues from that point. At startup, any turn left running is sealed the same way; tools are never automatically repeated.
 
 Tool scheduling is effect- and resource-aware. Read effects may start as soon as a complete streamed call and its tool-start fact are durable. Write, process, and interactive effects wait for the complete assistant response to be durable. Independent resources run concurrently; overlapping read/write resources and explicitly sequential tools retain assistant source order. Completion events follow real completion order, while tool-result messages are committed in assistant source order before the next model request.
 

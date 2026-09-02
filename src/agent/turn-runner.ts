@@ -114,7 +114,9 @@ export class TurnRunner {
         if (!recovered.compacted) throw new Error("Context overflow cannot be compacted while retaining the newest two turns");
         continue;
       }
-      if (response.stopReason === "aborted") throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
+      if (response.stopReason === "aborted" || options.signal.aborted) {
+        throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
+      }
       if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
       if (calls.length === 0) break;
       if (response.stopReason !== "toolUse") {

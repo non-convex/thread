@@ -7,7 +7,7 @@ import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/mode
 
 export interface TranscriptItem {
   id: string;
-  kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "agent_task";
+  kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "agent_task" | "interrupted";
   content: string;
   label?: string;
   isError?: boolean;
@@ -418,7 +418,8 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       return;
     }
     case "turn_finished":
-      if (event.error) state.notice = { level: "error", text: event.error };
+      if (event.outcome === "interrupted") state.notice = { level: "info", text: "Interrupted" };
+      else if (event.error) state.notice = { level: "error", text: event.error };
       return;
   }
 }

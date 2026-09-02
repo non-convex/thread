@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Message, ToolCall } from "@earendil-works/pi-ai";
+import { abortedToolResult, INTERRUPTED_TOOL_RESULT } from "../session-tree/conversation-seal.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
@@ -135,7 +136,41 @@ export class ToolExecutionBatch {
   }
 
   async cancel(reason?: unknown): Promise<void> {
+    await this.prepareTail.catch(() => undefined);
     await this.scheduler.cancel(reason);
+  }
+
+  /**
+   * Stop in-flight work and return one result per known tool call, in source
+   * order. Completed calls keep their real result; the rest become aborted
+   * tool results so the conversation remains a valid model prefix.
+   */
+  async collectSettled(reason?: unknown): Promise<Message[]> {
+    await this.cancel(reason);
+    const text = reason instanceof Error && reason.name !== "AbortError"
+      ? reason.message
+      : INTERRUPTED_TOOL_RESULT;
+    const results: Message[] = [];
+    for (const prepared of this.finalized ?? [...this.prepared.values()]) {
+      const pending = this.scheduler.result(prepared.call.id);
+      if (pending) {
+        try {
+          results.push(await pending);
+          continue;
+        } catch {
+          // The call was cancelled or failed after it started; synthesize below.
+        }
+      }
+      safeUiEvent(this.input.ui, {
+        type: "tool_finished",
+        id: prepared.call.id,
+        name: prepared.call.name,
+        result: { content: text, isError: true },
+        isError: true,
+      });
+      results.push(abortedToolResult(prepared.call, text));
+    }
+    return results;
   }
 
   private assertSameCall(streamed: ToolCall, final: ToolCall): void {

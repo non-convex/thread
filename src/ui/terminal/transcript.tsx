@@ -409,6 +409,9 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
       <Match when={item().kind === "compaction"}>
         <CompactionInfo content={item().content} resources={props.resources} />
       </Match>
+      <Match when={item().kind === "interrupted"}>
+        <CompactionInfo content={item().content} resources={props.resources} />
+      </Match>
       <Match when={item().kind === "agent_task" && item().agentTask !== undefined}>
         <AgentTaskCardView card={() => item().agentTask!} resources={props.resources} />
       </Match>

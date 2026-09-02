@@ -186,7 +186,7 @@ test("rewind refuses a missing workspace state before moving the live tip", asyn
   });
 });
 
-test("startup marks unfinished turns interrupted without advancing the live tip", async (t) => {
+test("startup seals unfinished turns as interrupted live tips", async (t) => {
   const values = await fixture("thread-recovery-");
   t.after(values.cleanup);
   await writeFile(path.join(values.root, "seed.txt"), "A\n");
@@ -200,7 +200,9 @@ test("startup marks unfinished turns interrupted without advancing the live tip"
     const reopened = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });
     try {
       assert.equal(reopened.sessionTree.projection.turns.get(running.id)?.status, "interrupted");
-      assert.equal(reopened.sessionTree.activeLiveTip, null);
+      assert.equal(reopened.sessionTree.activeLiveTip, running.id);
+      const roles = reopened.sessionTree.messagesForTurn(running.id).map((message) => message.role);
+      assert.deepEqual(roles, ["user", "assistant"]);
     } finally {
       await reopened.close();
     }

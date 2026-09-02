@@ -75,22 +75,23 @@ export class AgentRuntime {
       outcome = "failed";
     }
     const turn = await turnReady;
+    if (outcome !== "completed") {
+      await this.tree.sealRunningTurn(turn.id, outcome, error);
+    }
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
     await this.workspace.checkpoint();
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeUiEvent(options.onUiEvent, {
       type: "turn_finished",
       outcome,
-      ...(error ? { error: error.message } : {}),
+      ...(outcome === "failed" && error ? { error: error.message } : {}),
     });
-    if (outcome === "completed") {
-      safeUiEvent(options.onUiEvent, {
-        type: "session_changed",
-        sessionId: settled.sessionId,
-        liveTipTurnId: settled.id,
-        reason: "turn",
-      });
-    }
+    safeUiEvent(options.onUiEvent, {
+      type: "session_changed",
+      sessionId: settled.sessionId,
+      liveTipTurnId: settled.id,
+      reason: "turn",
+    });
     return { turn: settled, outcome, messages, ...(error ? { error } : {}) };
   }
 

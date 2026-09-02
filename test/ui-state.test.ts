@@ -41,3 +41,9 @@ test("turn_finished does not drop the live turn before history is committed", ()
   assert.equal(state.activity, "preparing");
   assert.ok(state.liveTurn);
 });
+
+test("interrupted turns surface an info notice instead of an error", () => {
+  const state = createUiState("session", null, []);
+  reduceUiEvent(state, { type: "turn_finished", outcome: "interrupted" });
+  assert.deepEqual(state.notice, { level: "info", text: "Interrupted" });
+});

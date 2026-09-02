@@ -19,6 +19,24 @@ export interface AgentStepOptions {
   onAssistantPersisted?: (response: AssistantMessage) => void | Promise<void>;
 }
 
+async function persistBatchResults(
+  journal: ExecutionJournal,
+  collect: () => Promise<Message[]>,
+): Promise<Message[]> {
+  const results = await collect();
+  const existing = new Set(
+    journal.conversationMessages()
+      .filter((message) => message.role === "toolResult")
+      .map((message) => message.toolCallId),
+  );
+  for (const result of results) {
+    if (result.role !== "toolResult" || existing.has(result.toolCallId)) continue;
+    await journal.appendToolResult(result);
+    existing.add(result.toolCallId);
+  }
+  return results;
+}
+
 /** One model response plus its complete, source-ordered tool execution batch. */
 export class AgentStepRunner {
   constructor(
@@ -78,15 +96,21 @@ export class AgentStepRunner {
 
       if (response.stopReason === "aborted" || response.stopReason === "error" ||
           (calls.length > 0 && response.stopReason !== "toolUse")) {
-        await toolBatch.cancel(new Error("Assistant response cannot release tool execution"));
-        return { response, calls, results: [] };
+        const results = await persistBatchResults(journal, () =>
+          toolBatch.collectSettled(new Error("Assistant response cannot release tool execution")),
+        );
+        return { response, calls, results };
       }
       if (calls.length === 0) return { response, calls, results: [] };
 
       toolBatch.releaseResponse();
-      const results = await toolBatch.orderedResults();
-      for (const result of results) await journal.appendToolResult(result);
-      return { response, calls, results };
+      try {
+        const results = await persistBatchResults(journal, () => toolBatch.orderedResults());
+        return { response, calls, results };
+      } catch (error) {
+        const results = await persistBatchResults(journal, () => toolBatch.collectSettled(error));
+        return { response, calls, results };
+      }
     } catch (error) {
       await toolBatch.cancel(error);
       throw error;

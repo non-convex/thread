@@ -400,7 +400,12 @@ export class ThreadTuiController {
     const turns = this.app.sessionTree.livePath();
     const entries = turns.flatMap((turn) => this.app.sessionTree.entriesForTurn(turn.id));
     const tasks = turns.flatMap((turn) => this.app.agentTaskDetailsForTurn(turn.id));
-    this.state.transcript = projectTranscript(entries, tasks);
+    const transcript = projectTranscript(entries, tasks);
+    const last = turns.at(-1);
+    if (last?.status === "interrupted") {
+      transcript.push({ id: `${last.id}:interrupted`, kind: "interrupted", content: "interrupted" });
+    }
+    this.state.transcript = transcript;
     this.state.sessionId = this.app.sessionTree.activeSession.id;
     this.state.liveTipTurnId = this.app.sessionTree.activeLiveTip;
   }

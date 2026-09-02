@@ -87,7 +87,7 @@ export class SessionTreeProjection {
         }
         if (turn.parentTurnId !== null) {
           const parent = this.turns.get(turn.parentTurnId);
-          if (!parent || parent.sessionId !== turn.sessionId || parent.status !== "completed") {
+          if (!parent || parent.sessionId !== turn.sessionId || parent.status === "running") {
             throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid parent`);
           }
         }
@@ -105,7 +105,7 @@ export class SessionTreeProjection {
         if (!turn || turn.sessionId !== entry.sessionId) {
           throw new SessionTreeCorruptionError(`Entry ${entry.id} has no matching turn`);
         }
-        const appendsToLiveTip = turn.status === "completed" && this.liveTips.get(turn.sessionId) === turn.id;
+        const appendsToLiveTip = turn.status !== "running" && this.liveTips.get(turn.sessionId) === turn.id;
         if (turn.status !== "running" && (entry.type !== "compaction" || !appendsToLiveTip)) {
           throw new SessionTreeCorruptionError(`Entry ${entry.id} was appended to a closed turn`);
         }
@@ -156,7 +156,7 @@ export class SessionTreeProjection {
         }
         if (event.turnId !== null) {
           const turn = this.turns.get(event.turnId);
-          if (!turn || turn.sessionId !== event.sessionId || turn.status !== "completed") {
+          if (!turn || turn.sessionId !== event.sessionId || turn.status === "running") {
             throw new SessionTreeCorruptionError(`Invalid live tip: ${event.turnId}`);
           }
         }
