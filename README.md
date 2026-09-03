@@ -12,7 +12,9 @@
 
 </div>
 
-Within a project, Thread keeps one persistent Session Tree: every interaction with the agent and every execution trace becomes project history that the agent can search and recall; whole-tree awareness is planned. Across projects, `${THREAD_HOME}/.THREAD.md` supplies fixed per-Session global-memory snapshots, and the optional **Dreamer** agent curates that file in the background. The implementation follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly, with finer-grained admission still planned.
+Thread is a coding-agent runtime for work that should outlast a single chat. Inside a project, one persistent Session Tree turns every interaction and execution into history you can resume, rewind, search, and recall. Across projects, a small global memory carries only the stable facts that should travel with you.
+
+The design follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly.
 
 ## Interface
 
@@ -119,7 +121,7 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 
 ### Search and recall
 
-`session_search` searches every Session and historical branch. `session_read` retrieves one matching turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it.
+`session_search` searches every Session and historical branch. `session_read` retrieves one matching turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it. The model does not yet see the whole tree by default; whole-tree awareness is planned.
 
 ## Context policy
 
@@ -128,6 +130,7 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 - `${THREAD_HOME}/.THREAD.md` is loaded as a fixed per-Session global-memory snapshot after the system prompt. `/new` reloads it for the new Session.
 - Compaction happens only at complete model-step boundaries and is stored as another append-only tree entry.
 - A compaction pass proceeds only when its estimated context benefit is material.
+- Finer-grained admission is still planned.
 
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows. Earlier history remains available to rewind, search, and recall.
 
@@ -226,6 +229,7 @@ Further reading:
 
 - [Subagent architecture](./docs/subagent-architecture.md)
 - [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)
+- [Full-screen TUI](./docs/tui.md) (Chinese)
 - [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 
 ## License

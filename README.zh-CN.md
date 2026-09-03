@@ -12,7 +12,9 @@
 
 </div>
 
-项目内，Thread 用一棵持久化 Session Tree 记录与 agent 的全部交互和执行轨迹，让项目历史成为可搜索、可召回的项目记忆，整棵树的全局感知仍待实现；项目外，`${THREAD_HOME}/.THREAD.md` 为每个 Session 提供固定的全局记忆快照，可选的 **Dreamer** agent 会在后台整理这个文件。实现遵循三点：保持精简，如无必要勿增实体；精心管理和压缩上下文，尽量维持缓存命中；只让确实需要的信息进入上下文，避免窗口过快膨胀，更细粒度的准入机制仍待实现。
+Thread 面向不该随着一次对话结束而消失的编码工作。在一个项目里，一棵持久化 Session Tree 把与 agent 的每次交互和执行变成可接续、可回溯、可搜索、可召回的项目历史。在项目之间，只有真正稳定、值得带走的事实才会进入跨项目记忆。
+
+设计遵循三点：保持精简，如无必要勿增实体；精心管理和压缩上下文，尽量维持缓存命中；只让确实需要的信息进入上下文，避免窗口过快膨胀。
 
 ## 界面
 
@@ -119,7 +121,7 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 
 ### 搜索与召回
 
-`session_search` 搜索所有 Session 和历史分支；`session_read` 读取一个命中 turn，或它附近的一段有界路径。召回的信息可能已经过时，因此正确性依赖它时，agent 会重新核对当前文件。
+`session_search` 搜索所有 Session 和历史分支；`session_read` 读取一个命中 turn，或它附近的一段有界路径。召回的信息可能已经过时，因此正确性依赖它时，agent 会重新核对当前文件。模型默认还看不到整棵树，整棵树的全局感知仍待实现。
 
 ## 上下文策略
 
@@ -128,6 +130,7 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 - `${THREAD_HOME}/.THREAD.md` 作为固定的 Session 全局记忆快照加载在 system prompt 之后；`/new` 会为新 Session 重新读取。
 - Compaction 只发生在完整 model-step 边界，并作为新的 append-only tree entry 保存。
 - 只有预计能显著缩减上下文时，才会执行 compaction。
+- 更细粒度的准入机制仍待实现。
 
 `/compact` 手动请求一次压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 工作集预算允许时向前扩展。更早的历史仍可用于 rewind、搜索和召回。
 
@@ -226,6 +229,7 @@ Thread 也导出了 runtime、store、model catalog、tool、command、skills lo
 
 - [Subagent 架构](./docs/subagent-architecture.md)
 - [全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)
+- [全屏 TUI](./docs/tui.md)
 - [给模型用的 grep](./docs/grep.md)
 
 ## License
