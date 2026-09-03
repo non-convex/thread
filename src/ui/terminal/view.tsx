@@ -7,7 +7,14 @@ import type {
 } from "@opentui/core";
 import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { moveSelection, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
+import {
+  isFloatingOverlay,
+  moveSelection,
+  overlaySelectionCount,
+  type LiveTurn,
+  type TranscriptItem,
+  type UiScreen,
+} from "../state.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -90,7 +97,7 @@ export function ThreadRoot(props: {
    * are set, which Solid treats as no-ops. */
   createEffect(() => {
     const active = screen();
-    if (active.type === "model_picker" || active.type === "agent_settings" || active.type === "rewind") {
+    if (isFloatingOverlay(active)) {
       setOverlaySelected(active.selected);
       setOverlayNavigated(false);
     }
@@ -177,15 +184,11 @@ export function ThreadRoot(props: {
       props.controller.handleScreenKey(key);
       return;
     }
-    if (activeScreen.type === "model_picker" || activeScreen.type === "agent_settings" || activeScreen.type === "rewind") {
+    if (isFloatingOverlay(activeScreen)) {
       // The picker/path-action panels float over the session screen: selection
       // keys move the view-side signal (no notify — that is what flickered),
       // enter goes to the controller, everything else reaches the composer.
-      const count = activeScreen.type === "model_picker"
-        ? activeScreen.models.length
-        : activeScreen.type === "agent_settings"
-          ? 2
-          : activeScreen.items.length;
+      const count = overlaySelectionCount(activeScreen);
       if ((key.name === "up" || key.name === "down") && count > 0 && !activeScreen.busy) {
         key.preventDefault();
         const delta = key.name === "up" ? -1 : 1;
@@ -254,7 +257,7 @@ export function ThreadRoot(props: {
       <Switch>
         {/* The model picker and path-action panels are overlays on
             the session screen, not separate screens, so they all route here. */}
-        <Match when={screen().type === "session" || screen().type === "model_picker" || screen().type === "agent_settings" || screen().type === "rewind" || screen().type === "ask"}>
+        <Match when={screen().type === "session" || isFloatingOverlay(screen()) || screen().type === "ask"}>
           <SessionScreen
             controller={props.controller}
             state={state}

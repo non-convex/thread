@@ -12,6 +12,13 @@ export interface HistoryViewItem {
   status: "current-path" | "current-session-off-path" | "other-session";
 }
 
+export interface AgentPickerItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+  detail: string;
+}
+
 export type EphemeralView =
   | { type: "document"; title: string; content: string }
   | {
@@ -23,6 +30,7 @@ export type EphemeralView =
       scope: "configured" | "all";
     }
   | { type: "agent_settings"; agentId: string; label: string; enabled: boolean }
+  | { type: "agent_picker"; agents: AgentPickerItem[] }
   | { type: "rewind"; items: HistoryViewItem[] };
 
 export interface CommandResult {

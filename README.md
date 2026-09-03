@@ -67,7 +67,7 @@ thread auth status
 thread --root /path/to/project
 ```
 
-Run `/agent main model all` inside the TUI to choose an available model, or select one at startup:
+Run `/model all` inside the TUI to choose an available model, or select one at startup:
 
 ```bash
 thread --root /path/to/project --provider openai-codex --model <model-id>
@@ -161,7 +161,8 @@ Workers belong to their parent turn. Finishing or interrupting the turn, closing
 | `/session [<session-id>]` | List Sessions or resume one. |
 | `/rewind [<turn-id-or-user-entry-id>]` | Choose or directly restore a pre-turn checkpoint. |
 | `/compact` | Compact the active live context. |
-| `/agent` | Show all built-in agent states. |
+| `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or select the main model. |
+| `/agent` | Choose an agent, then configure it. |
 | `/agent <id> [on\|off]` | Open settings or toggle a secondary agent. |
 | `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | Inspect or select an agent model. |
 | `/skill [<name> [extra instruction]]` | List or invoke a loaded skill. |

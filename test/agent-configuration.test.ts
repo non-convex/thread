@@ -117,7 +117,7 @@ test("old state remains readable and Dreamer enablement persists without changin
   assert.deepEqual(await loadThreadState(statePath), next);
 });
 
-test("/agent is the common model entry point and old commands remain aliases", async (t) => {
+test("/model selects the main model and /agent configures secondary agents", async (t) => {
   const values = await directory("thread-agent-command-");
   t.after(values.cleanup);
   const root = path.join(values.path, "project");
@@ -138,7 +138,8 @@ test("/agent is the common model entry point and old commands remain aliases", a
   try {
     const suggestions = primarySlashSuggestions(false);
     assert.ok(suggestions.some((item) => item.name === "agent"));
-    assert.ok(!suggestions.some((item) => item.name === "model" || item.name === "subagent"));
+    assert.ok(suggestions.some((item) => item.name === "model"));
+    assert.ok(!suggestions.some((item) => item.name === "subagent"));
 
     assert.deepEqual(app.agentProfiles.list().map((profile) => profile.id), ["main"]);
     const overview = await app.handleInput("/agent", { signal: new AbortController().signal });
@@ -146,6 +147,14 @@ test("/agent is the common model entry point and old commands remain aliases", a
     assert.match(overview.result.content, /main: on/);
     assert.match(overview.result.content, /implementation-worker: off/);
     assert.match(overview.result.content, /dreamer: off/);
+    assert.equal(overview.result.view?.type, "agent_picker");
+    if (overview.result.view?.type === "agent_picker") {
+      assert.deepEqual(overview.result.view.agents.map((agent) => agent.id), [
+        "main",
+        "implementation-worker",
+        "dreamer",
+      ]);
+    }
 
     await app.handleInput("/agent implementation-worker model test/worker", { signal: new AbortController().signal });
     await app.handleInput("/agent dreamer model test/dreamer", { signal: new AbortController().signal });
@@ -158,8 +167,16 @@ test("/agent is the common model entry point and old commands remain aliases", a
     ]);
     assert.equal(states.at(-1)?.agents?.dreamer?.enabled, true);
 
-    await app.handleInput("/subagent off", { signal: new AbortController().signal });
+    await app.handleInput("/agent implementation-worker off", { signal: new AbortController().signal });
     assert.equal(app.subagentEnabled, false);
+    await assert.rejects(
+      app.handleInput("/subagent off", { signal: new AbortController().signal }),
+      /Unknown command: \/subagent/,
+    );
+    await assert.rejects(
+      app.handleInput("/foo", { signal: new AbortController().signal }),
+      /Unknown command: \/foo/,
+    );
     await app.handleInput("/model test/main-2", { signal: new AbortController().signal });
     assert.equal(app.model?.modelId, "main-2");
     assert.equal(app.agentProfiles.get("main")?.model.modelId, "main-2");

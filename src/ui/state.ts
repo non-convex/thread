@@ -1,5 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
-import type { EphemeralView, HistoryViewItem } from "../commands/types.js";
+import type { AgentPickerItem, EphemeralView, HistoryViewItem } from "../commands/types.js";
 import type { AskRequest } from "./ask.js";
 import type { UiEvent } from "./events.js";
 import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/model.js";
@@ -64,6 +64,8 @@ export interface ModelPickerScreen {
   selected: number;
   busy: boolean;
   error: string | undefined;
+  /** When set, Esc reopens this overlay instead of returning to the session. */
+  returnTo?: "agent_picker";
 }
 
 export interface AgentSettingsScreen {
@@ -71,6 +73,16 @@ export interface AgentSettingsScreen {
   agentId: string;
   label: string;
   enabled: boolean;
+  selected: number;
+  busy: boolean;
+  error: string | undefined;
+  /** When set, Esc reopens this overlay instead of returning to the session. */
+  returnTo?: "agent_picker";
+}
+
+export interface AgentPickerScreen {
+  type: "agent_picker";
+  agents: AgentPickerItem[];
   selected: number;
   busy: boolean;
   error: string | undefined;
@@ -99,8 +111,25 @@ export type UiScreen =
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
   | AgentSettingsScreen
+  | AgentPickerScreen
   | RewindScreen
   | AskScreen;
+
+export type FloatingOverlayScreen = ModelPickerScreen | AgentSettingsScreen | AgentPickerScreen | RewindScreen;
+
+export function isFloatingOverlay(screen: UiScreen): screen is FloatingOverlayScreen {
+  return screen.type === "model_picker"
+    || screen.type === "agent_settings"
+    || screen.type === "agent_picker"
+    || screen.type === "rewind";
+}
+
+export function overlaySelectionCount(screen: FloatingOverlayScreen): number {
+  if (screen.type === "model_picker") return screen.models.length;
+  if (screen.type === "agent_settings") return 2;
+  if (screen.type === "agent_picker") return screen.agents.length;
+  return screen.items.length;
+}
 
 export interface UiState {
   screen: UiScreen;
@@ -196,6 +225,15 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       items: view.items,
       selected: 0,
       confirm: false,
+      busy: false,
+      error: undefined,
+    };
+  }
+  if (view.type === "agent_picker") {
+    state.screen = {
+      type: "agent_picker",
+      agents: view.agents,
+      selected: 0,
       busy: false,
       error: undefined,
     };

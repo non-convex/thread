@@ -37,6 +37,7 @@ export function primarySlashSuggestions(hasSkills: boolean): SlashSuggestion[] {
     { name: "clear", description: "Clear the visible transcript" },
     { name: "compact", description: "Compact the current path's live context" },
     { name: "agent", description: "Configure agent models and background agents" },
+    { name: "model", description: "Inspect or select the main model" },
     { name: "new", description: "Create an empty Session from the project Root" },
     { name: "session", description: "List or resume root Sessions" },
     ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
@@ -199,8 +200,17 @@ export class ThreadTuiController {
   }
 
   closeView(): void {
-    if (this.state.screen.type === "ask") this.pendingAsk?.reject(new AskDismissedError());
-    else this.state.screen = { type: "session" };
+    if (this.state.screen.type === "ask") {
+      this.pendingAsk?.reject(new AskDismissedError());
+    } else if (
+      (this.state.screen.type === "model_picker" || this.state.screen.type === "agent_settings")
+      && this.state.screen.returnTo === "agent_picker"
+    ) {
+      void this.submit("/agent");
+      return;
+    } else {
+      this.state.screen = { type: "session" };
+    }
     this.notify();
   }
 
@@ -214,6 +224,10 @@ export class ThreadTuiController {
     });
     if (screen.type === "model_picker" && enter && !screen.busy) {
       void this.advanceModelPicker();
+      return true;
+    }
+    if (screen.type === "agent_picker" && enter && !screen.busy) {
+      void this.advanceAgentPicker();
       return true;
     }
     if (screen.type === "agent_settings" && enter && !screen.busy) {
@@ -309,13 +323,31 @@ export class ThreadTuiController {
     this.notify();
   }
 
+  private async advanceAgentPicker(): Promise<void> {
+    const screen = this.state.screen;
+    if (screen.type !== "agent_picker") return;
+    const agent = screen.agents[screen.selected];
+    if (!agent) return;
+    screen.busy = true;
+    this.notify();
+    await this.submit(`/agent ${agent.id}`);
+    if (this.state.screen.type === "model_picker" || this.state.screen.type === "agent_settings") {
+      this.state.screen.returnTo = "agent_picker";
+    } else if (this.state.screen.type === "agent_picker") {
+      this.state.screen = { type: "session" };
+    }
+    this.notify();
+  }
+
   private async advanceAgentSettings(): Promise<void> {
     const screen = this.state.screen;
     if (screen.type !== "agent_settings") return;
+    const returnTo = screen.returnTo;
     screen.busy = true;
     this.notify();
     await this.submit(`/agent ${screen.agentId} ${screen.selected === 0 ? "off" : "on"}`);
     if (this.state.screen.type === "agent_settings") this.state.screen = { type: "session" };
+    else if (this.state.screen.type === "model_picker" && returnTo) this.state.screen.returnTo = returnTo;
     this.notify();
   }
 

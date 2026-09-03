@@ -12,7 +12,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
     `Session Tree ${tree.id}\nSession ${app.sessionTree.activeSession.id} @ ${app.sessionTree.activeLiveTip ?? "Root"}\n${
       app.model
         ? `model ${app.model.providerId}/${app.model.modelId}`
-        : "no model configured; use /agent main model to select one"
+        : "no model configured; use /model to select one"
     }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
   output.write(`implementation-worker ${app.subagentEnabled ? `on · ${app.subagentModel?.provider}/${app.subagentModel?.id}` : "off · use /agent to configure"}\n`);

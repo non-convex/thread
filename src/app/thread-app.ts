@@ -506,7 +506,7 @@ export class ThreadApp {
     const models = this.modelPickerModels(scope);
     const content = this.model
       ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nThinking level: ${this.thinkingLevel}`
-      : "No model selected. Use /agent main model list and /agent main model <provider>/<model>.";
+      : "No model selected. Use /model list and /model <provider>/<model>.";
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
       type: "model_picker",
@@ -590,16 +590,33 @@ export class ThreadApp {
     const main = this.model ? `${this.model.providerId}/${this.model.modelId}` : "not selected";
     const worker = this.subagentModel;
     const dreamer = this.dreamerModel;
+    const workerDetail = worker ? `${worker.provider}/${worker.id}` : "not selected";
+    const dreamerDetail = dreamer ? `${dreamer.provider}/${dreamer.id}` : "not selected";
+    const agents = [
+      { id: MAIN_AGENT_PROFILE_ID, label: "Main", enabled: true, detail: main },
+      {
+        id: IMPLEMENTATION_WORKER_PROFILE_ID,
+        label: "Implementation worker",
+        enabled: this.subagentEnabled,
+        detail: workerDetail,
+      },
+      {
+        id: DREAMER_PROFILE_ID,
+        label: "Dreamer",
+        enabled: this.dreamerEnabled,
+        detail: this.dreamerLastError ? `${dreamerDetail} · error: ${this.dreamerLastError}` : dreamerDetail,
+      },
+    ];
     const content = [
       `main: on · ${main}`,
-      `implementation-worker: ${this.subagentEnabled ? "on" : "off"} · ${worker ? `${worker.provider}/${worker.id}` : "not selected"}`,
-      `dreamer: ${this.dreamerEnabled ? "on" : "off"} · ${dreamer ? `${dreamer.provider}/${dreamer.id}` : "not selected"}`,
+      `implementation-worker: ${this.subagentEnabled ? "on" : "off"} · ${workerDetail}`,
+      `dreamer: ${this.dreamerEnabled ? "on" : "off"} · ${dreamerDetail}`,
       ...(this.dreamerLastError ? [`dreamer last error: ${this.dreamerLastError}`] : []),
       ...this.agentProfileDiagnostics.map((diagnostic) =>
         `${diagnostic.profileId} ${diagnostic.level}: ${diagnostic.message}`
       ),
     ].join("\n");
-    return viewResult(content, { type: "document", title: "Agents", content });
+    return viewResult(content, { type: "agent_picker", agents });
   }
 
   private listModels(args: string[], usage: string): CommandResult {
@@ -661,18 +678,6 @@ export class ThreadApp {
     throw new Error("Usage: /agent [main|implementation-worker|dreamer] [model [all|list [provider]|<provider>/<model>]|on|off]");
   }
 
-  private handleSubagentCommand(args: string[]): CommandResult {
-    if (args.length === 0) return this.subagentStatus();
-    if (args.length === 1 && args[0] === "off") return this.disableSubagent();
-    if (args.length === 1 && args[0] === "on") return this.workerModelPicker();
-    if (args.length === 2 && args[0] === "on" && args[1] === "all") return this.workerModelPicker("all");
-    if (args.length === 1 && args[0]!.includes("/")) {
-      const separator = args[0]!.indexOf("/");
-      return this.enableSubagent(args[0]!.slice(0, separator), args[0]!.slice(separator + 1));
-    }
-    throw new Error("Usage: /subagent [off|on [all]|<provider>/<model>]");
-  }
-
   private handleModelCommand(args: string[]): CommandResult {
     if (args.length === 0) return this.modelStatus();
     if (args[0] === "all" && args.length === 1) return this.modelStatus("all");
@@ -728,7 +733,6 @@ export class ThreadApp {
       },
       agent: async (args) => ({ kind: "command", result: this.handleAgentCommand(args) }),
       model: async (args) => ({ kind: "command", result: this.handleModelCommand(args) }),
-      subagent: async (args) => ({ kind: "command", result: this.handleSubagentCommand(args) }),
       skill: async (name, extra, options) => {
         if (!name) return { kind: "command", result: ephemeral(this.describeSkills()) };
         const skill = this.skills.find((item) => item.name === name);
@@ -773,7 +777,7 @@ export class ThreadApp {
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
       turn: async (input, options) => {
-        if (!this.runtime) throw new Error("No model configured. Use /agent main model list and /agent main model <provider>/<model>.");
+        if (!this.runtime) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
         return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
       },
     });

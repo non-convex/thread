@@ -47,7 +47,7 @@ border / borderStrong       轻边框只给卡片和浮层
 └──────────────────────────────────────────┘
 ```
 
-欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」、一句 Session Tree 说明、以及 `/agent` `/thread` `/compact` `⇧⇥` 的提示。
+欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」、一句 Session Tree 说明、以及 `/model` `/thread` `/compact` `⇧⇥` 的提示。
 
 临时文档（`/thread history` 一类 ephemeral view）不叠在 session 上，而是换成 `DocumentScreen`：顶栏标题、Markdown 滚动区、底栏操作提示。这份内容不写入 Session Tree。
 
@@ -79,7 +79,7 @@ border / borderStrong       轻边框只给卡片和浮层
 
 ## 浮层
 
-模型列表、次级 Agent 开关、rewind、ask 和 `/` 补全都不是全屏接管。它们是输入框上方的同一类小面板：左右各留 1 列，圆角，`surface` 底，`borderStrong` 边。Ask 用 `spark` 边框，因为它在等用户回答。
+`/agent`、模型列表、次级 Agent 开关、rewind、ask 和 `/` 补全都不是全屏接管。它们是输入框上方的同一类小面板：左右各留 1 列，圆角，`surface` 底，`borderStrong` 边。Ask 用 `spark` 边框，因为它在等用户回答。`/agent` 先列出 main、implementation-worker 和 dreamer；回车后进入该 Agent 的下一级浮层（主模型列表，或次级 Agent 的开关）。Esc 从下一级回到 Agent 列表。
 
 共同语言：
 

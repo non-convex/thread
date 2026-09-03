@@ -18,13 +18,23 @@ export interface InputRouteHandlers {
   newSession(options: InputOptions): Promise<InputResult>;
   agent(args: string[], options: InputOptions): Promise<InputResult>;
   model(args: string[], options: InputOptions): Promise<InputResult>;
-  subagent(args: string[], options: InputOptions): Promise<InputResult>;
   skill(name: string | undefined, extra: string | undefined, options: InputOptions): Promise<InputResult>;
   compact(options: InputOptions): Promise<InputResult>;
   session(args: string[], options: InputOptions): Promise<InputResult>;
   rewind(args: string[], options: InputOptions): Promise<InputResult>;
   thread(input: string, options: InputOptions): Promise<InputResult>;
   turn(input: string, options: InputOptions): Promise<InputResult>;
+}
+
+const RETIRED_COMMANDS: Record<string, string> = {
+  subagent: "Unknown command: /subagent. Use /agent implementation-worker [on|off|model [all|list [provider]|<provider>/<model>]].",
+};
+
+function slashCommandName(trimmed: string): string | undefined {
+  if (!trimmed.startsWith("/")) return undefined;
+  const name = trimmed.slice(1).split(/\s/, 1)[0] ?? "";
+  if (!name || name.includes("/")) return undefined;
+  return name;
 }
 
 /** Parses user input and routes it without owning application or model state. */
@@ -36,14 +46,12 @@ export class InputRouter {
     if (trimmed === "/new") return this.handlers.newSession(options);
     if (trimmed.startsWith("/new ")) throw new Error("Usage: /new");
     if (trimmed === "/clear") return Promise.resolve({ kind: "command", result: clearDisplayResult() });
+    if (trimmed.startsWith("/clear ")) throw new Error("Usage: /clear");
     if (trimmed === "/agent" || trimmed.startsWith("/agent ")) {
       return this.handlers.agent(parseCommandLine(trimmed.slice(6).trim()), options);
     }
     if (trimmed === "/model" || trimmed.startsWith("/model ")) {
       return this.handlers.model(parseCommandLine(trimmed.slice(6).trim()), options);
-    }
-    if (trimmed === "/subagent" || trimmed.startsWith("/subagent ")) {
-      return this.handlers.subagent(parseCommandLine(trimmed.slice(9).trim()), options);
     }
     if (trimmed === "/skill" || trimmed.startsWith("/skill ")) {
       const rest = trimmed.slice(6).trim();
@@ -62,6 +70,10 @@ export class InputRouter {
     }
     if (trimmed === THREAD_COMMAND_PREFIX || trimmed.startsWith(`${THREAD_COMMAND_PREFIX} `)) {
       return this.handlers.thread(trimmed, options);
+    }
+    const command = slashCommandName(trimmed);
+    if (command && command !== "exit") {
+      throw new Error(RETIRED_COMMANDS[command] ?? `Unknown command: /${command}`);
     }
     return this.handlers.turn(input, options);
   }

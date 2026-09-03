@@ -67,7 +67,7 @@ thread auth status
 thread --root /path/to/project
 ```
 
-进入 TUI 后运行 `/agent main model all` 选择可用模型，也可以在启动时直接指定：
+进入 TUI 后运行 `/model all` 选择可用模型，也可以在启动时直接指定：
 
 ```bash
 thread --root /path/to/project --provider openai-codex --model <model-id>
@@ -161,7 +161,8 @@ Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或�
 | `/session [<session-id>]` | 列出或恢复 Session。 |
 | `/rewind [<turn-id-or-user-entry-id>]` | 选择或直接恢复 turn 前检查点。 |
 | `/compact` | 压缩 active live context。 |
-| `/agent` | 查看所有内置 Agent 的状态。 |
+| `/model [all\|list [provider]\|<provider>/<model>]` | 查看或选择主模型。 |
+| `/agent` | 选择 Agent，再进入它的设置。 |
 | `/agent <id> [on\|off]` | 打开设置或启停次级 Agent。 |
 | `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | 查看或选择 Agent 模型。 |
 | `/skill [<name> [extra instruction]]` | 列出或调用已加载 skill。 |

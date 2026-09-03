@@ -104,6 +104,7 @@ export type {
   ThreadCommandContext,
   CommandResult,
   EphemeralView,
+  AgentPickerItem,
   HistoryViewItem,
 } from "./commands/types.js";
 export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
