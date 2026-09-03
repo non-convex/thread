@@ -1,7 +1,7 @@
 import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, For, Index, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
 import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
-import { bold, dim, dimItalic, italic } from "./theme.js";
+import { bold, dim, dimItalic, italic, STATUS_ICONS, detectContentType, formatJson, type ContentType } from "./theme.js";
 import { projectLiveUser } from "./transcript-projection.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
@@ -151,19 +151,21 @@ function MarkdownReply(props: {
 }
 
 /**
- * One agent turn (thinking, tools and reply) sits on a slightly raised surface
- * so the group reads as one unit. This replaces the earlier accent rail: the
- * boundary of the tinted block carries the grouping, which stays legible while
- * scrolling instead of relying on a label that leaves the viewport. A one-line
- * label anchors the top.
+ * Turn block without background - cleaner appearance
  */
 function TurnBlock(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
   const theme = props.resources.theme;
   return (
-    <box flexDirection="column" width="100%" marginBottom={1}>
-      <box flexDirection="column" width="100%" backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-        <text height={1} wrapMode="none" fg={theme.accentDim} attributes={bold} marginBottom={1}>
-          {props.label}
+    <box flexDirection="column" width="100%" marginBottom={2}>
+      <box 
+        flexDirection="column" 
+        width="100%" 
+        paddingX={2}
+        paddingTop={1}
+        paddingBottom={1}
+      >
+        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold} marginBottom={1}>
+          ▍{props.label}
         </text>
         {props.children}
       </box>
@@ -171,13 +173,13 @@ function TurnBlock(props: { label: string; resources: ThreadViewResources; child
   );
 }
 
+/**
+ * User message card with refined border
+ */
 function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   return (
     <box width="100%" flexDirection="row" justifyContent="flex-start" marginBottom={1} paddingLeft={1}>
-      {/* Outline only: the composer already owns the filled rounded box, so a
-          second filled card would collide with it and weigh the transcript down.
-          The border alone is enough to read the message as user input. */}
       <box
         flexDirection="column"
         flexShrink={1}
@@ -200,9 +202,6 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
  * the full wrapped text.
  */
 const COLLAPSED_THINKING_LINES = 5;
-// There is no terminal width in the shared transcript resource. Use a
-// conservative estimate so narrow terminals still get an expand affordance;
-// an unnecessary affordance is safer than clipped text with no way to reveal it.
 const THINKING_ESTIMATE_COLUMNS = 40;
 
 type StringSource = string | Accessor<string>;
@@ -251,7 +250,7 @@ function ThinkingView(props: {
           selectable={false}
         >
           {collapsible()
-            ? `${heading()} ${expanded() ? "▾" : "▸"} ${estimatedLines()} lines`
+            ? `${heading()} ${expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed} ${estimatedLines()} lines`
             : heading()}
         </text>
       </box>
@@ -294,25 +293,75 @@ function ThinkingView(props: {
   );
 }
 
-/* ── History items ──────────────────────────────────────────────────────── */
+/**
+ * Enhanced history tool item - cleaner without borders
+ * Major improvements:
+ * 1. Default display of full output (not just preview)
+ * 2. Intelligent content type detection (JSON/code/text)
+ * 3. Automatic JSON formatting
+ * 4. Use color to distinguish tool output (no background)
+ * 5. Click to expand/collapse for long outputs
+ */
+
+const TOOL_OUTPUT_PREVIEW_LINES = 5;
 
 function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   const failed = () => props.item.isError === true;
-  const summary = () => {
-    const content = props.item.content.trim();
-    return content && content !== props.item.args ? content : "";
-  };
+  const [expanded, setExpanded] = createSignal(false); // Default collapsed
+  
+  const contentType = createMemo((): ContentType => {
+    const content = props.item.content?.trim() ?? "";
+    if (!content || content === props.item.args) return "text";
+    return detectContentType(content);
+  });
+  
+  const displayContent = createMemo(() => {
+    const content = props.item.content?.trim() ?? "";
+    if (!content || content === props.item.args) return "";
+    
+    // Format JSON for better readability
+    if (contentType() === "json") {
+      return formatJson(content);
+    }
+    
+    return content;
+  });
+  
+  const contentLines = createMemo(() => {
+    const content = displayContent();
+    return content ? content.split("\n").length : 0;
+  });
+  
+  const hasContent = () => displayContent().length > 0;
+  const isLongOutput = () => contentLines() > TOOL_OUTPUT_PREVIEW_LINES;
+  
+  const previewContent = createMemo(() => {
+    const content = displayContent();
+    if (!isLongOutput() || expanded()) return content;
+    return content.split("\n").slice(0, TOOL_OUTPUT_PREVIEW_LINES).join("\n");
+  });
+  
   return (
-    <box flexDirection="column" width="100%">
+    <box 
+      flexDirection="column" 
+      width="100%" 
+      marginBottom={1}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT && isLongOutput()) {
+          setExpanded((value) => !value);
+        }
+      }}
+    >
+      {/* Tool header with enhanced layout */}
       <box flexDirection="row" width="100%" height={1}>
         <text width={2} height={1} wrapMode="none" fg={failed() ? theme.error : theme.success}>
-          {failed() ? "×" : "✓"}
+          {failed() ? STATUS_ICONS.error : STATUS_ICONS.success}
         </text>
-        <text height={1} wrapMode="none" fg={theme.softText} attributes={bold}>
+        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold}>
           {props.item.name ?? props.item.label ?? "tool"}
         </text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
+        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.text}>
           {props.item.args ? `  ${props.item.args}` : ""}
         </text>
         <Show when={props.item.elapsed}>
@@ -320,12 +369,28 @@ function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewRes
             {props.item.elapsed}
           </text>
         </Show>
+        <Show when={isLongOutput()}>
+          <text width={2} height={1} wrapMode="none" fg={theme.muted}>
+            {expanded() ? ` ${STATUS_ICONS.expanded}` : ` ${STATUS_ICONS.collapsed}`}
+          </text>
+        </Show>
       </box>
-      <Show when={failed() && props.item.content}>
-        <text fg={theme.error} wrapMode="word" marginLeft={2}>{props.item.content}</text>
-      </Show>
-      <Show when={!failed() && summary()}>
-        <text height={1} wrapMode="none" truncate={true} fg={theme.faint} marginLeft={2}>{summary()}</text>
+      
+      {/* Tool output without background - use color to distinguish */}
+      <Show when={hasContent()}>
+        <box 
+          flexDirection="column" 
+          width="100%" 
+          marginLeft={2}
+          paddingLeft={1}
+        >
+          <text 
+            fg={failed() ? theme.error : theme.muted} 
+            wrapMode="word"
+          >
+            {previewContent()}
+          </text>
+        </box>
       </Show>
     </box>
   );
@@ -350,7 +415,7 @@ function CompactionInfo(props: { content: string; detail?: string | undefined; r
           {props.content}
         </text>
         <Show when={expandable()}>
-          <text height={1} wrapMode="none" fg={theme.faint}> {expanded() ? "▾" : "▸"}</text>
+          <text height={1} wrapMode="none" fg={theme.faint}> {expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}</text>
         </Show>
       </box>
       <Show when={expanded() && expandable()}>
@@ -363,9 +428,9 @@ function CompactionInfo(props: { content: string; detail?: string | undefined; r
 }
 
 function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResources["theme"]): { icon: string; color: string } {
-  if (summary.status === "running") return { icon: "◌", color: theme.spark };
-  if (summary.status === "completed") return { icon: "✓", color: theme.success };
-  if (summary.status === "failed") return { icon: "×", color: theme.error };
+  if (summary.status === "running") return { icon: STATUS_ICONS.running, color: theme.spark };
+  if (summary.status === "completed") return { icon: STATUS_ICONS.success, color: theme.success };
+  if (summary.status === "failed") return { icon: STATUS_ICONS.error, color: theme.error };
   return { icon: "−", color: theme.muted };
 }
 
@@ -394,7 +459,7 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
           {summary().title}
         </text>
         <text height={1} wrapMode="none" fg={props.resources.theme.muted}>
-          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} {expanded() ? "▾" : "▸"}
+          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} {expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
         </text>
       </box>
       <Show when={expanded()}>
@@ -468,38 +533,124 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
   );
 }
 
-function toolResultText(block: LiveBlock): string {
-  return block.tool?.error?.trim() ?? "";
-}
-
+/**
+ * Enhanced live tool view - real-time output display with collapsible content
+ * Matches HistoryToolItem behavior but for live tools
+ */
 function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
   const block = props.block;
   const theme = props.resources.theme;
   const tool = () => block().tool;
   const running = () => tool()?.status === "queued" || tool()?.status === "running";
   const failed = () => tool()?.status === "failed";
+  const completed = () => tool()?.status === "completed";
   const elapsed = () => elapsedLabel(tool()?.startedAt, tool()?.finishedAt);
+  
+  // Get content from block.content (for success) or tool.error (for failure)
+  const outputContent = () => {
+    if (failed()) return tool()?.error?.trim() ?? "";
+    return block().content?.trim() ?? "";
+  };
+  
+  const hasOutput = () => outputContent().length > 0;
+  
+  // Content type detection
+  const contentType = createMemo((): ContentType => {
+    const content = outputContent();
+    if (!content) return "text";
+    return detectContentType(content);
+  });
+  
+  const displayContent = createMemo(() => {
+    const content = outputContent();
+    if (!content) return "";
+    
+    // Format JSON for better readability
+    if (contentType() === "json") {
+      return formatJson(content);
+    }
+    
+    return content;
+  });
+  
+  const contentLines = createMemo(() => {
+    const content = displayContent();
+    return content ? content.split("\n").length : 0;
+  });
+  
+  const isLongOutput = () => contentLines() > TOOL_OUTPUT_PREVIEW_LINES;
+  
+  // Default collapsed to show only 5 lines
+  const [expanded, setExpanded] = createSignal(false);
+  
+  const previewContent = createMemo(() => {
+    const content = displayContent();
+    if (!isLongOutput() || expanded()) return content;
+    return content.split("\n").slice(0, TOOL_OUTPUT_PREVIEW_LINES).join("\n");
+  });
+  
   return (
-    <box flexDirection="column" width="100%">
+    <box 
+      flexDirection="column" 
+      width="100%" 
+      marginBottom={1}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT && isLongOutput() && completed()) {
+          setExpanded((value) => !value);
+        }
+      }}
+    >
+      {/* Tool header */}
       <box flexDirection="row" width="100%" height={1}>
         <Show when={running()} fallback={
           <text width={2} height={1} wrapMode="none" fg={failed() ? theme.error : theme.success}>
-            {failed() ? "×" : "✓"}
+            {failed() ? STATUS_ICONS.error : STATUS_ICONS.success}
           </text>
         }>
           <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
-        <text height={1} wrapMode="none" fg={theme.softText} attributes={bold}>{tool()?.name ?? "tool"}</text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
+        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold}>{tool()?.name ?? "tool"}</text>
+        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.text}>
           {tool() ? `  ${toolArgs(tool()!.args)}` : ""}
         </text>
         <Show when={elapsed()}>
           <text width={6} flexShrink={0} height={1} wrapMode="none" truncate={true} fg={theme.faint}>{elapsed()}</text>
         </Show>
+        <Show when={isLongOutput() && completed()}>
+          <text width={2} height={1} wrapMode="none" fg={theme.muted}>
+            {expanded() ? ` ${STATUS_ICONS.expanded}` : ` ${STATUS_ICONS.collapsed}`}
+          </text>
+        </Show>
       </box>
-      <Show when={failed() && toolResultText(block())}>
-        <text fg={theme.error} wrapMode="word" marginLeft={2}>{toolResultText(block())}</text>
+      
+      {/* Output display - no background, use color to distinguish */}
+      <Show when={completed() && hasOutput()}>
+        <box 
+          flexDirection="column" 
+          width="100%" 
+          marginLeft={2}
+          paddingLeft={1}
+        >
+          <text 
+            fg={failed() ? theme.error : theme.muted} 
+            wrapMode="word"
+          >
+            {previewContent()}
+          </text>
+        </box>
+      </Show>
+      
+      {/* Running state - show error immediately if failed during execution */}
+      <Show when={running() && failed() && hasOutput()}>
+        <box 
+          flexDirection="column" 
+          width="100%" 
+          marginLeft={2}
+          paddingLeft={1}
+        >
+          <text fg={theme.error} wrapMode="word">{displayContent()}</text>
+        </box>
       </Show>
     </box>
   );

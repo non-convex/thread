@@ -1,20 +1,20 @@
 import { SyntaxStyle, createTextAttributes, type ThemeMode } from "@opentui/core";
 
 /**
- * Warm forest palette: olive-umber neutrals, sand text, and muted orange,
- * gold and moss pastels. Hierarchy is carried by lightness steps
- * (bg -> surface -> surface-2) instead of shadows: the transcript groups a
- * turn by tinted block rather than a rail, so that one step must read as a
- * boundary without becoming a hard edge.
- *
- * Neutrals stay low-key so two sparks can earn attention by being rare. They
- * are reserved for one meaning each and never used for static decoration:
- *
- *   spark     "happening right now" - spinners, the live composer border, cursor
- *   sparkAlt  "your selection is here" - selected rows, the current-item marker
- *
- * accent stays the low-key primary for turn labels, headings and static hints.
- * Semantic colours are independent of both and only signal outcome.
+ * Deep Space Blue + Vibrant Orange: Professional development tool theme
+ * based on deep navy blue and vibrant orange accents.
+ * 
+ * Design philosophy:
+ * - Deep navy blue background (#0B0E14) - more refined than pure black
+ * - High contrast cool white text for readability
+ * - Vibrant orange accent (#F97316) for headings and emphasis - warm and attention-grabbing
+ * - Gold spark for "in progress" states
+ * - Emerald green sparkAlt for "selected" states
+ * 
+ * Visual hierarchy achieved through progressive brightening:
+ * background → surface → surfaceHigh
+ * 
+ * Borders have two intensity levels: border (light) and borderStrong (strong).
  */
 export interface ThreadTerminalTheme {
   background: string;
@@ -29,11 +29,11 @@ export interface ThreadTerminalTheme {
   accent: string;
   accentDim: string;
   accentStrong: string;
-  /** Bright spark: work in progress. Rare by design. */
+  /** Gold: work in progress. Use sparingly. */
   spark: string;
-  /** Bright spark: the user's current selection. Rare by design. */
+  /** Emerald green: user's current selection. Use sparingly. */
   sparkAlt: string;
-  /** Inline code and literals in replies: readable, deliberately not attention-seeking. */
+  /** Inline code and literals: readable but not attention-seeking. */
   code: string;
   success: string;
   warning: string;
@@ -45,64 +45,88 @@ export interface ThreadTerminalTheme {
 }
 
 const darkTheme: ThreadTerminalTheme = {
-  // Olive, not coffee: a warm grey-green canvas reads calmer than brown and
-  // lets the sand text sit without halating.
-  background: "#2e332b",
-  // The turn block uses the lightest step: it only has to hint at grouping, and
-  // a heavier tint would compete with the composer for attention.
-  surface: "#373d34",
-  surfaceHigh: "#41483e",
-  text: "#d3c9bb",
-  softText: "#b5afa0",
-  muted: "#9c9a88",
-  // Lifted above muted's neighbourhood because faint also sits on the composer,
-  // the most raised surface, where a darker value falls below AA-large.
-  faint: "#8c8a7a",
-  // Soft teal against the warm neutrals, so thinking never reads as body text.
-  thinking: "#86b0a8",
-  thinkingDim: "#6d948c",
-  accent: "#e0996f",
-  accentDim: "#bf7d58",
-  accentStrong: "#edb28c",
-  spark: "#ddbc7e",
-  sparkAlt: "#a9c083",
-  code: "#c6b28c",
-  success: "#96b374",
-  warning: "#d2a75e",
-  error: "#e07b78",
-  // Borders sit above surfaceHigh, since the cards they outline are drawn on the
-  // raised surfaces rather than on the base background.
-  border: "#4b5347",
-  borderStrong: "#5a6355",
-  selection: "#d3c9bb",
-  selectionText: "#2e332b",
+  // Deep navy blue background - modern and professional
+  background: "#0B0E14",
+  
+  // Turn blocks use slightly brightened surfaces to establish hierarchy
+  surface: "#161B22",
+  surfaceHigh: "#1C2128",
+  
+  // Much softer text system - lower contrast like Codex
+  // Main text is softer gray, not bright white
+  text: "#B4BCC6",           // Reduced from #D0D7DE - softer main text
+  softText: "#8B93A0",       // Reduced from #B1BAC4 - less bright
+  muted: "#6B7280",          // Reduced from #7D8590 - more muted
+  faint: "#5B6369",          // Reduced from #6E7781 - fainter
+  
+  // Thinking uses very soft lavender - barely noticeable
+  thinking: "#9B8FB8",       // Reduced from #B4A7D6 - much softer purple
+  thinkingDim: "#8578A8",    // Dimmer
+  
+  // Accent: very soft warm orange - low saturation
+  accent: "#C8936D",         // Reduced from #E9A06D - much softer
+  accentDim: "#B07D57",      // Less saturated
+  accentStrong: "#D4A582",   // Softer strong variant
+  
+  // Spark: muted gold - not eye-catching
+  spark: "#C09850",          // Reduced from #E0A850
+  
+  // SparkAlt: muted green
+  sparkAlt: "#5FA068",       // Reduced from #6EBD75
+  
+  // Code text uses neutral gray - very low contrast
+  code: "#8B93A0",           // Same as softText
+  
+  // Semantic colors: significantly muted
+  success: "#5FA068",        // Muted green
+  warning: "#A8824A",        // Muted amber
+  error: "#C86B66",          // Muted red (not bright)
+  
+  // Borders: very subtle
+  border: "#262C34",         // Reduced from #30363D - barely visible
+  borderStrong: "#3A424A",   // Reduced from #484F58
+  
+  // Selection state
+  selection: "#C8936D",
+  selectionText: "#0D1117",
 };
 
 const lightTheme: ThreadTerminalTheme = {
-  background: "#f7f2e7",
-  surface: "#fcf8ef",
-  surfaceHigh: "#ece5d4",
-  text: "#3f4433",
-  softText: "#5d6150",
-  muted: "#7e8271",
-  faint: "#8f9280",
-  thinking: "#3e7285",
-  thinkingDim: "#5f8794",
-  // Orange and gold must be pushed dark on cream to keep contrast;
-  // gold in particular is nearly invisible at its dark-theme value.
-  accent: "#b85d33",
-  accentDim: "#c97d54",
-  accentStrong: "#9d4e2a",
-  spark: "#8f6f2e",
-  sparkAlt: "#56703a",
-  code: "#7a6238",
-  success: "#4f7a3a",
-  warning: "#8a6320",
-  error: "#b34a48",
-  border: "#ddd4bd",
-  borderStrong: "#c8bda2",
-  selection: "#3f4433",
-  selectionText: "#f7f2e7",
+  // Pure white background, clean and refreshing
+  background: "#FFFFFF",
+  surface: "#F6F8FA",
+  surfaceHigh: "#EFF1F3",
+  
+  // Dark text system
+  text: "#1F2328",
+  softText: "#57606A",
+  muted: "#8C959F",
+  faint: "#A8B1BC",
+  
+  // Thinking blue needs to be deeper on light background
+  thinking: "#0969DA",
+  thinkingDim: "#218BFF",
+  
+  // Accent: deep orange series
+  accent: "#EA580C",
+  accentDim: "#F97316",
+  accentStrong: "#C2410C",
+  
+  // Spark: gold also needs to be darker on light background
+  spark: "#BF8700",
+  sparkAlt: "#1A7F37",
+  
+  code: "#57606A",
+  
+  success: "#1A7F37",
+  warning: "#9A6700",
+  error: "#CF222E",
+  
+  border: "#D1D9E0",
+  borderStrong: "#ACB6C0",
+  
+  selection: "#EA580C",
+  selectionText: "#FFFFFF",
 };
 
 export const bold = createTextAttributes({ bold: true });
@@ -123,19 +147,16 @@ export function createThreadSyntaxStyle(theme: ThreadTerminalTheme): SyntaxStyle
     "markup.strong": { fg: theme.text, bold: true },
     "markup.italic": { fg: theme.softText, italic: true },
     "markup.strikethrough": { fg: theme.muted, dim: true },
-    // Inline code appears constantly in replies, so it takes the quiet warm sand
-    // rather than the accent, which would turn a normal paragraph into noise.
-    "markup.raw": { fg: theme.code },
-    "markup.link": { fg: theme.muted },
-    // Link labels and list bullets are structural, not emphatic: an underline and
-    // a dim marker are enough, and colouring every bullet would tint whole lists.
-    "markup.link.label": { fg: theme.code, underline: true },
+    // Inline code with subtle background and softer accent color
+    "markup.raw": { fg: theme.accentDim, bg: theme.surface },
+    "markup.link": { fg: theme.accent },
+    // Link labels and list markers are structural
+    "markup.link.label": { fg: theme.accent, underline: true },
     "markup.link.url": { fg: theme.muted, underline: true },
     "markup.list": { fg: theme.muted },
     "markup.quote": { fg: theme.muted, italic: true },
     comment: { fg: theme.muted, italic: true },
-    // Inside a fenced block the soft orange accent is welcome: it is bounded, so the
-    // colour reads as syntax rather than as emphasis leaking into prose.
+    // Semantic colors in code blocks
     string: { fg: theme.success },
     keyword: { fg: theme.accent, bold: true },
     function: { fg: theme.accentStrong },
@@ -145,4 +166,125 @@ export function createThreadSyntaxStyle(theme: ThreadTerminalTheme): SyntaxStyle
     operator: { fg: theme.muted },
     punctuation: { fg: theme.muted },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Visual enhancement utilities
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * 8-cell precision context meter with sub-cell gradients and dynamic colors.
+ * Returns formatted meter string; caller applies color based on percentage.
+ */
+export function contextMeter(percent: number, cells = 8): string {
+  const clamped = Math.max(0, Math.min(100, percent));
+  const exact = (clamped / 100) * cells;
+  const filled = Math.floor(exact);
+  const partial = exact - filled;
+  
+  let result = "█".repeat(filled);
+  
+  // Use sub-cell characters for increased precision
+  if (filled < cells) {
+    if (partial > 0.66) result += "▓";
+    else if (partial > 0.33) result += "▒";
+    else if (partial > 0) result += "░";
+  }
+  
+  // Fill remaining spaces
+  const remaining = Math.max(0, cells - filled - (partial > 0 ? 1 : 0));
+  result += "░".repeat(remaining);
+  
+  return result;
+}
+
+/**
+ * Return color based on context usage percentage:
+ * 0-60%: muted (normal)
+ * 60-80%: warning (caution)
+ * 80-100%: error (alert)
+ */
+export function contextMeterColor(percent: number, theme: ThreadTerminalTheme): string {
+  if (percent >= 80) return theme.error;
+  if (percent >= 60) return theme.warning;
+  return theme.muted;
+}
+
+/**
+ * Status icons - using Unicode characters for clear visual feedback
+ */
+export const STATUS_ICONS = {
+  success: "✓",
+  error: "✗",
+  running: "◌",
+  pending: "○",
+  expanded: "▾",
+  collapsed: "▸",
+  selected: "▸",
+  current: "●",
+  info: "ⓘ",
+  warning: "⚠",
+  sparkle: "✦",
+  code: "⌘",
+  json: "{ }",
+} as const;
+
+/**
+ * Format token count (k/M)
+ */
+export function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
+
+/**
+ * Format duration
+ */
+export function formatDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 1) return `${ms}ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m${remainingSeconds}s`;
+}
+
+/**
+ * Detect content type for intelligent display
+ */
+export type ContentType = "json" | "code" | "text";
+
+export function detectContentType(content: string): ContentType {
+  const trimmed = content.trim();
+  
+  // JSON detection: format + parsability
+  if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && 
+      (trimmed.endsWith("}") || trimmed.endsWith("]"))) {
+    try {
+      JSON.parse(trimmed);
+      return "json";
+    } catch {
+      // Not valid JSON, continue
+    }
+  }
+  
+  // Code detection: keywords and syntax features
+  if (/^(import |export |function |const |let |var |class |interface |type |=>|\{[\s\S]*\}|<[\s\S]*>)/m.test(trimmed)) {
+    return "code";
+  }
+  
+  return "text";
+}
+
+/**
+ * Format JSON with proper indentation
+ */
+export function formatJson(content: string): string {
+  try {
+    const parsed = JSON.parse(content.trim());
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return content;
+  }
 }

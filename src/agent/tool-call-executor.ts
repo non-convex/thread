@@ -195,6 +195,7 @@ export class ToolCallExecutor {
       name: prepared.call.name,
       isError: settled.isError,
       ...(settled.isError ? { error: uiToolError(settled.content) } : {}),
+      content: modelContent,
     });
 
     return {

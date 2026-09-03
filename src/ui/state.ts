@@ -352,6 +352,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
           trace: card.trace.map((block) => block.tool?.id === child.id
             ? {
                 ...block,
+                content: child.content ?? block.content,
                 tool: {
                   ...block.tool,
                   status: child.isError ? "failed" : "completed",
@@ -471,6 +472,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
           blocks: state.liveTurn.blocks.map((block) => block.tool?.id === event.id
             ? {
                 ...block,
+                content: event.content ?? block.content,
                 tool: {
                   ...block.tool,
                   status: event.isError ? "failed" : "completed",

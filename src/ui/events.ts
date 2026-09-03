@@ -5,7 +5,7 @@ export type AgentTaskLiveEvent =
   | { type: "assistant_text_delta"; step: number; delta: string }
   | { type: "assistant_thinking_delta"; step: number; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Record<string, unknown>; phase?: "queued" | "running" }
-  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string };
+  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string; content?: string };
 
 export type UiEvent =
   | { type: "agent_task_created"; summary: AgentTaskSummary }
@@ -41,7 +41,7 @@ export type UiEvent =
   | { type: "model_retry_started"; step: number; attempt: number; maxAttempts: number }
   | { type: "context_updated"; percent: number }
   | { type: "tool_started"; id: string; name: string; args: Record<string, unknown>; phase?: "queued" | "running" }
-  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string }
+  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string; content?: string }
   | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }
   | { type: "compaction_finished"; reason: "threshold" | "overflow" | "manual"; ok: false }
   | {

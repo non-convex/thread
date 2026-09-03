@@ -167,6 +167,7 @@ export class ToolExecutionBatch {
         name: prepared.call.name,
         isError: true,
         error: text,
+        content: text,
       });
       results.push(abortedToolResult(prepared.call, text));
     }

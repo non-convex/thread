@@ -9,7 +9,7 @@ import { modelDetail, selectedWindow } from "./screens.js";
 import { wheelScrollAcceleration } from "./scroll.js";
 import { SpinnerText, tuiAnimationTime } from "./spinner.js";
 import { LiveTurnView, TranscriptTurnsView, WelcomeView } from "./transcript.js";
-import { bold } from "./theme.js";
+import { bold, contextMeter, contextMeterColor, STATUS_ICONS, formatTokenCount } from "./theme.js";
 
 const COMPOSER_KEY_BINDINGS: KeyBinding[] = [
   { name: "return", action: "submit" },
@@ -32,13 +32,6 @@ export function estimatedWrappedLines(text: string, width: number, maximum = Num
     if (lines >= maximum) return maximum;
   }
   return Math.min(lines, maximum);
-}
-
-/** Six-cell block meter for the context gauge in the footer. */
-export function contextMeter(percent: number, cells = 6): string {
-  const clamped = Math.max(0, Math.min(100, percent));
-  const filled = Math.round((clamped / 100) * cells);
-  return "█".repeat(filled) + "░".repeat(cells - filled);
 }
 
 /**
@@ -66,12 +59,9 @@ export function cacheMissHint(
   return ` ↓${formatTokenCount(missedTokens)} ${labels[reason]}`;
 }
 
-function formatTokenCount(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
-  return String(tokens);
-}
-
+/**
+ * Enhanced Footer with improved visual hierarchy and icons
+ */
 function Footer(props: {
   state: Accessor<UiState>;
   meta: Accessor<TerminalMeta>;
@@ -83,30 +73,49 @@ function Footer(props: {
   const theme = () => props.resources.theme;
   const compact = () => props.width() < 72;
   const narrow = () => props.width() < 96;
-  const meterColor = () => meta().contextPercent >= CONTEXT_WARN_PERCENT ? theme().warning : theme().muted;
+  const meterColor = () => contextMeterColor(meta().contextPercent, theme());
+  
   return (
-    <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>session {state().sessionId.slice(0, 12)}</text>
+    <box flexDirection="row" width="100%" height={1} paddingX={1} backgroundColor={theme().surface}>
+      {/* Session ID with icon - show more characters, allow wrapping */}
+      <text height={1} wrapMode="none" fg={theme().faint}>⊙</text>
+      <text 
+        height={1} 
+        wrapMode="none" 
+        truncate={true} 
+        flexShrink={2}
+        minWidth={16}
+        fg={theme().softText}
+      > {state().sessionId}</text>
+      
+      {/* Git branch with icon */}
       <Show when={meta().gitBranch}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
-        <text height={1} wrapMode="none" fg={theme().faint}>⎇ </text>
-        <text height={1} wrapMode="none" truncate={true} flexShrink={1} fg={theme().softText}>{meta().gitBranch}</text>
+        <text height={1} wrapMode="none" fg={theme().accent}>⎇</text>
+        <text height={1} wrapMode="none" truncate={true} flexShrink={3} fg={theme().softText}> {meta().gitBranch}</text>
       </Show>
+      
+      {/* Context meter - 8-cell precision with dynamic color */}
       <Show when={!compact()}>
         <text height={1} wrapMode="none" fg={theme().border}>  │  </text>
-        <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent)}</text>
-        <text height={1} wrapMode="none" fg={theme().muted}> ctx {meta().contextPercent}%</text>
+        <text height={1} wrapMode="none" fg={meterColor()}>{contextMeter(meta().contextPercent, 8)}</text>
+        <text height={1} wrapMode="none" fg={theme().muted}> {meta().contextPercent}%</text>
       </Show>
+      
+      {/* Cache hit with lightning icon */}
       <Show when={!narrow()}>
-        <text height={1} wrapMode="none" fg={theme().faint}> · {cacheHitLabel(meta().cacheHitPercent)}</text>
+        <text height={1} wrapMode="none" fg={theme().faint}> ⚡ {cacheHitLabel(meta().cacheHitPercent)}</text>
         <Show when={cacheMissHint(meta().cacheMissReason, meta().cacheMissedTokens)}>
           <text height={1} wrapMode="none" fg={theme().warning}>
             {cacheMissHint(meta().cacheMissReason, meta().cacheMissedTokens)}
           </text>
         </Show>
       </Show>
+      
       <box flexGrow={1} minWidth={1} />
-      <text height={1} wrapMode="none" fg={theme().softText} attributes={bold}>{meta().modelName}</text>
+      
+      {/* Model name - highlighted with accent color */}
+      <text height={1} wrapMode="none" flexShrink={0} fg={theme().accent} attributes={bold}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
         <text height={1} wrapMode="none" fg={theme().muted}> · {meta().thinkingLevel}</text>
         {/* The keybinding is one-time teaching, so it yields space first. */}
@@ -160,32 +169,33 @@ function ComposerSuggestions(props: {
   /** Interior width of the floating panel (outer minus border and padding). */
   contentWidth: Accessor<number>;
 }) {
+  const theme = props.resources.theme;
   return (
-    <box flexDirection="column" width={props.contentWidth()} paddingX={1} backgroundColor={props.resources.theme.surface}>
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1} backgroundColor={theme.surface}>
       <For each={props.suggestions}>
         {(suggestion, index) => (
           <box
             flexDirection="row"
             width={props.contentWidth() - 2}
             height={1}
-            backgroundColor={index() === props.selected ? props.resources.theme.surfaceHigh : "transparent"}
+            backgroundColor={index() === props.selected ? theme.surfaceHigh : "transparent"}
           >
             <text
               width={14}
               height={1}
               wrapMode="none"
               truncate={true}
-              fg={index() === props.selected ? props.resources.theme.sparkAlt : props.resources.theme.text}
+              fg={index() === props.selected ? theme.sparkAlt : theme.text}
               attributes={index() === props.selected ? bold : 0}
             >
-              {index() === props.selected ? "▸ " : ""}{suggestion.label}
+              {index() === props.selected ? `${STATUS_ICONS.selected} ` : ""}{suggestion.label}
             </text>
             <text
               width={Math.max(4, props.contentWidth() - 16)}
               flexShrink={1}
               height={1}
               wrapMode="none"
-              fg={index() === props.selected ? props.resources.theme.softText : props.resources.theme.muted}
+              fg={index() === props.selected ? theme.softText : theme.muted}
               truncate={true}
             >
               {suggestion.description}
@@ -202,6 +212,9 @@ function ComposerSuggestions(props: {
  * separate full-screen takeover. */
 const MODEL_OVERLAY_MAX_ROWS = 8;
 
+/**
+ * Enhanced Model Picker Overlay with improved visual hierarchy
+ */
 function ModelPickerOverlay(props: {
   screen: Accessor<ModelPickerScreen>;
   /** View-side selection signal — moving it must not notify the controller. */
@@ -219,13 +232,13 @@ function ModelPickerOverlay(props: {
     // Inside a bordered box, OpenTUI 0.5.7 lets flexGrow/stretch children
     // overshoot the right border by ~2 cells; explicit widths clip exactly.
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
+        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().accent} attributes={bold}>
           {props.screen().scope === "all"
-            ? `all models · ${props.screen().target === "main" ? "main" : "implementation-worker"}`
+            ? `⚙ Models · ${props.screen().target === "main" ? "main" : "worker"}`
             : props.screen().target === "main"
-              ? "configured models · /model all for the full catalog"
-              : "worker models · /subagent on all for the full catalog"}
+              ? "⚙ Models · /model all for full catalog"
+              : "⚙ Worker models · /subagent on all"}
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>
           {props.screen().target === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
@@ -242,9 +255,10 @@ function ModelPickerOverlay(props: {
               width={props.contentWidth() - 2}
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
+              paddingX={1}
             >
-              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().accent}>
-                {selected() ? "▸ " : current() ? "● " : "  "}
+              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : current() ? theme().accent : theme().muted}>
+                {selected() ? `${STATUS_ICONS.selected} ` : current() ? `${STATUS_ICONS.current} ` : "  "}
               </text>
               <text
                 width={30}
@@ -253,7 +267,7 @@ function ModelPickerOverlay(props: {
                 wrapMode="none"
                 truncate={true}
                 fg={selected() ? theme().sparkAlt : current() ? theme().accent : theme().text}
-                attributes={selected() ? bold : 0}
+                attributes={selected() || current() ? bold : 0}
               >
                 {model.providerId}/{model.modelId}
               </text>
@@ -287,6 +301,9 @@ function ModelPickerOverlay(props: {
   );
 }
 
+/**
+ * Enhanced Subagent Settings Overlay with improved visual hierarchy
+ */
 function SubagentSettingsOverlay(props: {
   screen: Accessor<SubagentSettingsScreen>;
   selected: Accessor<number>;
@@ -300,8 +317,8 @@ function SubagentSettingsOverlay(props: {
   ] as const;
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-        <text flexGrow={1} height={1} wrapMode="none" fg={theme().faint}>subagent mode</text>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
+        <text flexGrow={1} height={1} wrapMode="none" fg={theme().accent} attributes={bold}>⚙ Subagent mode</text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
       </box>
       <For each={options}>
@@ -314,11 +331,12 @@ function SubagentSettingsOverlay(props: {
               width={props.contentWidth() - 2}
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
+              paddingX={1}
             >
-              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().accent}>
-                {selected() ? "▸ " : current() ? "● " : "  "}
+              <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : current() ? theme().accent : theme().muted}>
+                {selected() ? `${STATUS_ICONS.selected} ` : current() ? `${STATUS_ICONS.current} ` : "  "}
               </text>
-              <text width={8} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().text} attributes={selected() ? bold : 0}>
+              <text width={8} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().text} attributes={selected() || current() ? bold : 0}>
                 {option.label}
               </text>
               <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={selected() ? theme().softText : theme().muted}>
@@ -350,6 +368,9 @@ function rewindTime(startedAt: number): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * Enhanced Rewind Overlay with improved visual hierarchy
+ */
 function RewindOverlay(props: {
   screen: Accessor<RewindScreen>;
   /** View-side selection signal — moving it must not notify the controller. */
@@ -370,9 +391,9 @@ function RewindOverlay(props: {
   };
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
-        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().faint}>
-          rewind to before a user message
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
+        <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().accent} attributes={bold}>
+          ⎌ Rewind to before a user message
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
       </box>
@@ -385,9 +406,10 @@ function RewindOverlay(props: {
               width={props.contentWidth() - 2}
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
+              paddingX={1}
             >
               <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
-                {selected() ? "▸ " : "  "}
+                {selected() ? `${STATUS_ICONS.selected} ` : "  "}
               </text>
               <text
                 width={Math.max(4, props.contentWidth() - 11)}
@@ -427,6 +449,9 @@ function RewindOverlay(props: {
  * two rows and the option count is capped low by the tool itself. */
 const ASK_OVERLAY_MAX_OPTIONS = 4;
 
+/**
+ * Enhanced Ask Overlay with improved visual hierarchy
+ */
 function AskOverlay(props: {
   screen: Accessor<AskScreen>;
   resources: ThreadViewResources;
@@ -439,7 +464,7 @@ function AskOverlay(props: {
   const typing = () => props.screen().customText !== undefined;
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
+      <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
         <text
           width={Math.max(8, props.contentWidth() - 26)}
           flexShrink={1}
@@ -449,7 +474,7 @@ function AskOverlay(props: {
           fg={theme().spark}
           attributes={bold}
         >
-          {question()?.header ?? "question"}
+          {STATUS_ICONS.info} {question()?.header ?? "question"}
           {total() > 1 ? `  ${props.screen().questionIndex + 1}/${total()}` : ""}
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>
@@ -476,9 +501,10 @@ function AskOverlay(props: {
                 width={props.contentWidth() - 2}
                 height={1}
                 backgroundColor={active() ? theme().surfaceHigh : "transparent"}
+                paddingX={1}
               >
                 <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
-                  {active() ? "▸ " : "  "}
+                  {active() ? `${STATUS_ICONS.selected} ` : "  "}
                 </text>
                 <text width={2} height={1} wrapMode="none" fg={theme().sparkAlt}>
                   {question()?.multiple ? (marked() ? "◉ " : "○ ") : ""}
