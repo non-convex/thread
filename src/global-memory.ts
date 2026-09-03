@@ -65,7 +65,7 @@ export function formatGlobalMemoryPrompt(filePath: string, snapshot: string): st
   const body = snapshot.trim() || "(empty)";
   return `# Global memory
 
-The user's cross-project memory file is ${filePath}. The snapshot below was loaded when this Session began and must remain fixed for this Session.
+The user's cross-project memory file is ${filePath}.
 
 When the user's current message explicitly states a stable preference, rule, or fact that will remain useful across unrelated projects, proactively maintain that file with the existing read, write, or edit tools. Before changing it, read the current file from disk because it may be newer than this snapshot. Keep at most 15 timestamped Markdown list entries, merge duplicates, and preserve valuable existing entries.
 
