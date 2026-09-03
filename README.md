@@ -12,7 +12,7 @@
 
 </div>
 
-Within a project, Thread keeps one persistent Session Tree: every interaction with the agent and every execution trace becomes project history that the agent can search and recall; whole-tree awareness is planned. Across projects, global memory and a **Dreamer** mechanism are in development. The implementation follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly, with finer-grained admission still planned.
+Within a project, Thread keeps one persistent Session Tree: every interaction with the agent and every execution trace becomes project history that the agent can search and recall; whole-tree awareness is planned. Across projects, `${THREAD_HOME}/.THREAD.md` supplies fixed per-Session global-memory snapshots, and the optional **Dreamer** agent curates that file in the background. The implementation follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly, with finer-grained admission still planned.
 
 ## Interface
 
