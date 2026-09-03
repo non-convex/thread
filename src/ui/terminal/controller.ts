@@ -1,7 +1,7 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
-import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../utils/estimate.js";
+import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../context/usage.js";
 import { gitBranchName } from "../../utils/git.js";
 import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";

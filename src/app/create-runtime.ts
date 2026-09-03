@@ -12,7 +12,7 @@ import type { ToolRegistry } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
 import type { WorkspaceStateService } from "../workspace-state/service.js";
 
-export interface RuntimeFactoryInput {
+export interface CreateRuntimeInput {
   model: ModelClient;
   reasoning?: ThinkingLevel;
   rootPath: string;
@@ -28,38 +28,36 @@ export interface RuntimeFactoryInput {
   onCompacted?: (messages: readonly Message[]) => void;
 }
 
-export class RuntimeFactory {
-  create(input: RuntimeFactoryInput): AgentRuntime {
-    const maxOutputTokens = Math.min(
-      input.model.maxOutputTokens,
-      16_384,
-      Math.max(1_024, Math.floor(input.model.contextWindow * 0.2)),
-    );
-    const compaction = new ContextCompactionService(
-      input.tree,
-      input.model,
-      input.reasoning,
-      input.onCompacted,
-    );
-    const toolRunner = new ToolCallExecutor(
-      input.rootPath,
-      input.tools,
-      input.extensions,
-      input.askPresenter,
-      input.writableExternalPaths,
-    );
-    const runner = new TurnRunner(
-      input.model,
-      input.tree,
-      input.contextBuilder,
-      compaction,
-      input.tools,
-      toolRunner,
-      input.extensions,
-      input.systemPrompt,
-      maxOutputTokens,
-      input.reasoning,
-    );
-    return new AgentRuntime(input.tree, input.workspace, runner, input.extensions, input.agentTasks);
-  }
+export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
+  const maxOutputTokens = Math.min(
+    input.model.maxOutputTokens,
+    16_384,
+    Math.max(1_024, Math.floor(input.model.contextWindow * 0.2)),
+  );
+  const compaction = new ContextCompactionService(
+    input.tree,
+    input.model,
+    input.reasoning,
+    input.onCompacted,
+  );
+  const toolRunner = new ToolCallExecutor(
+    input.rootPath,
+    input.tools,
+    input.extensions,
+    input.askPresenter,
+    input.writableExternalPaths,
+  );
+  const runner = new TurnRunner(
+    input.model,
+    input.tree,
+    input.contextBuilder,
+    compaction,
+    input.tools,
+    toolRunner,
+    input.extensions,
+    input.systemPrompt,
+    maxOutputTokens,
+    input.reasoning,
+  );
+  return new AgentRuntime(input.tree, input.workspace, runner, input.extensions, input.agentTasks);
 }

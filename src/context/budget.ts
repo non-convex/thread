@@ -1,5 +1,5 @@
 import type { Context, Message } from "@earendil-works/pi-ai";
-import { estimateContextTokens } from "../utils/estimate.js";
+import { estimateContextTokens } from "./usage.js";
 
 export const CONTEXT_SAFETY_TOKENS = 4_096;
 export const COMPACTION_TRIGGER_RATIO = 0.78;

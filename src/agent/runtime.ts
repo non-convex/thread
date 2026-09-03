@@ -16,8 +16,6 @@ export interface TurnResult {
   error?: Error;
 }
 
-export type ManualCompactionResult = CompactionResult;
-
 export class AgentRuntime {
   constructor(
     private readonly tree: SessionTreeService,
@@ -100,10 +98,6 @@ export class AgentRuntime {
 
   compactCurrent(options: RunTurnOptions): Promise<CompactionResult> {
     return this.runner.compactActive(options);
-  }
-
-  baseContextFor(messages: Message[]) {
-    return this.runner.baseContextFor(messages);
   }
 
   estimateRequestBudget(messages: Message[]) {

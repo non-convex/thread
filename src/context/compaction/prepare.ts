@@ -2,7 +2,7 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 import type { RetainedTurn } from "../../session-tree/model.js";
-import { estimateMessageTokens } from "../../utils/estimate.js";
+import { estimateMessageTokens } from "../usage.js";
 import type { BuiltContext } from "../builder.js";
 import {
   COMPACTION_HISTORY_RESERVE_TOKENS,

@@ -4,7 +4,7 @@
  * See the external-project attribution in README.md.
  */
 import type { AssistantMessage, Context, ImageContent, Message, TextContent, Tool, Usage } from "@earendil-works/pi-ai";
-import { COMPACTION_SUMMARY_PREFIX } from "../context/builder.js";
+import { COMPACTION_SUMMARY_PREFIX } from "./builder.js";
 
 export interface ContextUsageEstimate {
   /** Estimated total context tokens. */

@@ -1,6 +1,6 @@
 import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRuntime } from "../agent/runtime.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../agent/messages.js";
+import { DEFAULT_SYSTEM_PROMPT } from "../agent/system-prompt.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
 import {
   AgentProfileRegistry,
@@ -34,12 +34,8 @@ import { DreamerScheduler } from "../dreamer/scheduler.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
-import { openProject } from "./open-project.js";
-import { Compact } from "./use-cases/compact.js";
-import { NewSession } from "./use-cases/new-session.js";
-import { Rewind } from "./use-cases/rewind.js";
-import { RunTurn } from "./use-cases/run-turn.js";
 import type { Project } from "../project/model.js";
+import { ProjectService } from "../project/service.js";
 import { SessionSearchService } from "../session-tree/search.js";
 import { SessionTreeRepository } from "../session-tree/repository.js";
 import { SessionTreeService } from "../session-tree/service.js";
@@ -60,8 +56,8 @@ import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
 import { WorkspaceStateRepository } from "../workspace-state/repository.js";
 import { WorkspaceStateService } from "../workspace-state/service.js";
+import { createRuntime } from "./create-runtime.js";
 import { MainAgentController } from "./main-agent-controller.js";
-import { RuntimeFactory } from "./runtime-factory.js";
 import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
 
 export type { InputResult } from "./input-router.js";
@@ -124,7 +120,6 @@ export class ThreadApp {
   private readonly onStateChange: ((state: ThreadState) => void) | undefined;
   private threadState: ThreadState;
   private agentToolDisposers: (() => void)[] = [];
-  private readonly runtimeFactory = new RuntimeFactory();
   private runtime: AgentRuntime | undefined;
   private askPresenter: AskPresenter | undefined;
   private inputActive = false;
@@ -201,7 +196,7 @@ export class ThreadApp {
   }
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
-    const project = await openProject(options.rootPath);
+    const project = await ProjectService.open(options.rootPath);
     let repository: SessionTreeRepository | undefined;
     let agentTaskRepository: AgentTaskRepository | undefined;
     try {
@@ -478,7 +473,7 @@ export class ThreadApp {
       systemPrompt,
     };
     this.agentProfiles.set(profile);
-    this.runtime = this.runtimeFactory.create({
+    this.runtime = createRuntime({
       model: profile.model,
       ...(this.mainAgent.reasoning ? { reasoning: this.mainAgent.reasoning } : {}),
       rootPath: this.rootPath,
@@ -716,7 +711,7 @@ export class ThreadApp {
           options.signal.throwIfAborted();
           const memorySnapshot = await this.globalMemory.loadFresh();
           options.signal.throwIfAborted();
-          const session = await new NewSession(this.sessionTree).execute();
+          const session = await this.sessionTree.createSession();
           this.globalMemory.bind(session.id, memorySnapshot);
           this.rebuildRuntime();
           safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: session.id, liveTipTurnId: null, reason: "new" });
@@ -738,13 +733,13 @@ export class ThreadApp {
         const skill = this.skills.find((item) => item.name === name);
         if (!skill) throw new Error(`Unknown skill: ${name}`);
         if (!this.runtime) throw new Error("/skill requires a configured model");
-        return { kind: "turn", result: await new RunTurn(this.runtime).execute(formatSkillInvocation(skill, extra), options) };
+        return { kind: "turn", result: await this.runtime.run(formatSkillInvocation(skill, extra), options) };
       },
       compact: async (options) => {
         if (!this.runtime) throw new Error("/compact requires a configured model");
         safeUiEvent(options.onUiEvent, { type: "command_started", name: "compact" });
         try {
-          const result = await new Compact(this.runtime).execute(options);
+          const result = await this.runtime.compactCurrent(options);
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
           return { kind: "command", result: ephemeral(result.compacted
             ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
@@ -781,7 +776,7 @@ export class ThreadApp {
         if ((options.images?.length ?? 0) > 0 && this.model?.acceptsImages !== true) {
           throw new Error("Current model does not accept images. Use /model to pick a vision model.");
         }
-        return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
+        return { kind: "turn", result: await this.runtime.run(input, options) };
       },
     });
   }
@@ -794,7 +789,7 @@ export class ThreadApp {
     this.inputActive = true;
     try {
       await this.dreamer.foregroundStarting();
-      const result = await this.handleInputInner(input, options);
+      const result = await this.inputRouter.route(input, options);
       if (result.kind === "turn") {
         this.dreamer.recordTurn(this.sessionTree.messagesForTurn(result.result.turn.id));
       }
@@ -803,13 +798,6 @@ export class ThreadApp {
       this.inputActive = false;
       this.dreamer.foregroundFinished();
     }
-  }
-
-  private async handleInputInner(
-    input: string,
-    options: InputOptions,
-  ): Promise<InputResult> {
-    return this.inputRouter.route(input, options);
   }
 
   private commandContext(signal: AbortSignal) {
@@ -842,8 +830,15 @@ export class ThreadApp {
     return { kind: "command", result };
   }
 
-  rewindTo(turnIdOrUserEntryId: string) {
-    return new Rewind(this.sessionTree, this.workspaceState).execute(turnIdOrUserEntryId);
+  async rewindTo(turnIdOrUserEntryId: string) {
+    this.sessionTree.requireIdle();
+    const candidate = this.sessionTree.resolveRewindCandidate(turnIdOrUserEntryId);
+    await this.workspaceState.verify(candidate.workspaceStateId);
+    await this.workspaceState.restore(candidate.workspaceStateId);
+    const turn = this.sessionTree.projection.turns.get(candidate.turnId);
+    if (!turn) throw new Error(`Rewind target disappeared: ${candidate.turnId}`);
+    await this.sessionTree.moveLiveTipForRewind(turn.parentTurnId);
+    return candidate;
   }
 
   async fsck(): Promise<string[]> {
