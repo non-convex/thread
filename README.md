@@ -2,7 +2,7 @@
 
 # Thread
 
-**A coding-agent runtime built around two layers of persistent memory.**
+**Thread helps coding agents remember an entire project, then resume, revisit, and move the work forward at any time.**
 
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/non-convex/thread/releases) · [Development](#development)
 
@@ -12,18 +12,7 @@
 
 </div>
 
-## Memory model and design
-
-Thread defines two memory scopes:
-
-1. **Project memory — available now.** Every project owns one persistent Session Tree. All interaction with the agent and every agent execution trace together form the project's complete history; that history is its memory. The agent can search and recall it today. Project-wide awareness across the whole tree is planned.
-2. **Global memory — in development.** Memory will extend across projects, with a **Dreamer** mechanism that actively organizes and evolves it.
-
-Three constraints shape the implementation:
-
-1. **Keep it small.** Avoid over-design; introduce no entity unless it is necessary.
-2. **Protect cache locality.** Design context management and compaction carefully, preserving stable prefixes and prompt-cache hits whenever possible.
-3. **Admit only what is needed.** Information should enter active context only when it must affect the current step, preventing premature window growth. Finer-grained context admission is planned.
+Within a project, Thread keeps one persistent Session Tree: every interaction with the agent and every execution trace becomes project history that the agent can search and recall; whole-tree awareness is planned. Across projects, global memory and a **Dreamer** mechanism are in development. The implementation follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly, with finer-grained admission still planned.
 
 ## Interface
 
@@ -137,7 +126,7 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 - Normal requests contain the active live path; off-path history enters only through explicit recall.
 - Skills are loaded once into a stable system-prompt prefix.
 - Compaction happens only at complete model-step boundaries and is stored as another append-only tree entry.
-- Compaction preserves stable prefixes where possible and proceeds only when its estimated context benefit is material.
+- A compaction pass proceeds only when its estimated context benefit is material.
 
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows. Earlier history remains available to rewind, search, and recall.
 
