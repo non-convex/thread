@@ -62,25 +62,23 @@ export class ContextCompactionService {
     const compactedAt = Date.now();
     const previousProgressSummary = options.built.latestCompaction?.progressSummary;
 
-    // Both summaries roll forward from their own previous output and cover
-    // disjoint regions, so they are independent and issued concurrently.
-    const [historySummary, progressSummary] = await Promise.all([
-      generateHistorySummary({
-        model: this.model,
-        context: historySummaryContext(options.context, options.built.messages, plan.summarizedUnits),
-        signal: options.signal,
-        ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-      }),
-      plan.partialTurnTrajectory
-        ? generateProgressSummary({
-            model: this.model,
-            context: progressSummaryContext(options.context, plan.partialTurnTrajectory),
-            signal: options.signal,
-            ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
-            ...(this.reasoning ? { reasoning: this.reasoning } : {}),
-          })
-        : Promise.resolve(undefined),
-    ]);
+    const historySummary = await generateHistorySummary({
+      model: this.model,
+      context: historySummaryContext(options.context, options.built.messages, plan.summarizedUnits),
+      signal: options.signal,
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+    });
+    // A partial-turn checkpoint needs the freshly generated history document as
+    // background, so unlike the old implementation this request runs second.
+    const progressSummary = plan.partialTurnTrajectory
+      ? await generateProgressSummary({
+          model: this.model,
+          context: progressSummaryContext(historySummary, plan.partialTurnTrajectory),
+          signal: options.signal,
+          ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
+          ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+        })
+      : undefined;
 
     // Measured through the same projection the builder replays on every later
     // request, so the verified saving cannot drift from the real prompt.

@@ -2,6 +2,7 @@
 
 import type { Context, Message } from "@earendil-works/pi-ai";
 import { historySummaryInstruction } from "./history-summary.js";
+import { PROGRESS_SUMMARY_SYSTEM_PROMPT } from "./progress-summary.js";
 import type { CompactableUnit } from "./units.js";
 
 function fingerprint(message: Message): string {
@@ -59,16 +60,27 @@ export function historySummaryContext(
 }
 
 /**
- * Progress summary request. This is a standalone call over one turn's abandoned
- * trajectory, so it carries no cache expectations and needs no tool schemas.
+ * Progress summary request. It has a dedicated compaction prompt instead of the
+ * main agent prompt. The new history summary is background; only the abandoned
+ * trajectory from the current turn is the summarization target.
  */
 export function progressSummaryContext(
-  fullContext: Context,
+  historySummary: string,
   trajectory: readonly Message[],
 ): Context {
+  const history = [
+    "[Previous-turn history — background only]",
+    historySummary,
+    "[End previous-turn history]",
+    "",
+    "[Current-turn content to summarize follows]",
+  ].join("\n");
   return {
-    ...fullContext,
-    messages: trajectory.map((message) => structuredClone(message)),
+    systemPrompt: PROGRESS_SUMMARY_SYSTEM_PROMPT,
+    messages: [
+      { role: "user", content: history, timestamp: Date.now() },
+      ...trajectory.map((message) => structuredClone(message)),
+    ],
     tools: [],
   };
 }

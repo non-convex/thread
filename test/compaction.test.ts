@@ -186,7 +186,11 @@ async function runCompaction(input: {
   turnId?: string;
 }) {
   const built = builtFrom(input.turns, input.previous);
-  const context: Context = { systemPrompt: "system", messages: built.messages, tools: [] };
+  const context: Context = {
+    systemPrompt: "MAIN_AGENT_SYSTEM_PROMPT_SENTINEL",
+    messages: built.messages,
+    tools: [],
+  };
   const budget = contextBudget(context, built.messages, 4_000);
   const tree = new CapturingTree();
   const service = new ContextCompactionService(tree as unknown as SessionTreeService, input.model);
@@ -287,12 +291,18 @@ test("a mid-turn cut copies the request and inserts a progress checkpoint", asyn
   assert.equal(stored.length, 1);
   assert.equal(text(stored[0]!.messages[0]!), "ORIGINAL REQUEST");
 
-  // Both calls happened, and the progress call carried only that turn's trajectory.
+  // Both calls happened. The progress call uses its own prompt, receives the
+  // freshly generated history as background, then carries this turn's trajectory.
   assert.equal(model.matching(isHistorySummaryInstruction).length, 1);
   const progressContexts = model.matching(isProgressSummaryInstruction);
   assert.equal(progressContexts.length, 1);
-  assert.equal(progressContexts[0]!.tools?.length, 0);
-  assert.match(rendered(progressContexts[0]!.messages), /ORIGINAL REQUEST/);
+  const progressContext = progressContexts[0]!;
+  assert.equal(progressContext.tools?.length, 0);
+  assert.match(progressContext.systemPrompt, /context-compaction summarizer/);
+  assert.doesNotMatch(progressContext.systemPrompt, /MAIN_AGENT_SYSTEM_PROMPT_SENTINEL/);
+  assert.match(text(progressContext.messages[0]!), /Previous-turn history/);
+  assert.match(text(progressContext.messages[0]!), /Current project state\n\nhistory/);
+  assert.equal(text(progressContext.messages[1]!), "ORIGINAL REQUEST");
 });
 
 test("the projected context orders history, request, checkpoint, then steps", async () => {
@@ -323,7 +333,7 @@ test("the progress summary rolls forward from its own previous output", async ()
   const progressContext = model.matching(isProgressSummaryInstruction)[0]!;
   const instruction = text(progressContext.messages.at(-1)!);
   assert.match(instruction, /EARLIER PROGRESS TEXT/);
-  assert.match(instruction, /Update it with the newer work instead of copying it/);
+  assert.match(instruction, /Update it with the newer current-turn content instead of copying it/);
 });
 
 test("a summary that fails validation is retried silently", async () => {
