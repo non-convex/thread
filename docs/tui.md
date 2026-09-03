@@ -41,13 +41,16 @@ border / borderStrong       轻边框只给卡片和浮层
 │  └──────────────────────────────────────┘│
 │  status · 耗时 · esc interrupt            │
 │  ┌──────────────────────────────────────┐│
+│  │ image · 1280×720 png                 ││
 │  │ ❯ composer                           ││
 │  └──────────────────────────────────────┘│
 │  ⊙ session  ⎇ branch  █ meter  ⚡ cache   │
 └──────────────────────────────────────────┘
 ```
 
-欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」、一句 Session Tree 说明、以及 `/model` `/thread` `/compact` `⇧⇥` 的提示。
+欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」、一句 Session Tree 说明，以及 `/model` `/thread` `/compact` `⇧⇥` 和 `Ctrl+V` 贴图的提示。
+
+图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
 临时文档（`/thread history` 一类 ephemeral view）不叠在 session 上，而是换成 `DocumentScreen`：顶栏标题、Markdown 滚动区、底栏操作提示。这份内容不写入 Session Tree。
 
@@ -116,7 +119,9 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 ## 代码位置
 
 - `src/ui/terminal/theme.ts`：色板、syntax style、meter、图标、JSON 探测。
-- `src/ui/terminal/session-screen.tsx`：主屏幕、页脚、浮层、输入框。
+- `src/ui/terminal/session-screen.tsx`：主屏幕、页脚、浮层、输入框和附件行。
+- `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。
+- `src/ui/images.ts`：图片限制、缩放、编码和路径附件。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。
 - `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`。
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。

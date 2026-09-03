@@ -5,6 +5,7 @@ import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../ut
 import { gitBranchName } from "../../utils/git.js";
 import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
+import { composerImageContent, type ComposerImage } from "../images.js";
 import {
   createUiState,
   openEphemeralView,
@@ -25,6 +26,7 @@ export interface TerminalMeta {
   cacheMissedTokens: number;
   cacheMissReason: "idle" | "model-changed" | "prefix-changed" | null;
   gitBranch: string | undefined;
+  acceptsImages: boolean;
 }
 
 export interface SlashSuggestion {
@@ -87,7 +89,8 @@ export interface ThreadTuiViewModel {
   cycleThinkingLevel(): void;
   closeView(): void;
   handleScreenKey(key: TerminalKey): boolean;
-  submit(raw: string): Promise<void>;
+  submit(raw: string, images?: readonly ComposerImage[]): Promise<void>;
+  note(text: string, level?: "info" | "success" | "error"): void;
   requestStop(): void;
 }
 
@@ -122,6 +125,7 @@ export class ThreadTuiController {
       cacheMissedTokens: 0,
       cacheMissReason: null,
       gitBranch: undefined,
+      acceptsImages: app.model?.acceptsImages === true,
     };
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
@@ -191,6 +195,11 @@ export class ThreadTuiController {
     this.idleExitTimer = undefined;
   }
 
+  note(text: string, level: "info" | "success" | "error" = "info"): void {
+    this.state.notice = { level, text };
+    this.notify();
+  }
+
   cycleThinkingLevel(): void {
     const level = this.app.cycleThinkingLevel();
     if (!level) return;
@@ -244,11 +253,16 @@ export class ThreadTuiController {
     return false;
   }
 
-  async submit(raw: string): Promise<void> {
+  async submit(raw: string, images: readonly ComposerImage[] = []): Promise<void> {
     const input = raw.trim();
-    if (!input || this.active || this.stopped) return;
+    if ((!input && images.length === 0) || this.active || this.stopped) return;
     if (input === "/exit") {
       this.requestStop();
+      return;
+    }
+    const imageBlocks = images.map(composerImageContent);
+    if (imageBlocks.length > 0 && this.app.model?.acceptsImages !== true) {
+      this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
       return;
     }
     const active = new AbortController();
@@ -258,6 +272,7 @@ export class ThreadTuiController {
       const result = await this.app.handleInput(input, {
         signal: active.signal,
         onUiEvent: (event) => this.batcher.push(event),
+        ...(imageBlocks.length > 0 ? { images: imageBlocks } : {}),
       });
       this.batcher.flush();
       if (result.kind === "command") this.presentCommand(result.result);
@@ -483,6 +498,7 @@ export class ThreadTuiController {
     this.meta.modelName = this.app.model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.thinkingLevel;
     this.meta.supportsThinking = this.app.supportsThinking;
+    this.meta.acceptsImages = this.app.model?.acceptsImages === true;
     this.meta.contextPercent = this.app.contextOccupancy()?.percent ?? 0;
     this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
     this.meta.cacheMissedTokens = scan.totals.missedTokens;

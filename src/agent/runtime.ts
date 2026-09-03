@@ -5,6 +5,7 @@ import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { WorkspaceStateService } from "../workspace-state/service.js";
+import { userContentDisplay } from "../session-tree/user-content.js";
 import { safeUiEvent } from "../ui/events.js";
 import type { RunTurnOptions, TurnRunner } from "./turn-runner.js";
 
@@ -29,10 +30,11 @@ export class AgentRuntime {
   async run(input: string, options: RunTurnOptions): Promise<TurnResult> {
     this.tree.requireIdle();
     options.signal.throwIfAborted();
-    const planned = this.tree.planTurn(input);
+    const planned = this.tree.planTurn(input, options.images ?? []);
+    const display = userContentDisplay(planned.content ?? planned.input);
     safeUiEvent(options.onUiEvent, {
       type: "turn_preparing",
-      input,
+      input: display,
       sessionId: planned.sessionId,
     });
     const baseline = this.workspace.baseline();
@@ -48,7 +50,7 @@ export class AgentRuntime {
         type: "turn_started",
         turnId: turn.id,
         userEntryId: turn.userEntryId,
-        input,
+        input: display,
         sessionId: turn.sessionId,
       });
       return turn;
@@ -58,7 +60,7 @@ export class AgentRuntime {
     let error: Error | undefined;
     let outcome: TurnResult["outcome"] = "completed";
     try {
-      await this.extensions.emit("turn_start", { turnId: planned.id, sessionId: planned.sessionId, input });
+      await this.extensions.emit("turn_start", { turnId: planned.id, sessionId: planned.sessionId, input: display });
       messages.push(...await this.runner.execute(planned, turnReady, options, preparedContext));
     } catch (cause) {
       error = cause instanceof Error ? cause : new Error(String(cause));

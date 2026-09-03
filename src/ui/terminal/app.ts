@@ -26,7 +26,7 @@ export class ThreadTerminalApp {
   }
 
   async run(): Promise<void> {
-    let disposeResources: (() => void) | undefined;
+    let disposeResources: (() => void | Promise<void>) | undefined;
     this.renderer = await createCliRenderer({
       screenMode: "alternate-screen",
       externalOutputMode: "passthrough",
@@ -64,8 +64,8 @@ export class ThreadTerminalApp {
       this.controller.dispose();
       for (const [signal, handler] of this.signalHandlers) process.off(signal, handler);
       this.signalHandlers.clear();
+      await disposeResources?.();
       this.renderer?.destroy();
-      disposeResources?.();
       this.renderer = undefined;
     }
   }

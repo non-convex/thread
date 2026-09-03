@@ -37,6 +37,7 @@ function blockText(message: Message, includeThinking: boolean, includeToolCalls:
   const values: string[] = [];
   for (const block of message.content) {
     if (block.type === "text") values.push(block.text);
+    if (block.type === "image") values.push("[image]");
     if (block.type === "thinking" && includeThinking) values.push(block.thinking);
     if (block.type === "toolCall" && includeToolCalls) {
       values.push(`[tool call ${block.name}] ${JSON.stringify(block.arguments)}`);

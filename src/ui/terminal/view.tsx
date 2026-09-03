@@ -1,11 +1,12 @@
 import type {
   CliRenderer,
+  HostClipboardService,
   KeyEvent,
   ScrollBoxRenderable,
   TextareaRenderable,
   ThemeMode,
 } from "@opentui/core";
-import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
+import { render, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import {
   isFloatingOverlay,
@@ -15,7 +16,16 @@ import {
   type TranscriptItem,
   type UiScreen,
 } from "../state.js";
+import type { ComposerImage } from "../images.js";
+import { tryCreateHostClipboard } from "./clipboard.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
+import {
+  beginClipboardImagePaste,
+  handleComposerPaste,
+  pasteHostClipboard,
+  pasteHostClipboardImage,
+  type ComposerPasteHost,
+} from "./composer-paste.js";
 import type { ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import { DocumentScreen } from "./screens.js";
@@ -25,6 +35,7 @@ import { createThreadSyntaxStyle, terminalTheme } from "./theme.js";
 export function ThreadRoot(props: {
   controller: ThreadTuiViewModel;
   resources: ThreadViewResources;
+  hostClipboard?: HostClipboardService;
 }) {
   const dimensions = useTerminalDimensions();
   const [fullRevision, setFullRevision] = createSignal(0);
@@ -43,7 +54,12 @@ export function ThreadRoot(props: {
    * overlays can drop stale confirm/error lines immediately. */
   const [overlaySelected, setOverlaySelected] = createSignal(0);
   const [overlayNavigated, setOverlayNavigated] = createSignal(false);
+  const [attachments, setAttachments] = createSignal<ComposerImage[]>([]);
+  const [pendingPastes, setPendingPastes] = createSignal(0);
   let composer: TextareaRenderable | undefined;
+  let lastDirectPasteAt = 0;
+  let directClipboardPastes = 0;
+  let pasteEpoch = 0;
   let sessionScroll: ScrollBoxRenderable | undefined;
   let screenScroll: ScrollBoxRenderable | undefined;
   const state = () => {
@@ -129,25 +145,122 @@ export function ThreadRoot(props: {
     return true;
   };
 
+  const pasteHost = (): ComposerPasteHost => {
+    const epoch = pasteEpoch;
+    return {
+      rootPath: props.controller.meta.rootPath,
+      attachments,
+      setAttachments: (images) => {
+        if (epoch === pasteEpoch) setAttachments(images);
+      },
+      insertText: (text) => {
+        if (epoch !== pasteEpoch || !composer) return;
+        composer.editBuffer.insertText(text);
+        setComposerText(composer.plainText);
+        setComposerCursor(composer.cursorOffset);
+      },
+      note: (text, level) => {
+        if (epoch === pasteEpoch) props.controller.note(text, level);
+      },
+      ...(props.hostClipboard ? { hostClipboard: props.hostClipboard } : {}),
+    };
+  };
+
+  const trackPaste = (operation: Promise<unknown>, directClipboard = false): void => {
+    const epoch = pasteEpoch;
+    if (directClipboard) directClipboardPastes += 1;
+    setPendingPastes((count) => count + 1);
+    const settle = () => {
+      if (directClipboard) {
+        directClipboardPastes = Math.max(0, directClipboardPastes - 1);
+        lastDirectPasteAt = Date.now();
+      }
+      if (epoch === pasteEpoch) setPendingPastes((count) => Math.max(0, count - 1));
+    };
+    void operation.then(settle, settle);
+  };
+
+  const clearDraft = (): void => {
+    pasteEpoch += 1;
+    setPendingPastes(0);
+    composer?.clear();
+    setComposerText("");
+    setComposerCursor(0);
+    setForcePathCompletion(false);
+    setAttachments([]);
+  };
+
+  const composerOpen = () => screen().type === "session" || isFloatingOverlay(screen());
+
+  usePaste((event) => {
+    if (!composerOpen()) return;
+    if (directClipboardPastes > 0 || Date.now() - lastDirectPasteAt < 400) {
+      event.preventDefault();
+      return;
+    }
+    trackPaste(handleComposerPaste(pasteHost(), event));
+  });
+
   useKeyboard((key: KeyEvent) => {
     if (key.ctrl && key.name === "c") {
       key.preventDefault();
       if (props.controller.interrupt()) return;
-      if (composer?.plainText) {
+      if (composer?.plainText || attachments().length > 0 || pendingPastes() > 0) {
         props.controller.cancelIdleExitGesture();
-        composer.clear();
-        setComposerText("");
-        setComposerCursor(0);
-        setForcePathCompletion(false);
+        clearDraft();
         return;
       }
       props.controller.idleCtrlC();
       return;
     }
     props.controller.cancelIdleExitGesture();
-    if (key.ctrl && key.name === "d" && screen().type === "session" && !composer?.plainText) {
+    if (key.ctrl && key.name === "d" && screen().type === "session" && !composer?.plainText && attachments().length === 0 && pendingPastes() === 0) {
       key.preventDefault();
       props.controller.requestStop();
+      return;
+    }
+    if (composerOpen() && key.name === "v" && !key.shift) {
+      /* Ctrl+V is the primary image key, but Windows Terminal binds it to its own
+       * text paste and never forwards the key: when the clipboard holds only an
+       * image the terminal sends nothing at all. Alt+V is not intercepted by any
+       * common terminal, so it is the reliable image key there (Claude Code and
+       * OpenCode ship the same pair). */
+      const ctrlV = key.ctrl && !key.meta && !key.option;
+      const altV = !key.ctrl && (key.meta || key.option);
+      if (ctrlV || altV) {
+        const nativePaste = beginClipboardImagePaste(pasteHost());
+        if (nativePaste) {
+          key.preventDefault();
+          lastDirectPasteAt = Date.now();
+          trackPaste(nativePaste, true);
+          return;
+        }
+        if (props.hostClipboard) {
+          key.preventDefault();
+          lastDirectPasteAt = Date.now();
+          trackPaste(
+            altV
+              ? pasteHostClipboardImage(pasteHost()).then((attached) => {
+                  if (!attached) props.controller.note("No image in the clipboard.", "info");
+                })
+              : pasteHostClipboard(pasteHost()),
+            true,
+          );
+          return;
+        }
+        if (altV) props.controller.note("No image in the clipboard.", "info");
+      }
+    }
+    if (
+      composerOpen() &&
+      key.name === "backspace" &&
+      !key.ctrl &&
+      !key.meta &&
+      !composer?.plainText &&
+      attachments().length > 0
+    ) {
+      key.preventDefault();
+      setAttachments(attachments().slice(0, -1));
       return;
     }
     if (key.shift && key.name === "tab" && screen().type === "session") {
@@ -277,6 +390,9 @@ export function ThreadRoot(props: {
             overlayNavigated={overlayNavigated}
             composerHeight={composerHeight}
             terminalWidth={() => dimensions().width}
+            attachments={attachments}
+            setAttachments={setAttachments}
+            pasteBusy={() => pendingPastes() > 0}
             setScroll={(value) => { sessionScroll = value; }}
           />
         </Match>
@@ -289,15 +405,34 @@ export function ThreadRoot(props: {
 }
 
 export async function mountThreadView(renderer: CliRenderer, controller: ThreadTuiViewModel): Promise<{
-  disposeResources: () => void;
+  disposeResources: () => void | Promise<void>;
 }> {
   let mode: ThemeMode | null = renderer.themeMode;
   if (!mode) mode = await renderer.waitForThemeMode(80);
   const theme = terminalTheme(mode);
   const syntaxStyle = createThreadSyntaxStyle(theme);
   const resources: ThreadViewResources = { theme, syntaxStyle };
-  await render(() => <ThreadRoot controller={controller} resources={resources} />, renderer);
+  const hostClipboard = tryCreateHostClipboard();
+  try {
+    await render(
+      () => (
+        <ThreadRoot
+          controller={controller}
+          resources={resources}
+          {...(hostClipboard ? { hostClipboard } : {})}
+        />
+      ),
+      renderer,
+    );
+  } catch (error) {
+    await hostClipboard?.dispose().catch(() => undefined);
+    syntaxStyle.destroy();
+    throw error;
+  }
   return {
-    disposeResources: () => syntaxStyle.destroy(),
+    disposeResources: async () => {
+      await hostClipboard?.dispose().catch(() => undefined);
+      syntaxStyle.destroy();
+    },
   };
 }

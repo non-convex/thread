@@ -1,5 +1,6 @@
-import type { Message } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, UserMessage } from "@earendil-works/pi-ai";
 import { createId, stableId } from "../utils/id.js";
+import { isEmptyUserMessageContent, userContentDisplay, userContentFrom, userContentIsEmpty } from "./user-content.js";
 import {
   abortedToolResult,
   needsPlaceholderAssistant,
@@ -42,6 +43,8 @@ export interface PlannedTurn {
   parentTurnId: string | null;
   userEntryId: string;
   input: string;
+  /** Final user content; absent on PlannedTurn values created by older embedding code. */
+  content?: UserMessage["content"];
   status: "running";
   startedAt: number;
 }
@@ -52,13 +55,8 @@ export interface PlannedMessageEntry {
   turnId: string;
 }
 
-function messageText(message: Message): string {
-  if (typeof message.content === "string") return message.content;
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.type === "text" ? block.text : "")
-    .join(" ")
-    .trim();
+function messageText(message: UserMessage): string {
+  return userContentDisplay(message.content);
 }
 
 export class SessionTreeService {
@@ -141,8 +139,8 @@ export class SessionTreeService {
     return matches[0]!;
   }
 
-  planTurn(input: string): PlannedTurn {
-    if (!input.trim()) throw new Error("User message cannot be empty");
+  planTurn(input: string, images: readonly ImageContent[] = []): PlannedTurn {
+    if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
     return {
       id: createId("turn"),
@@ -150,6 +148,7 @@ export class SessionTreeService {
       parentTurnId: this.activeLiveTip,
       userEntryId: createId("entry"),
       input,
+      content: userContentFrom(input, images),
       status: "running",
       startedAt: Date.now(),
     };
@@ -164,7 +163,8 @@ export class SessionTreeService {
     workspaceStateId: string,
     persistAfter?: Promise<unknown>,
   ): Promise<Turn> {
-    if (!planned.input.trim()) throw new Error("User message cannot be empty");
+    const content = planned.content ?? planned.input;
+    if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
     this.requireIdle();
     if (planned.sessionId !== this.activeSession.id || planned.parentTurnId !== this.activeLiveTip) {
       throw new Error(`Planned turn ${planned.id} no longer extends the active Session`);
@@ -185,7 +185,7 @@ export class SessionTreeService {
       ordinal: 0,
       timestamp: turn.startedAt,
       type: "message",
-      message: { role: "user", content: planned.input, timestamp: turn.startedAt },
+      message: { role: "user", content, timestamp: turn.startedAt },
     };
     await this.repository.appendBatch(() => [
       { type: "turn_started", turn },

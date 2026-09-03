@@ -1,7 +1,9 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
+import { isSlashCommandInput } from "../../app/input-router.js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
 import { statusLineParts, type AgentPickerScreen, type AgentSettingsScreen, type AskScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type TranscriptItem, type UiState } from "../state.js";
+import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
@@ -22,6 +24,16 @@ const COMPOSER_KEY_BINDINGS: KeyBinding[] = [
 /** Textarea rows: one line minimum, four before the transcript starts scrolling. */
 export const COMPOSER_MIN_LINES = 1;
 export const COMPOSER_MAX_LINES = 4;
+
+function attachmentSummary(images: readonly ComposerImage[], busy: boolean): string {
+  if (images.length === 0) return busy ? "reading clipboard…" : "";
+  const details = images.map((image) => {
+    const kind = image.mimeType.replace(/^image\//, "");
+    return `${image.width}×${image.height} ${kind}`;
+  });
+  const prefix = images.length === 1 ? "image" : `${images.length} images`;
+  return `${prefix} · ${details.join(" · ")}${busy ? " · reading clipboard…" : ""}`;
+}
 
 export function estimatedWrappedLines(text: string, width: number, maximum = Number.POSITIVE_INFINITY): number {
   if (!text) return 0;
@@ -643,12 +655,16 @@ export function SessionScreen(props: {
   overlayNavigated: Accessor<boolean>;
   composerHeight: Accessor<number>;
   terminalWidth: Accessor<number>;
+  attachments: Accessor<readonly ComposerImage[]>;
+  setAttachments: (images: ComposerImage[]) => void;
+  pasteBusy: Accessor<boolean>;
   setScroll: (value: ScrollBoxRenderable) => void;
 }) {
   const state = props.state;
   const theme = props.resources.theme;
-  // status line + composer (border + textarea row) + footer
-  const controlsHeight = () => props.composerHeight() + 4;
+  const attachmentLine = () => props.attachments().length > 0 || props.pasteBusy() ? 1 : 0;
+  // status line + composer (border + textarea row + optional attachment row) + footer
+  const controlsHeight = () => props.composerHeight() + 4 + attachmentLine();
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
@@ -883,6 +899,19 @@ export function SessionScreen(props: {
           borderColor={state().busy ? theme.spark : theme.borderStrong}
           backgroundColor={theme.surfaceHigh}
         >
+          <Show when={props.attachments().length > 0 || props.pasteBusy()}>
+            <box flexDirection="row" width="100%" height={1} paddingLeft={1} paddingRight={1}>
+              <text
+                flexGrow={1}
+                height={1}
+                wrapMode="none"
+                truncate={true}
+                fg={theme.muted}
+              >
+                {attachmentSummary(props.attachments(), props.pasteBusy())}
+              </text>
+            </box>
+          </Show>
           <box flexDirection="row" width="100%" paddingLeft={1}>
             <text width={2} height={1} wrapMode="none" fg={theme.accent} attributes={bold}>❯</text>
             <textarea
@@ -892,7 +921,7 @@ export function SessionScreen(props: {
               minHeight={COMPOSER_MIN_LINES}
               maxHeight={COMPOSER_MAX_LINES}
               wrapMode="word"
-              placeholder="ask thread, / for commands, @ to add files…"
+              placeholder="ask thread, / commands, @ files, Ctrl+V image…"
               placeholderColor={theme.muted}
               textColor={theme.text}
               focusedTextColor={theme.text}
@@ -917,11 +946,25 @@ export function SessionScreen(props: {
                 const editor = props.composer();
                 if (!editor || state().busy) return;
                 const input = editor.plainText;
+                if (props.pasteBusy()) {
+                  props.controller.note("Wait for the clipboard image to finish processing.", "info");
+                  return;
+                }
+                const images = [...props.attachments()];
+                const command = isSlashCommandInput(input);
+                if (images.length > 0 && !command && !props.controller.meta.acceptsImages) {
+                  props.controller.note(
+                    "Current model does not accept images. Use /model to pick a vision model.",
+                    "error",
+                  );
+                  return;
+                }
                 editor.clear();
                 props.setComposerText("");
                 props.setComposerCursor(0);
                 props.setForcePathCompletion(false);
-                void props.controller.submit(input);
+                if (!command) props.setAttachments([]);
+                void props.controller.submit(input, command ? [] : images);
               }}
             />
           </box>

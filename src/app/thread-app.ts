@@ -505,7 +505,7 @@ export class ThreadApp {
   private modelStatus(scope: "configured" | "all" = "configured"): CommandResult {
     const models = this.modelPickerModels(scope);
     const content = this.model
-      ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nThinking level: ${this.thinkingLevel}`
+      ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nImages: ${this.model.acceptsImages === true ? "supported" : "not supported"}\nThinking level: ${this.thinkingLevel}`
       : "No model selected. Use /model list and /model <provider>/<model>.";
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
@@ -625,7 +625,7 @@ export class ThreadApp {
       ? (this.modelCatalog.listAll?.(args[0]) ?? this.modelCatalog.list(args[0]))
       : this.modelPickerModels("configured");
     return ephemeral(models.map((item) =>
-      `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context`
+      `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context${item.acceptsImages ? ", vision" : ""}`
     ).join("\n") || "(no models)");
   }
 
@@ -778,6 +778,9 @@ export class ThreadApp {
       thread: (input, options) => this.routeThreadCommand(input, options),
       turn: async (input, options) => {
         if (!this.runtime) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
+        if ((options.images?.length ?? 0) > 0 && this.model?.acceptsImages !== true) {
+          throw new Error("Current model does not accept images. Use /model to pick a vision model.");
+        }
         return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
       },
     });

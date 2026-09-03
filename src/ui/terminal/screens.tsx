@@ -40,6 +40,7 @@ export function modelDetail(model: ModelDescriptor): string {
   return [
     model.name !== model.modelId ? model.name : undefined,
     `${model.contextWindow.toLocaleString("en-US")} ctx`,
+    model.acceptsImages ? "vision" : undefined,
     model.reasoning ? "reasoning" : undefined,
   ].filter((value): value is string => value !== undefined).join(" · ");
 }

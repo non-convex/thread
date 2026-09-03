@@ -1,3 +1,4 @@
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { TurnResult } from "../agent/runtime.js";
 import { parseCommandLine } from "../commands/parser.js";
 import { THREAD_COMMAND_PREFIX } from "../commands/registry.js";
@@ -8,6 +9,7 @@ export interface InputOptions {
   signal: AbortSignal;
   onTextDelta?: (delta: string) => void;
   onUiEvent?: UiEventSink;
+  images?: readonly ImageContent[];
 }
 
 export type InputResult =
@@ -35,6 +37,11 @@ function slashCommandName(trimmed: string): string | undefined {
   const name = trimmed.slice(1).split(/\s/, 1)[0] ?? "";
   if (!name || name.includes("/")) return undefined;
   return name;
+}
+
+/** Mirrors the router boundary so the TUI can keep attachments across commands. */
+export function isSlashCommandInput(input: string): boolean {
+  return slashCommandName(input.trim()) !== undefined;
 }
 
 /** Parses user input and routes it without owning application or model state. */

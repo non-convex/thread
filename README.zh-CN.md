@@ -7,7 +7,7 @@
 [English](./README.md) · [Releases](https://github.com/non-convex/thread/releases) · [开发](#开发)
 
 [![CI](https://github.com/non-convex/thread/actions/workflows/ci.yml/badge.svg)](https://github.com/non-convex/thread/actions/workflows/ci.yml)
-[![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-f9f1e1?logo=bun)](https://bun.sh)
+[![Bun 1.3.14+](https://img.shields.io/badge/Bun-1.3.14%2B-f9f1e1?logo=bun)](https://bun.sh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 </div>
@@ -30,7 +30,7 @@ Thread 面向不该随着一次对话结束而消失的编码工作。在一个�
 
 ### 环境要求
 
-- 使用 [standalone release](https://github.com/non-convex/thread/releases)，或从源码运行时准备 Bun 1.3+
+- 使用 [standalone release](https://github.com/non-convex/thread/releases)，或从源码运行时准备 Bun 1.3.14+
 - 模型 provider 或 ChatGPT 订阅登录
 - 内置代码搜索工具需要 [ripgrep](https://github.com/BurntSushi/ripgrep)（`rg`）
 
@@ -174,7 +174,7 @@ Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或�
 | `/clear` | 清空当前可见 transcript。 |
 | `/exit` | 退出 Thread。 |
 
-全屏 TUI 中，`Shift+Tab` 循环切换模型支持的 thinking level，`Esc` 中断当前 turn。
+全屏 TUI 中，`Shift+Tab` 循环切换模型支持的 thinking level，`Ctrl+V`（若被终端拦截则用 `Alt+V`）为视觉模型附上剪贴板图片，`Esc` 中断当前 turn。
 
 ## 配置与存储
 
@@ -231,6 +231,7 @@ Thread 也导出了 runtime、store、model catalog、tool、command、skills lo
 - [Subagent 架构](./docs/subagent-architecture.md)
 - [全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)
 - [全屏 TUI](./docs/tui.md)
+- [把剪贴板里的图交给模型](./docs/tui-image-paste.md)
 - [给模型用的 grep](./docs/grep.md)
 
 ## License

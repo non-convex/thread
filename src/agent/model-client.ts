@@ -82,6 +82,8 @@ export interface ModelClient {
   readonly cacheKey?: string;
   /** Default prompt-cache lifetime for this client's requests. */
   readonly cacheRetention?: CacheRetention | undefined;
+  /** When true, user messages may include image blocks. */
+  readonly acceptsImages?: boolean;
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
 }
 
@@ -92,6 +94,7 @@ export interface ModelDescriptor {
   contextWindow: number;
   maxOutputTokens: number;
   reasoning: boolean;
+  acceptsImages?: boolean;
 }
 
 export interface ModelCatalog {
@@ -121,6 +124,7 @@ export class PiModelClient implements ModelClient {
   readonly supportedThinkingLevels: readonly ModelThinkingLevel[];
   readonly cacheKey: string;
   readonly cacheRetention: CacheRetention | undefined;
+  readonly acceptsImages: boolean;
 
   constructor(
     private readonly models: Models,
@@ -136,6 +140,7 @@ export class PiModelClient implements ModelClient {
     this.supportedThinkingLevels = getSupportedThinkingLevels(model);
     this.cacheKey = cacheKey ?? `thread:${this.providerId}:${this.modelId}`;
     this.cacheRetention = cacheRetention;
+    this.acceptsImages = model.input.includes("image");
   }
 
   /**
@@ -240,6 +245,7 @@ export class PiModelCatalog implements ModelCatalog {
         contextWindow: model.contextWindow,
         maxOutputTokens: model.maxTokens,
         reasoning: model.reasoning,
+        acceptsImages: model.input.includes("image"),
       }))
       .sort((left, right) =>
         left.providerId.localeCompare(right.providerId) || left.modelId.localeCompare(right.modelId),

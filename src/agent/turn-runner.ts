@@ -1,4 +1,4 @@
-import { type AssistantMessage, type Context, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Context, type ImageContent, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
 import {
@@ -10,6 +10,7 @@ import type { Turn } from "../session-tree/model.js";
 import type { PlannedTurn, SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import { messageWithoutImages } from "../session-tree/user-content.js";
 import type { ModelClient } from "./model-client.js";
 import { SessionTurnJournal } from "./execution-journal.js";
 import { AgentStepRunner } from "./step-runner.js";
@@ -19,6 +20,7 @@ export interface RunTurnOptions {
   signal: AbortSignal;
   onTextDelta?: (delta: string) => void;
   onUiEvent?: UiEventSink;
+  images?: readonly ImageContent[];
 }
 
 interface CompactionInvocation {
@@ -168,7 +170,11 @@ export class TurnRunner {
   }
 
   baseContextFor(messages: Message[]): Context {
-    return { systemPrompt: this.systemPrompt, messages, tools: this.tools.modelDefinitions() };
+    return {
+      systemPrompt: this.systemPrompt,
+      messages: this.messagesForModel(messages),
+      tools: this.tools.modelDefinitions(),
+    };
   }
 
   estimateRequestBudget(messages: Message[]) {
@@ -186,7 +192,7 @@ export class TurnRunner {
   ): Promise<{ built: BuiltContext; context: Context }> {
     const userMessage: Message = {
       role: "user",
-      content: planned.input,
+      content: planned.content ?? planned.input,
       timestamp: planned.startedAt,
     };
     const built: BuiltContext = {
@@ -203,10 +209,15 @@ export class TurnRunner {
   private async extendContext(built: BuiltContext, turnId: string): Promise<Context> {
     const initial: Context = {
       systemPrompt: this.systemPrompt,
-      messages: built.messages,
+      messages: this.messagesForModel(built.messages),
       tools: this.tools.modelDefinitions(),
     };
     return (await this.extensions.emit("before_context", { context: initial, turnId })).context;
+  }
+
+  private messagesForModel(messages: Message[]): Message[] {
+    if (this.model.acceptsImages === true) return messages;
+    return messages.map(messageWithoutImages);
   }
 
   private async compactBuilt(

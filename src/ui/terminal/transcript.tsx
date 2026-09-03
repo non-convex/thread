@@ -771,6 +771,12 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
         <text fg={theme.muted} height={1} wrapMode="none"> to switch model</text>
       </box>
       <box flexDirection="row" height={1}>
+        <text fg={theme.accentDim} height={1} wrapMode="none">Ctrl+V</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> / </text>
+        <text fg={theme.accentDim} height={1} wrapMode="none">Alt+V</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> pastes a screenshot from the clipboard</text>
+      </box>
+      <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread</text>
         <text fg={theme.muted} height={1} wrapMode="none"> Sessions · history · search</text>
         <text fg={theme.accentDim} height={1} wrapMode="none"> · /compact</text>

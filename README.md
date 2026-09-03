@@ -7,7 +7,7 @@
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/non-convex/thread/releases) · [Development](#development)
 
 [![CI](https://github.com/non-convex/thread/actions/workflows/ci.yml/badge.svg)](https://github.com/non-convex/thread/actions/workflows/ci.yml)
-[![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-f9f1e1?logo=bun)](https://bun.sh)
+[![Bun 1.3.14+](https://img.shields.io/badge/Bun-1.3.14%2B-f9f1e1?logo=bun)](https://bun.sh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 </div>
@@ -30,7 +30,7 @@ The design follows three rules: stay small and add no entity without need; manag
 
 ### Requirements
 
-- A [standalone release](https://github.com/non-convex/thread/releases), or Bun 1.3+ when running from source
+- A [standalone release](https://github.com/non-convex/thread/releases), or Bun 1.3.14+ when running from source
 - A model provider or ChatGPT subscription login
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the built-in code-search tool
 
@@ -174,7 +174,7 @@ Workers belong to their parent turn. Finishing or interrupting the turn, closing
 | `/clear` | Clear the visible transcript. |
 | `/exit` | Exit Thread. |
 
-In the full-screen TUI, `Shift+Tab` cycles supported thinking levels and `Esc` interrupts the active turn.
+In the full-screen TUI, `Shift+Tab` cycles supported thinking levels, `Ctrl+V` (or `Alt+V` when the terminal intercepts Ctrl+V) attaches a clipboard image for vision models, and `Esc` interrupts the active turn.
 
 ## Configuration and storage
 
@@ -231,6 +231,7 @@ Further reading:
 - [Subagent architecture](./docs/subagent-architecture.md)
 - [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)
 - [Full-screen TUI](./docs/tui.md) (Chinese)
+- [Pasting clipboard images into the TUI](./docs/tui-image-paste.md) (Chinese)
 - [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 
 ## License
