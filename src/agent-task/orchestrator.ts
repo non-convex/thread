@@ -1,10 +1,15 @@
 import path from "node:path";
+import type { AgentProfile, AgentProfileRegistry } from "../agent/profile.js";
 import type { UiEventSink } from "../ui/events.js";
 import { safeUiEvent } from "../ui/events.js";
 import { createId } from "../utils/id.js";
 import { AgentTaskJournal } from "./journal.js";
-import type { AgentProfile, AgentTask, AgentTaskSummary, AgentTaskWriteScope, ImplementationTaskSpec } from "./model.js";
-import { IMPLEMENTATION_WORKER_PROFILE_ID, type AgentProfileRegistry } from "./profile.js";
+import type { AgentTask, AgentTaskSummary, AgentTaskWriteScope, ImplementationTaskSpec } from "./model.js";
+import {
+  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+  IMPLEMENTATION_WORKER_PROFILE_ID,
+  type ImplementationWorkerProfileSettings,
+} from "./profile.js";
 import type { AgentTaskRepository } from "./repository.js";
 import { ImplementationTaskRunner } from "./task-runner.js";
 
@@ -31,6 +36,7 @@ export class AgentTaskOrchestrator {
     readonly repository: AgentTaskRepository,
     readonly profiles: AgentProfileRegistry,
     rootPath: string,
+    private readonly workerSettings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
   ) {
     this.runner = new ImplementationTaskRunner(repository, rootPath);
   }
@@ -69,8 +75,8 @@ export class AgentTaskOrchestrator {
       if (overlap) throw new Error(`Task ${spec.title} overlaps running task ${overlap.id} (${overlap.spec.title})`);
     }
     const active = running.filter((task) => task.profileId === profile.id).length;
-    if (active + normalized.length > profile.limits.maxConcurrent) {
-      throw new Error(`implementation-worker capacity is ${profile.limits.maxConcurrent}; wait for active tasks before delegating more`);
+    if (active + normalized.length > this.workerSettings.limits.maxConcurrent) {
+      throw new Error(`implementation-worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before delegating more`);
     }
 
     const tasks: AgentTask[] = [];
@@ -120,11 +126,11 @@ export class AgentTaskOrchestrator {
     const task = this.repository.projection.require(taskId);
     const profile = this.profiles.require(task.profileId);
     if (task.status !== "completed") throw new Error(`Task ${taskId} is not completed`);
-    if (task.revision >= profile.limits.maxRevisions) throw new Error(`Task ${taskId} reached its revision limit`);
+    if (task.revision >= this.workerSettings.limits.maxRevisions) throw new Error(`Task ${taskId} reached its revision limit`);
     if (!feedback.trim()) throw new Error("Revision feedback cannot be empty");
     const running = [...this.repository.projection.tasks.values()].filter((candidate) => candidate.status === "running");
-    if (running.filter((candidate) => candidate.profileId === profile.id).length >= profile.limits.maxConcurrent) {
-      throw new Error(`implementation-worker capacity is ${profile.limits.maxConcurrent}; wait before requesting a revision`);
+    if (running.filter((candidate) => candidate.profileId === profile.id).length >= this.workerSettings.limits.maxConcurrent) {
+      throw new Error(`implementation-worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait before requesting a revision`);
     }
     const overlap = running.find((candidate) => candidate.id !== taskId && scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
     if (overlap) throw new Error(`Task ${taskId} overlaps running task ${overlap.id} (${overlap.spec.title})`);
@@ -180,7 +186,7 @@ export class AgentTaskOrchestrator {
     const run = (async () => {
       try {
         combined.throwIfAborted();
-        await this.runner.run(taskId, profile, combined, ui);
+        await this.runner.run(taskId, profile, this.workerSettings.limits, combined, ui);
       } catch (cause) {
         const error = cause instanceof Error ? cause : new Error(String(cause));
         const task = this.repository.projection.require(taskId);

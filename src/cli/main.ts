@@ -2,8 +2,9 @@
 import { stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
-import type { AgentProfileDiagnostic } from "../agent-task/model.js";
+import type { AgentProfileDiagnostic } from "../agent/profile.js";
 import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
+import { DREAMER_PROFILE_ID } from "../dreamer/profile.js";
 import { ThreadCredentialStore } from "../auth/credential-store.js";
 import { loadThreadConfig } from "../config/thread-config.js";
 import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../config/thread-state.js";
@@ -89,12 +90,12 @@ Usage: thread [--root <project-directory>] [--config <file>]
 
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 Default config: ~/.thread/config.json
-Remembered main model, thinking, and subagent choices: ~/.thread/state.json (delete to reset)
+Remembered main model, thinking, and agent choices: ~/.thread/state.json (delete to reset)
 Subscription credentials: ~/.thread/auth.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
-/subagent to configure workers, /clear, /compact, /thread for Session Tree
+/agent to configure models and background agents, /clear, /compact, /thread for Session Tree
 history/search, /rewind <turn-id>, or /exit.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
@@ -111,17 +112,15 @@ async function main(): Promise<void> {
       await logoutProvider(catalog, command.providerId);
       const remembered = await loadThreadState();
       if (remembered) {
-        const worker = remembered.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID];
+        const agents = structuredClone(remembered.agents ?? {});
+        for (const id of [IMPLEMENTATION_WORKER_PROFILE_ID, DREAMER_PROFILE_ID] as const) {
+          const agent = agents[id];
+          if (agent?.model?.provider === command.providerId) agents[id] = { ...agent, enabled: false };
+        }
         await saveThreadState({
           ...(remembered.model?.provider === command.providerId ? {} : remembered.model ? { model: remembered.model } : {}),
           ...(remembered.thinkingLevel ? { thinkingLevel: remembered.thinkingLevel } : {}),
-          ...(worker ? {
-            agents: {
-              [IMPLEMENTATION_WORKER_PROFILE_ID]: worker.model?.provider === command.providerId
-                ? { enabled: false, model: worker.model }
-                : worker,
-            },
-          } : {}),
+          ...(Object.keys(agents).length > 0 ? { agents } : {}),
         });
       }
     }
@@ -154,7 +153,7 @@ async function main(): Promise<void> {
     ...(loadedConfig ? { config: loadedConfig.config } : {}),
   });
   const agentProfileDiagnostics: AgentProfileDiagnostic[] = (loadedConfig?.agentDiagnostics ?? []).map((message) => ({
-    profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+    profileId: "agents",
     level: "error",
     message,
   }));
@@ -178,7 +177,30 @@ async function main(): Promise<void> {
     agentProfileDiagnostics.push({
       profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
       level: "error",
-      message: "Subagent was enabled without a worker model; use /subagent to choose one.",
+      message: "Subagent was enabled without a worker model; use /agent implementation-worker model to choose one.",
+    });
+  }
+  const dreamerConfig = loadedConfig?.source === "thread"
+    ? loadedConfig.config.agents.dreamer
+    : undefined;
+  const dreamerState = state?.agents?.dreamer;
+  const dreamerSelection = dreamerState?.model ?? dreamerConfig?.model;
+  let dreamerModel: ReturnType<typeof modelCatalog.createClient> | undefined;
+  if (dreamerState?.enabled && dreamerSelection) {
+    try {
+      dreamerModel = modelCatalog.createClient(dreamerSelection.provider, dreamerSelection.id);
+    } catch (error) {
+      agentProfileDiagnostics.push({
+        profileId: DREAMER_PROFILE_ID,
+        level: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else if (dreamerState?.enabled) {
+    agentProfileDiagnostics.push({
+      profileId: DREAMER_PROFILE_ID,
+      level: "error",
+      message: "Dreamer was enabled without a model; use /agent dreamer model to choose one.",
     });
   }
   let model: ReturnType<typeof modelCatalog.createClient> | undefined;
@@ -218,6 +240,12 @@ async function main(): Promise<void> {
           },
         },
       } : {}),
+    },
+    dreamer: {
+      enabled: dreamerState?.enabled === true,
+      ...(dreamerModel ? { model: dreamerModel } : {}),
+      ...(dreamerConfig?.model ? { defaultModel: dreamerConfig.model } : {}),
+      ...(dreamerConfig?.thinkingLevel ? { thinkingLevel: dreamerConfig.thinkingLevel } : {}),
     },
     agentProfileDiagnostics,
     ...(state ? { state } : {}),

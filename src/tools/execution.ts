@@ -21,6 +21,7 @@ export interface ToolResourceClaim {
 
 export interface ToolPlanningContext {
   rootPath: string;
+  writableExternalPaths?: readonly string[];
   signal: AbortSignal;
 }
 
@@ -115,11 +116,17 @@ export async function workspacePathClaim(
   rootPath: string,
   inputPath: string,
   access: ToolResourceAccess,
-  options: { forWrite?: boolean; allowOutside?: boolean; scope?: ToolResourceScope } = {},
+  options: {
+    forWrite?: boolean;
+    allowOutside?: boolean;
+    allowedOutsidePaths?: readonly string[];
+    scope?: ToolResourceScope;
+  } = {},
 ): Promise<ToolResourceClaim> {
   const target = await resolveWorkspacePath(rootPath, inputPath, {
     forWrite: options.forWrite === true,
     allowOutside: options.allowOutside === true,
+    ...(options.allowedOutsidePaths ? { allowedOutsidePaths: options.allowedOutsidePaths } : {}),
   });
   return claim("workspace", await canonicalTarget(target), access, options.scope ?? "exact");
 }

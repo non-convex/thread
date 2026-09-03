@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { Message, ThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRuntime } from "../agent/runtime.js";
 import type { ModelClient } from "../agent/model-client.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
@@ -24,6 +24,8 @@ export interface RuntimeFactoryInput {
   extensions: ExtensionEvents;
   agentTasks: AgentTaskOrchestrator;
   askPresenter: () => AskPresenter | undefined;
+  writableExternalPaths?: readonly string[];
+  onCompacted?: (messages: readonly Message[]) => void;
 }
 
 export class RuntimeFactory {
@@ -33,8 +35,19 @@ export class RuntimeFactory {
       16_384,
       Math.max(1_024, Math.floor(input.model.contextWindow * 0.2)),
     );
-    const compaction = new ContextCompactionService(input.tree, input.model, input.reasoning);
-    const toolRunner = new ToolCallExecutor(input.rootPath, input.tools, input.extensions, input.askPresenter);
+    const compaction = new ContextCompactionService(
+      input.tree,
+      input.model,
+      input.reasoning,
+      input.onCompacted,
+    );
+    const toolRunner = new ToolCallExecutor(
+      input.rootPath,
+      input.tools,
+      input.extensions,
+      input.askPresenter,
+      input.writableExternalPaths,
+    );
     const runner = new TurnRunner(
       input.model,
       input.tree,

@@ -32,7 +32,12 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
     effect: "write",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path, "write", { forWrite: true }),
+      await workspacePathClaim(context.rootPath, args.path, "write", {
+        forWrite: true,
+        ...(context.writableExternalPaths
+          ? { allowedOutsidePaths: context.writableExternalPaths }
+          : {}),
+      }),
     ],
   },
   async execute(args, context) {
@@ -40,7 +45,12 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
       context.signal.throwIfAborted();
       const inputPath = args.path.trim();
       if (!inputPath) throw new Error("path cannot be empty");
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, { forWrite: true });
+      const target = await resolveWorkspacePath(context.rootPath, inputPath, {
+        forWrite: true,
+        ...(context.writableExternalPaths
+          ? { allowedOutsidePaths: context.writableExternalPaths }
+          : {}),
+      });
       let existed = false;
       try {
         const info = await lstat(target);

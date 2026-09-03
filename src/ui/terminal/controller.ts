@@ -32,6 +32,20 @@ export interface SlashSuggestion {
   description: string;
 }
 
+export function primarySlashSuggestions(hasSkills: boolean): SlashSuggestion[] {
+  return [
+    { name: "clear", description: "Clear the visible transcript" },
+    { name: "compact", description: "Compact the current path's live context" },
+    { name: "agent", description: "Configure agent models and background agents" },
+    { name: "new", description: "Create an empty Session from the project Root" },
+    { name: "session", description: "List or resume root Sessions" },
+    ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
+    { name: "thread", description: "Session Tree status, history, Sessions, and search" },
+    { name: "rewind", description: "Return to before a current-path user message" },
+    { name: "exit", description: "Exit thread" },
+  ];
+}
+
 export interface TerminalKey {
   name: string;
   ctrl: boolean;
@@ -94,18 +108,7 @@ export class ThreadTuiController {
   private readonly donePromise: Promise<void>;
 
   constructor(private readonly app: ThreadApp) {
-    this.slashSuggestions = [
-      { name: "clear", description: "Clear the visible transcript" },
-      { name: "compact", description: "Compact the current path's live context" },
-      { name: "model", description: "Choose the active model" },
-      { name: "new", description: "Create an empty Session from the project Root" },
-      { name: "session", description: "List or resume root Sessions" },
-      ...(app.skills.length ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
-      { name: "subagent", description: "Turn implementation workers on or off" },
-      { name: "thread", description: "Session Tree status, history, Sessions, and search" },
-      { name: "rewind", description: "Return to before a current-path user message" },
-      { name: "exit", description: "Exit thread" },
-    ];
+    this.slashSuggestions = primarySlashSuggestions(app.skills.length > 0);
     this.state = createUiState(app.sessionTree.activeSession.id, app.sessionTree.activeLiveTip, []);
     this.meta = {
       rootPath: app.rootPath,
@@ -213,8 +216,8 @@ export class ThreadTuiController {
       void this.advanceModelPicker();
       return true;
     }
-    if (screen.type === "subagent_settings" && enter && !screen.busy) {
-      void this.advanceSubagentSettings();
+    if (screen.type === "agent_settings" && enter && !screen.busy) {
+      void this.advanceAgentSettings();
       return true;
     }
     if (screen.type === "rewind" && enter && !screen.busy) {
@@ -301,19 +304,18 @@ export class ThreadTuiController {
     if (!model) return;
     screen.busy = true;
     this.notify();
-    const command = screen.target === "main" ? "/model" : "/subagent";
-    await this.submit(`${command} ${model.providerId}/${model.modelId}`);
+    await this.submit(`/agent ${screen.agentId} model ${model.providerId}/${model.modelId}`);
     if (this.state.screen.type === "model_picker") this.state.screen = { type: "session" };
     this.notify();
   }
 
-  private async advanceSubagentSettings(): Promise<void> {
+  private async advanceAgentSettings(): Promise<void> {
     const screen = this.state.screen;
-    if (screen.type !== "subagent_settings") return;
+    if (screen.type !== "agent_settings") return;
     screen.busy = true;
     this.notify();
-    await this.submit(screen.selected === 0 ? "/subagent off" : "/subagent on");
-    if (this.state.screen.type === "subagent_settings") this.state.screen = { type: "session" };
+    await this.submit(`/agent ${screen.agentId} ${screen.selected === 0 ? "off" : "on"}`);
+    if (this.state.screen.type === "agent_settings") this.state.screen = { type: "session" };
     this.notify();
   }
 

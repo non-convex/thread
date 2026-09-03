@@ -19,8 +19,6 @@ export type {
   WorkspaceStatePolicy,
 } from "./workspace-state/model.js";
 export type {
-  AgentProfile,
-  AgentProfileDiagnostic,
   AgentTask,
   AgentTaskRun,
   AgentTaskStatus,
@@ -29,4 +27,5 @@ export type {
   AgentTaskWriteScope,
   ImplementationTaskSpec,
 } from "./agent-task/model.js";
+export type { AgentProfile, AgentProfileDiagnostic } from "./agent/profile.js";
 export type { Project, ProjectManifest } from "./project/model.js";

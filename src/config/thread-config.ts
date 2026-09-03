@@ -36,7 +36,7 @@ export interface CustomProviderConfig {
   models: CustomModelConfig[];
 }
 
-export interface AgentProfileConfig {
+export interface ImplementationWorkerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;
   maxConcurrent: number;
@@ -45,9 +45,20 @@ export interface AgentProfileConfig {
   maxRevisions: number;
 }
 
+/** @deprecated Use ImplementationWorkerConfig. */
+export type AgentProfileConfig = ImplementationWorkerConfig;
+
+export interface DreamerConfig {
+  model: ModelSelectionConfig;
+  thinkingLevel: ModelThinkingLevel;
+}
+
 export interface ThreadConfig {
   model?: ModelSelectionConfig;
-  agents: Partial<Record<"implementation-worker", AgentProfileConfig>>;
+  agents: {
+    "implementation-worker"?: ImplementationWorkerConfig;
+    dreamer?: DreamerConfig;
+  };
   defaultThinkingLevel?: ModelThinkingLevel;
   /**
    * Prompt-cache lifetime for every model request. Omitted means the provider
@@ -235,7 +246,7 @@ function parsePiProvider(providerId: string, value: unknown): CustomProviderConf
   };
 }
 
-function parseAgentProfile(value: unknown, label: string): AgentProfileConfig {
+function parseImplementationWorker(value: unknown, label: string): ImplementationWorkerConfig {
   const input = object(value, label);
   const selected = object(input.model, `${label}.model`);
   return {
@@ -248,6 +259,20 @@ function parseAgentProfile(value: unknown, label: string): AgentProfileConfig {
     maxSteps: input.maxSteps === undefined ? 100 : positiveInteger(input.maxSteps, `${label}.maxSteps`),
     maxRuntimeMinutes: input.maxRuntimeMinutes === undefined ? 60 : positiveInteger(input.maxRuntimeMinutes, `${label}.maxRuntimeMinutes`),
     maxRevisions: input.maxRevisions === undefined ? 2 : positiveInteger(input.maxRevisions, `${label}.maxRevisions`),
+  };
+}
+
+function parseDreamer(value: unknown, label: string): DreamerConfig {
+  const input = object(value, label);
+  const selected = object(input.model, `${label}.model`);
+  return {
+    model: {
+      provider: string(selected.provider, `${label}.model.provider`),
+      id: string(selected.id, `${label}.model.id`),
+    },
+    thinkingLevel: input.thinkingLevel === undefined
+      ? "low"
+      : thinkingLevel(input.thinkingLevel, `${label}.thinkingLevel`),
   };
 }
 
@@ -271,13 +296,18 @@ function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: 
     try {
       const configuredAgents = object(input.agents, "agents");
       for (const key of Object.keys(configuredAgents)) {
-        if (key !== "implementation-worker") agentDiagnostics.push(`Unknown agent profile: ${key}`);
+        if (key !== "implementation-worker" && key !== "dreamer") {
+          agentDiagnostics.push(`Unknown agent profile: ${key}`);
+        }
       }
       if (configuredAgents["implementation-worker"] !== undefined) {
-        agents["implementation-worker"] = parseAgentProfile(
+        agents["implementation-worker"] = parseImplementationWorker(
           configuredAgents["implementation-worker"],
           "agents.implementation-worker",
         );
+      }
+      if (configuredAgents.dreamer !== undefined) {
+        agents.dreamer = parseDreamer(configuredAgents.dreamer, "agents.dreamer");
       }
     } catch (error) {
       agentDiagnostics.push(error instanceof Error ? error.message : String(error));

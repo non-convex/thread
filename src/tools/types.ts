@@ -9,6 +9,8 @@ export interface ToolResult {
 
 export interface ToolContext {
   rootPath: string;
+  /** Exact files outside rootPath that this agent may write. */
+  writableExternalPaths?: readonly string[];
   signal: AbortSignal;
   invocation: {
     executionId: string;

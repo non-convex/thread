@@ -15,6 +15,13 @@
       "maxSteps": 100,
       "maxRuntimeMinutes": 60,
       "maxRevisions": 2
+    },
+    "dreamer": {
+      "model": {
+        "provider": "my-relay",
+        "id": "claude-haiku-4-5"
+      },
+      "thinkingLevel": "low"
     }
   },
   "providers": {

@@ -65,7 +65,7 @@ thread auth status
 thread --root /path/to/project
 ```
 
-Run `/model all` inside the TUI to choose an available model, or select one at startup:
+Run `/agent main model all` inside the TUI to choose an available model, or select one at startup:
 
 ```bash
 thread --root /path/to/project --provider openai-codex --model <model-id>
@@ -125,14 +125,23 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 
 - Normal requests contain the active live path; off-path history enters only through explicit recall.
 - Skills are loaded once into a stable system-prompt prefix.
+- `${THREAD_HOME}/.THREAD.md` is loaded as a fixed per-Session global-memory snapshot after the system prompt. `/new` reloads it for the new Session.
 - Compaction happens only at complete model-step boundaries and is stored as another append-only tree entry.
 - A compaction pass proceeds only when its estimated context benefit is material.
 
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows. Earlier history remains available to rewind, search, and recall.
 
+## Agents and global memory
+
+`/agent` is the common entry point for model selection and agent settings. Thread has three built-in profiles: `main`, `implementation-worker`, and `dreamer`. The secondary agents start disabled and require an explicit model selection.
+
+Global memory is the single Markdown file `${THREAD_HOME}/.THREAD.md`. Its contents do not enter the Session Tree, search, rewind, or compaction. The main agent may update only that exact external file when the current user message explicitly contains stable, cross-project information. Each Session keeps the snapshot captured when it began; disk changes become visible after `/new` or restart.
+
+Dreamer is an optional background memory curator. Enable it with `/agent dreamer model <provider>/<model>`. It reviews conversational evidence after a successful compaction, or after ten settled turns followed by ten idle minutes. It uses only `read`, `write`, and `edit`, runs one instance at a time, and stays silent on success.
+
 ## Implementation workers
 
-Subagents start disabled. Run `/subagent`, choose **On**, and select an explicit worker model. The main agent can then delegate one or two independent leaf tasks with non-overlapping `writeScope` values.
+Implementation workers start disabled. Run `/agent implementation-worker model <provider>/<model>` to select a model and enable them. The main agent can then delegate one or two independent leaf tasks with non-overlapping `writeScope` values.
 
 Workers edit the current project directly. There is no private clone or apply step, and `writeScope` is a coordination boundary rather than a filesystem sandbox. The main agent reviews the files and tests; completed workers can receive revision feedback in the same context.
 
@@ -149,8 +158,9 @@ Workers belong to their parent turn. Finishing or interrupting the turn, closing
 | `/session [<session-id>]` | List Sessions or resume one. |
 | `/rewind [<turn-id-or-user-entry-id>]` | Choose or directly restore a pre-turn checkpoint. |
 | `/compact` | Compact the active live context. |
-| `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or change the main model. |
-| `/subagent [off\|on [all]\|<provider>/<model>]` | Configure implementation workers. |
+| `/agent` | Show all built-in agent states. |
+| `/agent <id> [on\|off]` | Open settings or toggle a secondary agent. |
+| `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | Inspect or select an agent model. |
 | `/skill [<name> [extra instruction]]` | List or invoke a loaded skill. |
 | `/thread status` | Show project and active-tree status. |
 | `/thread sessions` | List Sessions and saved live tips. |
@@ -172,7 +182,7 @@ Thread reads `~/.thread/config.json` by default and falls back to compatible set
 → model in ~/.thread/config.json
 ```
 
-`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Main-model, thinking-level, subagent, and worker-model choices are remembered in `~/.thread/state.json`.
+`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Main-model, thinking-level, and secondary-agent choices are remembered in `~/.thread/state.json`.
 
 Project state lives outside the workspace:
 
@@ -204,6 +214,7 @@ src/workspace-state/  checkpoint capture, verification, restore, and GC
 src/context/          live-path projection and compaction
 src/agent/            model steps, tool scheduling, journals, and turns
 src/agent-task/       shared-workspace worker lifecycle and task journal
+src/dreamer/          background global-memory curation and scheduling
 src/app/              runtime composition and input routing
 src/tools/            built-in agent tools and execution policies
 src/ui/               plain and full-screen terminal interfaces
@@ -214,6 +225,7 @@ Thread also exports its runtime, stores, model catalog, tools, commands, skills 
 Further reading:
 
 - [Subagent architecture](./docs/subagent-architecture.md)
+- [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)
 - [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 
 ## License

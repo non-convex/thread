@@ -65,7 +65,7 @@ thread auth status
 thread --root /path/to/project
 ```
 
-进入 TUI 后运行 `/model all` 选择可用模型，也可以在启动时直接指定：
+进入 TUI 后运行 `/agent main model all` 选择可用模型，也可以在启动时直接指定：
 
 ```bash
 thread --root /path/to/project --provider openai-codex --model <model-id>
@@ -125,14 +125,23 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 
 - 普通请求只包含 active live path；路径之外的历史通过显式召回按需进入。
 - Skills 只在启动时加载一次，成为稳定的 system-prompt 前缀。
+- `${THREAD_HOME}/.THREAD.md` 作为固定的 Session 全局记忆快照加载在 system prompt 之后；`/new` 会为新 Session 重新读取。
 - Compaction 只发生在完整 model-step 边界，并作为新的 append-only tree entry 保存。
 - 只有预计能显著缩减上下文时，才会执行 compaction。
 
 `/compact` 手动请求一次压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 工作集预算允许时向前扩展。更早的历史仍可用于 rewind、搜索和召回。
 
+## Agent 与全局记忆
+
+`/agent` 是模型选择和 Agent 设置的统一入口。Thread 内置 `main`、`implementation-worker` 与 `dreamer` 三个 Profile。两个次级 Agent 默认关闭，并且必须显式选择模型。
+
+全局记忆的唯一持久状态是 `${THREAD_HOME}/.THREAD.md`。它不进入 Session Tree、搜索、rewind 或 compaction。只有用户当前消息明确包含稳定、跨项目仍有价值的信息时，Main 才可以额外修改这个精确文件。每个 Session 始终使用创建时绑定的快照；磁盘变更会在 `/new` 或重启后可见。
+
+Dreamer 是可选的后台记忆整理 Agent。使用 `/agent dreamer model <provider>/<model>` 选择模型并启用。它会在成功压缩后，或累计十个已结束 turn 并空闲十分钟后审阅对话证据；仅拥有 `read`、`write`、`edit`，同一时间只运行一个实例，成功时保持静默。
+
 ## Implementation worker
 
-Subagent 默认关闭。运行 `/subagent`，选择 **On**，再显式选择 worker model。主 agent 随后可以委派一到两个 `writeScope` 互不重叠的独立叶子任务。
+Implementation worker 默认关闭。运行 `/agent implementation-worker model <provider>/<model>` 选择模型并启用。Main 随后可以委派一到两个 `writeScope` 互不重叠的独立叶子任务。
 
 Worker 直接编辑当前项目，不存在私有副本或 apply 步骤；`writeScope` 是协调边界，不是文件系统沙箱。主 agent 负责检查文件与测试，也可以在同一 worker 上下文中要求返工。
 
@@ -149,8 +158,9 @@ Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或�
 | `/session [<session-id>]` | 列出或恢复 Session。 |
 | `/rewind [<turn-id-or-user-entry-id>]` | 选择或直接恢复 turn 前检查点。 |
 | `/compact` | 压缩 active live context。 |
-| `/model [all\|list [provider]\|<provider>/<model>]` | 查看或切换主模型。 |
-| `/subagent [off\|on [all]\|<provider>/<model>]` | 配置 implementation worker。 |
+| `/agent` | 查看所有内置 Agent 的状态。 |
+| `/agent <id> [on\|off]` | 打开设置或启停次级 Agent。 |
+| `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | 查看或选择 Agent 模型。 |
 | `/skill [<name> [extra instruction]]` | 列出或调用已加载 skill。 |
 | `/thread status` | 查看项目和活动树状态。 |
 | `/thread sessions` | 列出 Session 与保存的 live tip。 |
@@ -172,7 +182,7 @@ Thread 默认读取 `~/.thread/config.json`；该文件不存在时，会回退�
 → ~/.thread/config.json 中的 model
 ```
 
-`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。主模型、thinking level、subagent 开关和 worker model 会保存在 `~/.thread/state.json`。
+`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。主模型、thinking level 和次级 Agent 选择会保存在 `~/.thread/state.json`。
 
 项目状态位于工作区之外：
 
@@ -204,6 +214,7 @@ src/workspace-state/  检查点捕获、校验、恢复与 GC
 src/context/          live-path 投影与 compaction
 src/agent/            模型 step、工具调度、journal 与 turn
 src/agent-task/       共享工作区 worker 生命周期与任务 journal
+src/dreamer/          后台全局记忆整理与调度
 src/app/              runtime 组装与输入路由
 src/tools/            内置 agent 工具与执行策略
 src/ui/               plain 与全屏终端界面
@@ -214,6 +225,7 @@ Thread 也导出了 runtime、store、model catalog、tool、command、skills lo
 延伸阅读：
 
 - [Subagent 架构](./docs/subagent-architecture.md)
+- [全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)
 - [给模型用的 grep](./docs/grep.md)
 
 ## License

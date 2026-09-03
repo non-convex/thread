@@ -63,7 +63,12 @@ export const editTool: AgentTool<EditArgs> = {
     effect: "write",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path, "write", { forWrite: true }),
+      await workspacePathClaim(context.rootPath, args.path, "write", {
+        forWrite: true,
+        ...(context.writableExternalPaths
+          ? { allowedOutsidePaths: context.writableExternalPaths }
+          : {}),
+      }),
     ],
   },
   async execute(args, context) {
@@ -76,7 +81,12 @@ export const editTool: AgentTool<EditArgs> = {
       if (!oldText) throw new Error("oldText cannot be empty");
       if (oldText === newText) throw new Error("oldText and newText are identical; nothing to change");
 
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, { forWrite: true });
+      const target = await resolveWorkspacePath(context.rootPath, inputPath, {
+        forWrite: true,
+        ...(context.writableExternalPaths
+          ? { allowedOutsidePaths: context.writableExternalPaths }
+          : {}),
+      });
       let info;
       try {
         info = await lstat(target);

@@ -2,10 +2,14 @@ import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-work
 import { AgentRuntime } from "../agent/runtime.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../agent/messages.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
-import type { AgentProfile, AgentProfileDiagnostic } from "../agent-task/model.js";
-import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import {
   AgentProfileRegistry,
+  MAIN_AGENT_PROFILE_ID,
+  type AgentProfile,
+  type AgentProfileDiagnostic,
+} from "../agent/profile.js";
+import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
+import {
   createImplementationWorkerProfile,
   DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
   IMPLEMENTATION_WORKER_PROFILE_ID,
@@ -25,8 +29,11 @@ import {
 import type { ModelSelectionConfig } from "../config/thread-config.js";
 import type { ThreadState } from "../config/thread-state.js";
 import { ContextBuilder } from "../context/builder.js";
+import { createDreamerProfile, DEFAULT_DREAMER_THINKING_LEVEL, DREAMER_PROFILE_ID } from "../dreamer/profile.js";
+import { DreamerScheduler } from "../dreamer/scheduler.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
 import { ExtensionEvents } from "../extensions/events.js";
+import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
 import { openProject } from "./open-project.js";
 import { Compact } from "./use-cases/compact.js";
 import { NewSession } from "./use-cases/new-session.js";
@@ -74,6 +81,12 @@ export interface ThreadAppOptions {
     defaultModel?: ModelSelectionConfig;
     settings?: ImplementationWorkerProfileSettings;
   };
+  dreamer?: {
+    enabled: boolean;
+    model?: ModelClient;
+    defaultModel?: ModelSelectionConfig;
+    thinkingLevel?: ModelThinkingLevel;
+  };
   agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
   state?: ThreadState;
   onStateChange?: (state: ThreadState) => void;
@@ -87,6 +100,7 @@ export class ThreadApp {
   readonly sessionTree: SessionTreeService;
   readonly workspaceState: WorkspaceStateService;
   readonly search: SessionSearchService;
+  readonly agentProfiles: AgentProfileRegistry;
   readonly agentTasks: AgentTaskOrchestrator;
   readonly tools = new ToolRegistry();
   readonly commands = new CommandRegistry();
@@ -103,6 +117,10 @@ export class ThreadApp {
   private readonly mainAgent: MainAgentController;
   private readonly workerSettings: ImplementationWorkerProfileSettings;
   private readonly workerDefaultModel: ModelSelectionConfig | undefined;
+  private readonly dreamerDefaultModel: ModelSelectionConfig | undefined;
+  private readonly dreamerThinkingLevel: ModelThinkingLevel;
+  private readonly globalMemory: GlobalMemorySnapshots;
+  private readonly dreamer: DreamerScheduler;
   private readonly onStateChange: ((state: ThreadState) => void) | undefined;
   private threadState: ThreadState;
   private agentToolDisposers: (() => void)[] = [];
@@ -120,6 +138,7 @@ export class ThreadApp {
     search: SessionSearchService;
     skills: LoadedSkills;
     agentTaskRepository: AgentTaskRepository;
+    globalMemory: GlobalMemorySnapshots;
   }) {
     this.project = values.project;
     this.rootPath = values.project.rootPath;
@@ -136,6 +155,9 @@ export class ThreadApp {
     this.onStateChange = options.onStateChange;
     this.workerSettings = options.implementationWorker?.settings ?? DEFAULT_IMPLEMENTATION_WORKER_SETTINGS;
     this.workerDefaultModel = options.implementationWorker?.defaultModel;
+    this.dreamerDefaultModel = options.dreamer?.defaultModel;
+    this.dreamerThinkingLevel = options.dreamer?.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL;
+    this.globalMemory = values.globalMemory;
     this.mainAgent = new MainAgentController(
       this.sessionTree.tree.id,
       this.cacheRetention,
@@ -146,10 +168,21 @@ export class ThreadApp {
     const workerProfile = options.implementationWorker?.enabled && options.implementationWorker.model
       ? this.bindAgentProfile(createImplementationWorkerProfile(options.implementationWorker.model, this.workerSettings))
       : undefined;
+    const dreamerProfile = options.dreamer?.enabled && options.dreamer.model
+      ? this.bindAgentProfile(createDreamerProfile(options.dreamer.model, this.dreamerThinkingLevel))
+      : undefined;
+    const profiles = [workerProfile, dreamerProfile].filter((profile): profile is AgentProfile => profile !== undefined);
+    this.agentProfiles = new AgentProfileRegistry(profiles, options.agentProfileDiagnostics);
     this.agentTasks = new AgentTaskOrchestrator(
       values.agentTaskRepository,
-      new AgentProfileRegistry(workerProfile ? [workerProfile] : [], options.agentProfileDiagnostics),
+      this.agentProfiles,
       values.project.rootPath,
+      this.workerSettings,
+    );
+    this.dreamer = new DreamerScheduler(
+      values.project.rootPath,
+      this.globalMemory.filePath,
+      dreamerProfile,
     );
 
     registerBuiltinTools(this.tools);
@@ -175,6 +208,7 @@ export class ThreadApp {
       repository = await SessionTreeRepository.open(project);
       const tree = new SessionTreeService(repository);
       await tree.initialize();
+      const globalMemory = await GlobalMemorySnapshots.open([...tree.projection.sessions.keys()]);
       const workspaceRepository = new WorkspaceStateRepository(project, {
         ...(options.workspaceExcludedPaths ? { excludedPaths: options.workspaceExcludedPaths } : {}),
       });
@@ -184,7 +218,17 @@ export class ThreadApp {
       const search = new SessionSearchService(tree);
       const skills = options.skills ?? await loadSkills();
       agentTaskRepository = await AgentTaskRepository.open(project);
-      const app = new ThreadApp(options, { project, repository, tree, workspace, builder, search, skills, agentTaskRepository });
+      const app = new ThreadApp(options, {
+        project,
+        repository,
+        tree,
+        workspace,
+        builder,
+        search,
+        skills,
+        agentTaskRepository,
+        globalMemory,
+      });
       await app.agentTasks.initialize();
       return app;
     } catch (error) {
@@ -224,7 +268,13 @@ export class ThreadApp {
   }
 
   get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
-    return this.agentTasks.profiles.diagnostics;
+    const memoryDiagnostic = this.globalMemory.diagnostic;
+    return [
+      ...this.agentProfiles.diagnostics,
+      ...(memoryDiagnostic
+        ? [{ profileId: "main", level: "warning" as const, message: memoryDiagnostic }]
+        : []),
+    ];
   }
 
   get subagentEnabled(): boolean {
@@ -232,9 +282,23 @@ export class ThreadApp {
   }
 
   get subagentModel(): ModelSelectionConfig | undefined {
-    const profile = this.agentTasks.profiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
+    const profile = this.agentProfiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
     if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
     return this.threadState.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID]?.model ?? this.workerDefaultModel;
+  }
+
+  get dreamerEnabled(): boolean {
+    return this.dreamer.enabled;
+  }
+
+  get dreamerModel(): ModelSelectionConfig | undefined {
+    const profile = this.agentProfiles.get(DREAMER_PROFILE_ID);
+    if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
+    return this.threadState.agents?.dreamer?.model ?? this.dreamerDefaultModel;
+  }
+
+  get dreamerLastError(): string | undefined {
+    return this.dreamer.lastError;
   }
 
   agentTaskSummaries(parentTurnId: string) {
@@ -286,12 +350,16 @@ export class ThreadApp {
     this.onStateChange?.(structuredClone(this.threadState));
   }
 
-  private rememberSubagentState(enabled: boolean, model: ModelSelectionConfig | undefined): void {
+  private rememberSecondaryAgentState(
+    id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID,
+    enabled: boolean,
+    model: ModelSelectionConfig | undefined,
+  ): void {
     this.threadState = {
       ...this.threadState,
       agents: {
         ...this.threadState.agents,
-        [IMPLEMENTATION_WORKER_PROFILE_ID]: {
+        [id]: {
           enabled,
           ...(model ? { model } : {}),
         },
@@ -321,11 +389,11 @@ export class ThreadApp {
 
   private disableSubagent(): CommandResult {
     const previous = this.subagentModel;
-    this.agentTasks.profiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.agentTasks.profiles.setDiagnostics([]);
+    this.agentProfiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
+    this.agentProfiles.clearDiagnostics(IMPLEMENTATION_WORKER_PROFILE_ID);
     this.syncAgentTaskTools();
     this.rebuildRuntime();
-    this.rememberSubagentState(false, previous);
+    this.rememberSecondaryAgentState(IMPLEMENTATION_WORKER_PROFILE_ID, false, previous);
     return ephemeral("Subagent: Off", true);
   }
 
@@ -333,19 +401,39 @@ export class ThreadApp {
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Worker model selection is unavailable");
     const model = this.modelCatalog.createClient(providerId, modelId);
     const profile = this.bindAgentProfile(createImplementationWorkerProfile(model, this.workerSettings));
-    const previous = this.agentTasks.profiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.agentTasks.profiles.set(profile);
+    const previous = this.agentProfiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
+    this.agentProfiles.set(profile);
     try {
       this.syncAgentTaskTools();
     } catch (error) {
-      if (previous) this.agentTasks.profiles.set(previous);
-      else this.agentTasks.profiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
+      if (previous) this.agentProfiles.set(previous);
+      else this.agentProfiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
       throw error;
     }
-    this.agentTasks.profiles.setDiagnostics([]);
+    this.agentProfiles.clearDiagnostics(IMPLEMENTATION_WORKER_PROFILE_ID);
     this.rebuildRuntime();
-    this.rememberSubagentState(true, { provider: providerId, id: modelId });
+    this.rememberSecondaryAgentState(IMPLEMENTATION_WORKER_PROFILE_ID, true, { provider: providerId, id: modelId });
     return ephemeral(`Subagent: On · worker ${providerId}/${modelId}`, true);
+  }
+
+  private disableDreamer(): CommandResult {
+    const previous = this.dreamerModel;
+    this.agentProfiles.delete(DREAMER_PROFILE_ID);
+    this.agentProfiles.clearDiagnostics(DREAMER_PROFILE_ID);
+    this.dreamer.setProfile(undefined);
+    this.rememberSecondaryAgentState(DREAMER_PROFILE_ID, false, previous);
+    return ephemeral("Dreamer: Off", true);
+  }
+
+  private enableDreamer(providerId: string, modelId: string): CommandResult {
+    if (!providerId || !modelId || !this.modelCatalog) throw new Error("Dreamer model selection is unavailable");
+    const model = this.modelCatalog.createClient(providerId, modelId);
+    const profile = this.bindAgentProfile(createDreamerProfile(model, this.dreamerThinkingLevel));
+    this.agentProfiles.set(profile);
+    this.agentProfiles.clearDiagnostics(DREAMER_PROFILE_ID);
+    this.dreamer.setProfile(profile);
+    this.rememberSecondaryAgentState(DREAMER_PROFILE_ID, true, { provider: providerId, id: modelId });
+    return ephemeral(`Dreamer: On · ${providerId}/${modelId}`, true);
   }
 
   private bindAgentProfile(profile: AgentProfile): AgentProfile {
@@ -368,6 +456,7 @@ export class ThreadApp {
   private rebuildRuntime(): void {
     const model = this.mainAgent.model;
     if (!model) {
+      this.agentProfiles.delete(MAIN_AGENT_PROFILE_ID);
       this.runtime = undefined;
       return;
     }
@@ -376,19 +465,33 @@ export class ThreadApp {
       this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT,
       this.agentTasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "",
       skills,
+      formatGlobalMemoryPrompt(
+        this.globalMemory.filePath,
+        this.globalMemory.snapshot(this.sessionTree.activeSession.id),
+      ),
     ].filter(Boolean).join("\n\n");
-    this.runtime = this.runtimeFactory.create({
+    const profile: AgentProfile = {
+      id: MAIN_AGENT_PROFILE_ID,
       model,
+      thinkingLevel: this.thinkingLevel,
+      tools: this.tools,
+      systemPrompt,
+    };
+    this.agentProfiles.set(profile);
+    this.runtime = this.runtimeFactory.create({
+      model: profile.model,
       ...(this.mainAgent.reasoning ? { reasoning: this.mainAgent.reasoning } : {}),
       rootPath: this.rootPath,
-      systemPrompt,
+      systemPrompt: profile.systemPrompt,
       tree: this.sessionTree,
       workspace: this.workspaceState,
       contextBuilder: this.contextBuilder,
-      tools: this.tools,
+      tools: profile.tools,
       extensions: this.events,
       agentTasks: this.agentTasks,
       askPresenter: () => this.askPresenter,
+      writableExternalPaths: [this.globalMemory.filePath],
+      onCompacted: (messages) => this.dreamer.recordCompaction(messages),
     });
   }
 
@@ -403,11 +506,11 @@ export class ThreadApp {
     const models = this.modelPickerModels(scope);
     const content = this.model
       ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nThinking level: ${this.thinkingLevel}`
-      : "No model selected. Use /model list and /model <provider>/<model>.";
+      : "No model selected. Use /agent main model list and /agent main model <provider>/<model>.";
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
       type: "model_picker",
-      target: "main",
+      agentId: MAIN_AGENT_PROFILE_ID,
       models,
       currentProviderId: this.model?.providerId,
       currentModelId: this.model?.modelId,
@@ -420,7 +523,12 @@ export class ThreadApp {
     const content = this.subagentEnabled
       ? `Subagent: On\nWorker model: ${selected?.provider}/${selected?.id}`
       : `Subagent: Off${selected ? `\nLast worker model: ${selected.provider}/${selected.id}` : ""}`;
-    return viewResult(content, { type: "subagent_settings", enabled: this.subagentEnabled });
+    return viewResult(content, {
+      type: "agent_settings",
+      agentId: IMPLEMENTATION_WORKER_PROFILE_ID,
+      label: "Implementation worker",
+      enabled: this.subagentEnabled,
+    });
   }
 
   private workerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
@@ -430,17 +538,127 @@ export class ThreadApp {
     const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
     return viewResult(
       models.length
-        ? `Choose the implementation-worker model to enable subagents.\nPlain mode: /subagent <provider>/<model>\n${choices}`
+        ? `Choose the implementation-worker model to enable subagents.\nPlain mode: /agent implementation-worker model <provider>/<model>\n${choices}`
         : "No worker models are available. Configure a provider or log in first.",
       {
         type: "model_picker",
-        target: IMPLEMENTATION_WORKER_PROFILE_ID,
+        agentId: IMPLEMENTATION_WORKER_PROFILE_ID,
         models,
         currentProviderId: selected?.provider,
         currentModelId: selected?.id,
         scope,
       },
     );
+  }
+
+  private dreamerStatus(): CommandResult {
+    const selected = this.dreamerModel;
+    const content = [
+      `Dreamer: ${this.dreamerEnabled ? "On" : "Off"}`,
+      selected ? `Dreamer model: ${selected.provider}/${selected.id}` : "Dreamer model: not selected",
+      this.dreamerLastError ? `Last error: ${this.dreamerLastError}` : undefined,
+    ].filter((line): line is string => line !== undefined).join("\n");
+    return viewResult(content, {
+      type: "agent_settings",
+      agentId: DREAMER_PROFILE_ID,
+      label: "Dreamer",
+      enabled: this.dreamerEnabled,
+    });
+  }
+
+  private dreamerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
+    if (!this.modelCatalog) throw new Error("Dreamer model selection is unavailable");
+    const selected = this.dreamerModel;
+    const models = this.modelPickerModels(scope);
+    const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
+    return viewResult(
+      models.length
+        ? `Choose the Dreamer model.\nPlain mode: /agent dreamer model <provider>/<model>\n${choices}`
+        : "No Dreamer models are available. Configure a provider or log in first.",
+      {
+        type: "model_picker",
+        agentId: DREAMER_PROFILE_ID,
+        models,
+        currentProviderId: selected?.provider,
+        currentModelId: selected?.id,
+        scope,
+      },
+    );
+  }
+
+  private agentOverview(): CommandResult {
+    const main = this.model ? `${this.model.providerId}/${this.model.modelId}` : "not selected";
+    const worker = this.subagentModel;
+    const dreamer = this.dreamerModel;
+    const content = [
+      `main: on · ${main}`,
+      `implementation-worker: ${this.subagentEnabled ? "on" : "off"} · ${worker ? `${worker.provider}/${worker.id}` : "not selected"}`,
+      `dreamer: ${this.dreamerEnabled ? "on" : "off"} · ${dreamer ? `${dreamer.provider}/${dreamer.id}` : "not selected"}`,
+      ...(this.dreamerLastError ? [`dreamer last error: ${this.dreamerLastError}`] : []),
+      ...this.agentProfileDiagnostics.map((diagnostic) =>
+        `${diagnostic.profileId} ${diagnostic.level}: ${diagnostic.message}`
+      ),
+    ].join("\n");
+    return viewResult(content, { type: "document", title: "Agents", content });
+  }
+
+  private listModels(args: string[], usage: string): CommandResult {
+    if (!this.modelCatalog || args.length > 1) throw new Error(usage);
+    const models = args[0]
+      ? (this.modelCatalog.listAll?.(args[0]) ?? this.modelCatalog.list(args[0]))
+      : this.modelPickerModels("configured");
+    return ephemeral(models.map((item) =>
+      `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context`
+    ).join("\n") || "(no models)");
+  }
+
+  private handleSecondaryModelCommand(
+    id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID,
+    args: string[],
+  ): CommandResult {
+    const picker = (scope: "configured" | "all" = "configured") =>
+      id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.workerModelPicker(scope) : this.dreamerModelPicker(scope);
+    if (args.length === 0) return picker();
+    if (args.length === 1 && args[0] === "all") return picker("all");
+    if (args[0] === "list") return this.listModels(args.slice(1), `Usage: /agent ${id} model list [provider]`);
+    if (args.length === 1 && args[0]!.includes("/")) {
+      const separator = args[0]!.indexOf("/");
+      const providerId = args[0]!.slice(0, separator);
+      const modelId = args[0]!.slice(separator + 1);
+      return id === IMPLEMENTATION_WORKER_PROFILE_ID
+        ? this.enableSubagent(providerId, modelId)
+        : this.enableDreamer(providerId, modelId);
+    }
+    throw new Error(`Usage: /agent ${id} model [all|list [provider]|<provider>/<model>]`);
+  }
+
+  private handleAgentCommand(args: string[]): CommandResult {
+    if (args.length === 0) return this.agentOverview();
+    const [id, action, ...rest] = args;
+    if (id !== MAIN_AGENT_PROFILE_ID && id !== IMPLEMENTATION_WORKER_PROFILE_ID && id !== DREAMER_PROFILE_ID) {
+      throw new Error(`Unknown agent: ${id}`);
+    }
+    if (!action) {
+      if (id === MAIN_AGENT_PROFILE_ID) return this.modelStatus();
+      return id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentStatus() : this.dreamerStatus();
+    }
+    if (action === "model") {
+      if (id === MAIN_AGENT_PROFILE_ID) return this.handleModelCommand(rest);
+      return this.handleSecondaryModelCommand(id, rest);
+    }
+    if ((action === "on" || action === "off") && id !== MAIN_AGENT_PROFILE_ID && rest.length === 0) {
+      if (action === "off") return id === IMPLEMENTATION_WORKER_PROFILE_ID
+        ? this.disableSubagent()
+        : this.disableDreamer();
+      const selected = id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentModel : this.dreamerModel;
+      if (!selected) return id === IMPLEMENTATION_WORKER_PROFILE_ID
+        ? this.workerModelPicker()
+        : this.dreamerModelPicker();
+      return id === IMPLEMENTATION_WORKER_PROFILE_ID
+        ? this.enableSubagent(selected.provider, selected.id)
+        : this.enableDreamer(selected.provider, selected.id);
+    }
+    throw new Error("Usage: /agent [main|implementation-worker|dreamer] [model [all|list [provider]|<provider>/<model>]|on|off]");
   }
 
   private handleSubagentCommand(args: string[]): CommandResult {
@@ -459,13 +677,7 @@ export class ThreadApp {
     if (args.length === 0) return this.modelStatus();
     if (args[0] === "all" && args.length === 1) return this.modelStatus("all");
     if (args[0] === "list") {
-      if (!this.modelCatalog || args.length > 2) throw new Error("Usage: /model list [provider]");
-      const models = args[1]
-        ? (this.modelCatalog.listAll?.(args[1]) ?? this.modelCatalog.list(args[1]))
-        : this.modelPickerModels("configured");
-      return ephemeral(models.map((item) =>
-        `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context`
-      ).join("\n") || "(no models)");
+      return this.listModels(args.slice(1), "Usage: /model list [provider]");
     }
     let providerId: string;
     let modelId: string;
@@ -497,15 +709,24 @@ export class ThreadApp {
         safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
         try {
           options.signal.throwIfAborted();
+          const memorySnapshot = await this.globalMemory.loadFresh();
+          options.signal.throwIfAborted();
           const session = await new NewSession(this.sessionTree).execute();
+          this.globalMemory.bind(session.id, memorySnapshot);
+          this.rebuildRuntime();
           safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: session.id, liveTipTurnId: null, reason: "new" });
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
-          return { kind: "command", result: ephemeral(`Created empty Session ${session.id} from Root; workspace unchanged`, true) };
+          const content = [
+            `Created empty Session ${session.id} from Root; workspace unchanged`,
+            ...(this.globalMemory.diagnostic ? [`Warning: ${this.globalMemory.diagnostic}`] : []),
+          ].join("\n");
+          return { kind: "command", result: ephemeral(content, true) };
         } catch (error) {
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
           throw error;
         }
       },
+      agent: async (args) => ({ kind: "command", result: this.handleAgentCommand(args) }),
       model: async (args) => ({ kind: "command", result: this.handleModelCommand(args) }),
       subagent: async (args) => ({ kind: "command", result: this.handleSubagentCommand(args) }),
       skill: async (name, extra, options) => {
@@ -552,7 +773,7 @@ export class ThreadApp {
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
       turn: async (input, options) => {
-        if (!this.runtime) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
+        if (!this.runtime) throw new Error("No model configured. Use /agent main model list and /agent main model <provider>/<model>.");
         return { kind: "turn", result: await new RunTurn(this.runtime).execute(input, options) };
       },
     });
@@ -565,9 +786,15 @@ export class ThreadApp {
     if (this.inputActive) throw new Error("Wait for the active turn or command to finish");
     this.inputActive = true;
     try {
-      return await this.handleInputInner(input, options);
+      await this.dreamer.foregroundStarting();
+      const result = await this.handleInputInner(input, options);
+      if (result.kind === "turn") {
+        this.dreamer.recordTurn(this.sessionTree.messagesForTurn(result.result.turn.id));
+      }
+      return result;
     } finally {
       this.inputActive = false;
+      this.dreamer.foregroundFinished();
     }
   }
 
@@ -597,6 +824,7 @@ export class ThreadApp {
     const result = await this.commandRouter.route(input, this.commandContext(options.signal));
     if (!result) throw new Error(`Could not route command: ${input}`);
     if (beforeSession !== this.sessionTree.activeSession.id) {
+      this.rebuildRuntime();
       safeUiEvent(options.onUiEvent, {
         type: "session_changed",
         sessionId: this.sessionTree.activeSession.id,
@@ -643,6 +871,7 @@ export class ThreadApp {
 
   async close(): Promise<void> {
     const failures: unknown[] = [];
+    await this.dreamer.close().catch((error) => failures.push(error));
     await this.workspaceState.settle().catch((error) => failures.push(error));
     await this.agentTasks.close().catch((error) => failures.push(error));
     await this.repository.close().catch((error) => failures.push(error));

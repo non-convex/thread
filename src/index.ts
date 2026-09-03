@@ -19,10 +19,15 @@ export {
 export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./agent/execution-journal.js";
+export {
+  AgentProfileRegistry,
+  MAIN_AGENT_PROFILE_ID,
+  type AgentProfile,
+  type AgentProfileDiagnostic,
+} from "./agent/profile.js";
 export { AgentTaskOrchestrator, type AgentTaskOutcome } from "./agent-task/orchestrator.js";
 export { AgentTaskRepository } from "./agent-task/repository.js";
 export {
-  AgentProfileRegistry,
   createImplementationWorkerProfile,
   DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
   IMPLEMENTATION_WORKER_PROFILE_ID,
@@ -54,6 +59,8 @@ export {
   loadThreadConfig,
   type ThreadConfig,
   type AgentProfileConfig,
+  type ImplementationWorkerConfig,
+  type DreamerConfig,
   type CustomModelConfig,
   type CustomProviderConfig,
   type LoadedThreadConfig,
@@ -67,9 +74,30 @@ export {
   resolveMainModelSelection,
   saveThreadState,
   type ImplementationWorkerState,
+  type DreamerState,
   type ThreadState,
   type ResolvedMainModelSelection,
 } from "./config/thread-state.js";
+export {
+  createDreamerProfile,
+  DEFAULT_DREAMER_THINKING_LEVEL,
+  DREAMER_MAX_RUNTIME_MS,
+  DREAMER_MAX_STEPS,
+  DREAMER_PROFILE_ID,
+} from "./dreamer/profile.js";
+export {
+  DREAMER_IDLE_MS,
+  DREAMER_IDLE_TURNS,
+  DreamerScheduler,
+  dreamerConversation,
+  type DreamerSchedulerOptions,
+} from "./dreamer/scheduler.js";
+export {
+  GLOBAL_MEMORY_FILE,
+  GlobalMemorySnapshots,
+  formatGlobalMemoryPrompt,
+  getGlobalMemoryPath,
+} from "./global-memory.js";
 export type { ExtensionAPI } from "./extensions/api.js";
 export type {
   ThreadCommand,

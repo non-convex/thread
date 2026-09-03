@@ -16,13 +16,13 @@ export type EphemeralView =
   | { type: "document"; title: string; content: string }
   | {
       type: "model_picker";
-      target: "main" | "implementation-worker";
+      agentId: string;
       models: ModelDescriptor[];
       currentProviderId: string | undefined;
       currentModelId: string | undefined;
       scope: "configured" | "all";
     }
-  | { type: "subagent_settings"; enabled: boolean }
+  | { type: "agent_settings"; agentId: string; label: string; enabled: boolean }
   | { type: "rewind"; items: HistoryViewItem[] };
 
 export interface CommandResult {

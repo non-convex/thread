@@ -56,7 +56,7 @@ export interface LiveTurn {
 
 export interface ModelPickerScreen {
   type: "model_picker";
-  target: "main" | "implementation-worker";
+  agentId: string;
   models: ModelDescriptor[];
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
@@ -66,8 +66,10 @@ export interface ModelPickerScreen {
   error: string | undefined;
 }
 
-export interface SubagentSettingsScreen {
-  type: "subagent_settings";
+export interface AgentSettingsScreen {
+  type: "agent_settings";
+  agentId: string;
+  label: string;
   enabled: boolean;
   selected: number;
   busy: boolean;
@@ -96,7 +98,7 @@ export type UiScreen =
   | { type: "session" }
   | { type: "document"; title: string; content: string }
   | ModelPickerScreen
-  | SubagentSettingsScreen
+  | AgentSettingsScreen
   | RewindScreen
   | AskScreen;
 
@@ -167,7 +169,7 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
     );
     state.screen = {
       type: "model_picker",
-      target: view.target,
+      agentId: view.agentId,
       models: view.models,
       currentProviderId: view.currentProviderId,
       currentModelId: view.currentModelId,
@@ -177,9 +179,11 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       error: undefined,
     };
   }
-  if (view.type === "subagent_settings") {
+  if (view.type === "agent_settings") {
     state.screen = {
-      type: "subagent_settings",
+      type: "agent_settings",
+      agentId: view.agentId,
+      label: view.label,
       enabled: view.enabled,
       selected: view.enabled ? 1 : 0,
       busy: false,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -34,9 +34,10 @@ async function fixture(prefix: string): Promise<{
   };
 }
 
-function context(rootPath: string): ToolContext {
+function context(rootPath: string, writableExternalPaths?: readonly string[]): ToolContext {
   return {
     rootPath,
+    ...(writableExternalPaths ? { writableExternalPaths } : {}),
     signal: new AbortController().signal,
     invocation: { executionId: "e", assistantEntryId: "a", toolCallId: "t" },
   };
@@ -107,6 +108,57 @@ test("write and edit still refuse paths outside the project", async (t) => {
   );
   assert.equal(edited.isError, true);
   assert.match(edited.content, /outside workspace/);
+});
+
+test("write and edit allow only an explicitly named external file", async (t) => {
+  const values = await fixture("thread-path-exact-external-");
+  t.after(values.cleanup);
+  const ctx = context(values.root, [values.outsideFile]);
+
+  const edited = await editTool.execute(
+    { path: values.outsideFile, oldText: "alpha", newText: "beta" },
+    ctx,
+  );
+  assert.equal(edited.isError, false, edited.content);
+  assert.match(await readFile(values.outsideFile, "utf8"), /^beta/);
+
+  const written = await writeTool.execute({ path: values.outsideFile, content: "memory\n" }, ctx);
+  assert.equal(written.isError, false, written.content);
+  assert.equal(await readFile(values.outsideFile, "utf8"), "memory\n");
+
+  const sibling = path.join(values.outsideDir, "sibling.txt");
+  const refusedSibling = await writeTool.execute({ path: sibling, content: "nope" }, ctx);
+  assert.equal(refusedSibling.isError, true);
+  assert.match(refusedSibling.content, /outside workspace/);
+
+  const refusedDirectoryChild = await writeTool.execute(
+    { path: path.join(values.outsideFile, "child.txt"), content: "nope" },
+    ctx,
+  );
+  assert.equal(refusedDirectoryChild.isError, true);
+  assert.match(refusedDirectoryChild.content, /outside workspace/);
+});
+
+test("the external write exception cannot be reached through a symlink", async (t) => {
+  const values = await fixture("thread-path-external-symlink-");
+  t.after(values.cleanup);
+  const alias = path.join(values.outsideDir, "memory-link.txt");
+  try {
+    await symlink(values.outsideFile, alias, "file");
+  } catch (error) {
+    if (["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+    throw error;
+  }
+
+  const directAlias = context(values.root, [alias]);
+  const refusedAlias = await writeTool.execute({ path: alias, content: "nope" }, directAlias);
+  assert.equal(refusedAlias.isError, true);
+  assert.match(refusedAlias.content, /symlink|allowed external file/);
+
+  const canonicalOnly = context(values.root, [values.outsideFile]);
+  const refusedUnlistedAlias = await writeTool.execute({ path: alias, content: "nope" }, canonicalOnly);
+  assert.equal(refusedUnlistedAlias.isError, true);
+  assert.match(refusedUnlistedAlias.content, /outside workspace/);
 });
 
 test("grep keeps matches from files outside the project", () => {

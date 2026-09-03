@@ -56,6 +56,7 @@ export class ToolCallExecutor {
     private readonly tools: ToolRegistry,
     private readonly extensions: ExtensionEvents,
     private readonly askPresenter?: () => AskPresenter | undefined,
+    private readonly writableExternalPaths: readonly string[] = [],
   ) {}
 
   async prepare(input: {
@@ -111,7 +112,11 @@ export class ToolCallExecutor {
     } else {
       try {
         resources = validateToolResourceClaims(
-          await policy.resources(args, { rootPath: this.rootPath, signal: input.signal }),
+          await policy.resources(args, {
+            rootPath: this.rootPath,
+            writableExternalPaths: this.writableExternalPaths,
+            signal: input.signal,
+          }),
         );
       } catch (error) {
         immediateResult = errorResult(error);
@@ -159,6 +164,9 @@ export class ToolCallExecutor {
       const ask = this.askPresenter?.();
       const context: ToolContext = {
         rootPath: this.rootPath,
+        ...(this.writableExternalPaths.length > 0
+          ? { writableExternalPaths: this.writableExternalPaths }
+          : {}),
         signal,
         invocation: {
           executionId: prepared.journal.executionId,

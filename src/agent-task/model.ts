@@ -1,7 +1,8 @@
-import type { Message, ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { Message, Usage } from "@earendil-works/pi-ai";
 import type { ToolExecutionFact } from "../agent/execution-journal.js";
-import type { ModelClient } from "../agent/model-client.js";
-import type { ToolRegistry } from "../tools/types.js";
+
+// Source-level compatibility for callers while shared profile types live in agent/.
+export type { AgentProfile, AgentProfileDiagnostic } from "../agent/profile.js";
 
 export const AGENT_TASK_FORMAT = "thread-agent-task-v2" as const;
 export const AGENT_TASK_TOOL_NAMES = new Set([
@@ -25,20 +26,6 @@ export interface ImplementationTaskSpec {
 }
 
 export type AgentTaskStatus = "running" | "completed" | "failed" | "cancelled";
-
-export interface AgentProfile {
-  id: string;
-  model: ModelClient;
-  thinkingLevel: ModelThinkingLevel;
-  limits: {
-    maxConcurrent: number;
-    maxSteps: number;
-    maxRuntimeMs: number;
-    maxRevisions: number;
-  };
-  tools: ToolRegistry;
-  systemPrompt: string;
-}
 
 export interface AgentTaskRun {
   revision: number;
@@ -107,9 +94,3 @@ export type AgentTaskRecord = {
   sequence: number;
   timestamp: number;
 } & AgentTaskEvent;
-
-export interface AgentProfileDiagnostic {
-  profileId: string;
-  level: "warning" | "error";
-  message: string;
-}

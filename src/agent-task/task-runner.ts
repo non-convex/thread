@@ -4,7 +4,9 @@ import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { safeUiEvent, type AgentTaskLiveEvent, type UiEvent, type UiEventSink } from "../ui/events.js";
 import { AgentTaskJournal } from "./journal.js";
-import type { AgentProfile, AgentTaskRun } from "./model.js";
+import type { AgentProfile } from "../agent/profile.js";
+import type { AgentTaskRun } from "./model.js";
+import type { ImplementationWorkerLimits } from "./profile.js";
 import { taskSpecMessage } from "./prompt.js";
 import type { AgentTaskRepository } from "./repository.js";
 
@@ -43,7 +45,13 @@ export class ImplementationTaskRunner {
     private readonly rootPath: string,
   ) {}
 
-  async run(taskId: string, profile: AgentProfile, parentSignal: AbortSignal, ui?: UiEventSink): Promise<void> {
+  async run(
+    taskId: string,
+    profile: AgentProfile,
+    limits: ImplementationWorkerLimits,
+    parentSignal: AbortSignal,
+    ui?: UiEventSink,
+  ): Promise<void> {
     const task = this.repository.projection.require(taskId);
     const revision = task.runs.length;
     const startedAt = Date.now();
@@ -51,7 +59,7 @@ export class ImplementationTaskRunner {
     await this.repository.append({ type: "run_started", taskId, run }, true);
     this.updated(taskId, ui);
 
-    const timeout = AbortSignal.timeout(profile.limits.maxRuntimeMs);
+    const timeout = AbortSignal.timeout(limits.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const journal = new AgentTaskJournal(this.repository, taskId);
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
@@ -62,7 +70,7 @@ export class ImplementationTaskRunner {
     const usage = emptyUsage();
     let finalResponse = "";
     try {
-      for (let step = 1; step <= profile.limits.maxSteps; step++) {
+      for (let step = 1; step <= limits.maxSteps; step++) {
         signal.throwIfAborted();
         const context: Context = {
           systemPrompt: profile.systemPrompt,
@@ -87,7 +95,7 @@ export class ImplementationTaskRunner {
         if (result.response.stopReason === "aborted") throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
         if (result.response.stopReason === "error") throw new Error(result.response.errorMessage ?? "Worker model request failed");
         if (result.calls.length === 0) break;
-        if (step === profile.limits.maxSteps) throw new Error(`Worker exceeded ${profile.limits.maxSteps} model steps`);
+        if (step === limits.maxSteps) throw new Error(`Worker exceeded ${limits.maxSteps} model steps`);
       }
       signal.throwIfAborted();
       await this.repository.append({
@@ -100,7 +108,7 @@ export class ImplementationTaskRunner {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       const cancelled = parentSignal.aborted;
       const errorMessage = timeout.aborted && !parentSignal.aborted
-        ? `Worker exceeded ${profile.limits.maxRuntimeMs}ms runtime limit`
+        ? `Worker exceeded ${limits.maxRuntimeMs}ms runtime limit`
         : error.message;
       await this.repository.append({
         type: "run_finished",

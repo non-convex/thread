@@ -767,13 +767,13 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       <text fg={theme.softText} marginBottom={1}>Persistent Session Tree · turn-level workspace rewind</text>
       <box flexDirection="row" height={1}>
         <text fg={theme.muted} height={1} wrapMode="none">type a task to start working, or </text>
-        <text fg={theme.accentDim} height={1} wrapMode="none">/model</text>
+        <text fg={theme.accentDim} height={1} wrapMode="none">/agent</text>
         <text fg={theme.muted} height={1} wrapMode="none"> to switch model</text>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread</text>
         <text fg={theme.muted} height={1} wrapMode="none"> Sessions · history · search</text>
-        <text fg={theme.accentDim} height={1} wrapMode="none"> · /subagent</text>
+        <text fg={theme.accentDim} height={1} wrapMode="none"> · /compact</text>
         <text fg={theme.muted} height={1} wrapMode="none"> workers</text>
         <text fg={theme.accentDim} height={1} wrapMode="none"> · ⇧⇥</text>
         <text fg={theme.muted} height={1} wrapMode="none"> thinking level</text>

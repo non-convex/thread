@@ -16,6 +16,7 @@ export type InputResult =
 
 export interface InputRouteHandlers {
   newSession(options: InputOptions): Promise<InputResult>;
+  agent(args: string[], options: InputOptions): Promise<InputResult>;
   model(args: string[], options: InputOptions): Promise<InputResult>;
   subagent(args: string[], options: InputOptions): Promise<InputResult>;
   skill(name: string | undefined, extra: string | undefined, options: InputOptions): Promise<InputResult>;
@@ -35,6 +36,9 @@ export class InputRouter {
     if (trimmed === "/new") return this.handlers.newSession(options);
     if (trimmed.startsWith("/new ")) throw new Error("Usage: /new");
     if (trimmed === "/clear") return Promise.resolve({ kind: "command", result: clearDisplayResult() });
+    if (trimmed === "/agent" || trimmed.startsWith("/agent ")) {
+      return this.handlers.agent(parseCommandLine(trimmed.slice(6).trim()), options);
+    }
     if (trimmed === "/model" || trimmed.startsWith("/model ")) {
       return this.handlers.model(parseCommandLine(trimmed.slice(6).trim()), options);
     }
