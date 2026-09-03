@@ -2,7 +2,7 @@
 
 # Thread
 
-**Coding agent 的项目记忆：每个项目一棵持久化 Session Tree。**
+**围绕两套持久记忆构建的 coding-agent runtime。**
 
 [English](./README.md) · [Releases](https://github.com/non-convex/thread/releases) · [开发](#开发)
 
@@ -12,25 +12,18 @@
 
 </div>
 
-一个软件项目不只有当前文件。与 agent 的每次交互、每个决策、每次工具调用和执行结果，都是项目历史的一部分。
+## 记忆模型与设计主张
 
-Thread 为每个项目维护一棵持久化的 **Session Tree**，把这些历史记录下来。历史本身就是项目记忆，不需要再创造一套必须与真实历史同步的“记忆实体”。Agent 可以搜索和召回不同 Session 与历史分支中的 turn，再用当前工作区核对召回的证据。
+Thread 定义两套记忆：
 
-目前，agent 通过显式搜索与召回使用这份记忆；跨整棵树的某种项目级全局感知仍待实现。跨项目的全局记忆和 **Dreamer** 机制正在开发中。
+1. **项目记忆——已实现。** 每个项目拥有一棵持久化 Session Tree。与 agent 的全部交互和每一条执行轨迹共同构成项目的完整历史；这份历史就是项目记忆。Agent 目前可以搜索和召回它，跨整棵树的项目级全局感知仍待实现。
+2. **全局记忆——开发中。** 记忆将跨越不同项目，并通过 **Dreamer** 机制主动整理和演化。
 
-```text
-Project
-├── Current workspace
-└── Persistent Session Tree
-    ├── Session A
-    │   ├── Turn 1: request → agent messages → execution trace
-    │   ├── Turn 2
-    │   └── Turn 3 ──────┐
-    │                    └── rewind 后的 Turn 3′
-    └── Session B: /new 创建的独立上下文
-```
+实现受三条原则约束：
 
-Thread 有意保持概念精简：Project → Session Tree → Session → Turn 与 Entry。工作区检查点把历史连接到可恢复的文件状态；Git、进程、数据库和远程服务继续作为外部系统存在，而不是变成新的 Thread 实体。
+1. **保持精简。** 不过度设计；如无必要，勿增实体。
+2. **保护缓存局部性。** 精心设计上下文管理和压缩策略，尽量保持稳定前缀与 prompt cache 命中。
+3. **只让必要信息进入上下文。** 只有必须影响当前步骤的信息才进入 active context，避免窗口过早膨胀；更细粒度的上下文准入机制仍待实现。
 
 ## 界面
 
@@ -41,17 +34,6 @@ Thread 有意保持概念精简：Project → Session Tree → Session → Turn 
 ![Thread 执行编码任务](docs/assets/thread-session.png)
 
 <p align="center"><em>在一个界面中查看思考、工具活动、耗时、上下文用量、模型和 thinking level。</em></p>
-
-## 当前能力
-
-- **持久化项目历史。** Session、turn、消息、工具事实、结果、状态、分支和 live tip 都能跨重启保留。
-- **项目记忆召回。** `session_search` 与 `session_read` 可以访问其他 Session 和 rewind 后离开当前路径的历史。
-- **Turn 级工作区回退。** `/rewind` 恢复所选用户 turn 之前的检查点，同时保留原路径。
-- **克制的上下文管理。** 普通模型请求只接收 active live path；compaction 缩减长上下文，但不改写历史。
-- **可靠执行。** 工具副作用发生前，工具开始事实与工作区状态必须越过持久化屏障；中断的工作会被封口，绝不自动重放。
-- **可选 implementation worker。** 一到两个互不重叠的叶子任务可以在共享工作区运行。
-- **灵活的模型接入。** 支持 ChatGPT 订阅，以及可配置的 OpenAI / Anthropic 兼容 provider。
-- **两种终端模式。** 交互式终端使用全屏 TUI，非 TTY 场景自动回退到 plain 模式。
 
 ## 快速开始
 
@@ -104,11 +86,20 @@ Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/au
 
 如果使用 API key 或兼容中转服务，把 [`thread.config.example.json`](./thread.config.example.json) 复制到 `~/.thread/config.json`，修改 provider 与 model，再设置 `apiKeyEnv` 指定的环境变量。自定义 provider 支持 `openai-responses`、`openai-completions` 和 `anthropic-messages`。
 
-## 项目记忆
+## 工作原理
 
 ### Session 是同一份历史中的不同路径
 
 一个项目只有一个虚拟 Root，可以拥有任意数量的顶层 Session。Session 不是工作区副本，而是项目历史中的一条独立路径。
+
+```text
+Project
+├── Current workspace
+└── Persistent Session Tree
+    ├── Session A: Turn 1 → Turn 2 → Turn 3
+    │                            └────→ rewind 后的 Turn 3′
+    └── Session B: /new 创建的独立上下文
+```
 
 - `/new` 创建并激活空 Session；它不复制消息、不调用模型、不总结历史，也不修改文件。
 - `/session` 列出 Session。
@@ -122,7 +113,7 @@ Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/au
 
 Turn 结束时，Thread 捕获供下一次发送使用的新检查点；进程中的第一个 turn 会先做启动扫描。失败或中断的 turn 会被补成合法对话前缀并继续作为 live tip，让下一条请求从真实发生过的历史继续。
 
-Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进父 agent 上下文。父 agent 只接收精简任务结果，并直接检查共享工作区。Session Tree、任务轨迹与工作区检查点共同构成这个项目被记录下来的历史。
+Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进父 agent 上下文。父 agent 只接收精简任务结果，并直接检查共享工作区。
 
 ### Rewind 产生分支
 
@@ -137,21 +128,16 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 
 检查点来自上一个已完成 turn。Thread 空闲期间、检查点生成之后发生的手工修改，不属于下一 turn 的“turn 前状态”。
 
-### 搜索、召回与未来的全局感知
+### 搜索与召回
 
 `session_search` 搜索所有 Session 和历史分支；`session_read` 读取一个命中 turn，或它附近的一段有界路径。召回的信息可能已经过时，因此正确性依赖它时，agent 会重新核对当前文件。
 
-搜索与召回是目前使用项目记忆的接口。计划中的项目级全局感知，会让 agent 在不把所有旧 turn 塞进 active context 的前提下感知相关历史。跨项目全局记忆和 Dreamer 机制也沿用同一个原则：从已记录的历史中提炼有用记忆，而不是建立第二个事实源。
-
 ## 上下文策略
-
-上下文是有限的工作集，不是项目记忆的完整镜像。
 
 - 普通请求只包含 active live path；路径之外的历史通过显式召回按需进入。
 - Skills 只在启动时加载一次，成为稳定的 system-prompt 前缀。
 - Compaction 只发生在完整 model-step 边界，并作为新的 append-only tree entry 保存。
-- 尽量保持稳定前缀和 prompt cache 局部性；没有显著上下文收益时，不应通过压缩无谓破坏缓存命中。
-- 目标策略会更加严格：只有必须影响当前步骤的信息才进入上下文。更细粒度的准入机制仍待实现，用来避免窗口过早膨胀。
+- Compaction 尽量保持稳定前缀，并且只在预计能显著缩减上下文时执行。
 
 `/compact` 手动请求一次压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 工作集预算允许时向前扩展。更早的历史仍可用于 rewind、搜索和召回。
 

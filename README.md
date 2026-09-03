@@ -2,7 +2,7 @@
 
 # Thread
 
-**Project memory for coding agents — one persistent Session Tree per project.**
+**A coding-agent runtime built around two layers of persistent memory.**
 
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/non-convex/thread/releases) · [Development](#development)
 
@@ -12,25 +12,18 @@
 
 </div>
 
-A software project is more than its current files. Every conversation with the agent, every decision, every tool call, and every execution result is part of the project's history.
+## Memory model and design
 
-Thread keeps that history under one persistent **Session Tree** for each project. The history itself is the project's memory—not a separate knowledge entity that must be kept in sync. The agent can search and recall turns across Sessions and historical branches, then verify recalled evidence against the current workspace.
+Thread defines two memory scopes:
 
-Today this memory is available through explicit search and recall. A broader form of project-wide awareness across the whole tree is planned. Cross-project global memory and a **Dreamer** mechanism are in active development.
+1. **Project memory — available now.** Every project owns one persistent Session Tree. All interaction with the agent and every agent execution trace together form the project's complete history; that history is its memory. The agent can search and recall it today. Project-wide awareness across the whole tree is planned.
+2. **Global memory — in development.** Memory will extend across projects, with a **Dreamer** mechanism that actively organizes and evolves it.
 
-```text
-Project
-├── Current workspace
-└── Persistent Session Tree
-    ├── Session A
-    │   ├── Turn 1: request → agent messages → execution trace
-    │   ├── Turn 2
-    │   └── Turn 3 ──────┐
-    │                    └── Turn 3′ after rewind
-    └── Session B: independent context created by /new
-```
+Three constraints shape the implementation:
 
-Thread deliberately keeps the model small: Project → Session Tree → Sessions → Turns and Entries. Workspace checkpoints attach history to recoverable file states. Git, processes, databases, and remote services remain external rather than becoming new Thread entities.
+1. **Keep it small.** Avoid over-design; introduce no entity unless it is necessary.
+2. **Protect cache locality.** Design context management and compaction carefully, preserving stable prefixes and prompt-cache hits whenever possible.
+3. **Admit only what is needed.** Information should enter active context only when it must affect the current step, preventing premature window growth. Finer-grained context admission is planned.
 
 ## Interface
 
@@ -41,17 +34,6 @@ Thread deliberately keeps the model small: Project → Session Tree → Sessions
 ![Thread working through a coding task](docs/assets/thread-session.png)
 
 <p align="center"><em>Thinking, tool activity, elapsed time, context usage, model, and thinking level in one view.</em></p>
-
-## What works today
-
-- **Persistent project history.** Sessions, turns, messages, tool facts, results, statuses, branches, and live tips survive restarts.
-- **Project-memory recall.** `session_search` and `session_read` reach other Sessions and paths abandoned after rewind.
-- **Turn-level workspace rewind.** `/rewind` restores the checkpoint before a selected user turn while retaining the old path.
-- **Deliberate context management.** Only the active live path enters normal model context; compaction reduces long contexts without rewriting history.
-- **Durable execution.** Tool-start facts and workspace state cross a persistence barrier before side effects; interrupted work is sealed and never replayed automatically.
-- **Optional implementation workers.** One or two independent leaf tasks can run in the shared workspace with non-overlapping write scopes.
-- **Flexible model access.** Use a ChatGPT subscription or configured OpenAI- and Anthropic-compatible providers.
-- **Two terminal modes.** Interactive terminals get the full-screen TUI; non-TTY use falls back to plain mode.
 
 ## Quick start
 
@@ -104,11 +86,20 @@ Thread stores this login separately from Codex CLI in `~/.thread/auth.json` (or 
 
 For an API key or compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, and set the environment variable named by `apiKeyEnv`. Custom providers can use `openai-responses`, `openai-completions`, or `anthropic-messages`.
 
-## Project memory
+## How it works
 
 ### Sessions are paths through one history
 
 A project owns one virtual Root and any number of top-level Sessions. A Session is not a copy of the workspace; it is an independent path through project history.
+
+```text
+Project
+├── Current workspace
+└── Persistent Session Tree
+    ├── Session A: Turn 1 → Turn 2 → Turn 3
+    │                            └────→ Turn 3′ after rewind
+    └── Session B: independent context created by /new
+```
 
 - `/new` creates and activates an empty Session without copying messages, calling the model, summarizing history, or changing files.
 - `/session` lists Sessions.
@@ -122,7 +113,7 @@ Each turn records the user message, assistant output, tool execution facts and r
 
 Thread captures the next checkpoint when a turn ends and reuses it for the next send. The first turn in a process performs a bootstrap scan. Interrupted and failed turns are sealed into valid conversation prefixes and remain the live tip, so the next request can continue from factual history.
 
-Worker execution traces are kept in the same project's Agent Task journal rather than injected into the parent context. The parent receives compact task results and reviews the shared workspace directly. Together, the Session Tree, task traces, and workspace checkpoints are the recorded history of the project.
+Worker execution traces are kept in the same project's Agent Task journal rather than injected into the parent context. The parent receives compact task results and reviews the shared workspace directly.
 
 ### Rewind creates a branch
 
@@ -137,21 +128,16 @@ The next message creates a new child path. Missing or corrupt state fails before
 
 A checkpoint comes from the previous completed turn. Manual edits made after that checkpoint while Thread is idle are not part of the next turn's pre-turn state.
 
-### Search, recall, and future awareness
+### Search and recall
 
 `session_search` searches every Session and historical branch. `session_read` retrieves one matching turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it.
 
-Search and recall are the current interface to project memory. Planned project-wide awareness will let the agent sense relevant history without requiring every old turn to be placed in active context. Global memory across projects and the Dreamer mechanism are being developed on top of the same principle: derive useful memory from recorded history instead of creating a parallel source of truth.
-
 ## Context policy
-
-Context is treated as a limited working set, not as a place to mirror all project memory.
 
 - Normal requests contain the active live path; off-path history enters only through explicit recall.
 - Skills are loaded once into a stable system-prompt prefix.
 - Compaction happens only at complete model-step boundaries and is stored as another append-only tree entry.
-- Stable prefixes and prompt-cache locality are preserved whenever possible; compaction should not invalidate cache without a material context benefit.
-- The target policy is stricter still: only information that must influence the current step should enter the context. Finer-grained admission is planned to prevent premature window growth.
+- Compaction preserves stable prefixes where possible and proceeds only when its estimated context benefit is material.
 
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows. Earlier history remains available to rewind, search, and recall.
 
