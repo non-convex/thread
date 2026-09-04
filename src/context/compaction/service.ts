@@ -1,6 +1,6 @@
 // Compaction orchestration: plan, summarize, verify, append one Session Tree entry.
 
-import type { Context, Message, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../../agent/model-client.js";
 import type { CompactionReason } from "../../session-tree/model.js";
 import type { SessionTreeService } from "../../session-tree/service.js";
@@ -11,7 +11,6 @@ import { minimumUsefulSavings } from "./policy.js";
 import { prepareCompaction } from "./prepare.js";
 import { generateProgressSummary } from "./progress-summary.js";
 import { historySummaryContext, progressSummaryContext, replacementContext } from "./slice.js";
-import { unitsMessages } from "./units.js";
 
 export type CompactionResult =
   | { compacted: false }
@@ -31,7 +30,6 @@ export class ContextCompactionService {
     private readonly tree: SessionTreeService,
     private readonly model: ModelClient,
     private readonly reasoning?: ThinkingLevel,
-    private readonly onCompacted?: (messages: readonly Message[]) => void,
   ) {}
 
   needsCompaction(built: BuiltContext, systemTokens: number, targetTurnId: string): boolean {
@@ -105,12 +103,6 @@ export class ContextCompactionService {
       reason: options.reason,
       ...(progressSummary ? { progressSummary } : {}),
     });
-    try {
-      this.onCompacted?.(unitsMessages(plan.summarizedUnits));
-    } catch {
-      // A background review hook cannot invalidate a committed compaction.
-    }
-
     return {
       compacted: true,
       entryId: entry.id,

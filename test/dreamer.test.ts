@@ -13,7 +13,8 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
 import { createDreamerProfile } from "../src/dreamer/profile.js";
-import { DreamerScheduler, dreamerConversation } from "../src/dreamer/scheduler.js";
+import { dreamerConversation } from "../src/dreamer/review.js";
+import { DreamerScheduler } from "../src/dreamer/scheduler.js";
 
 class DreamerModel implements ModelClient {
   readonly modelId = "dreamer-test";
@@ -21,7 +22,7 @@ class DreamerModel implements ModelClient {
   readonly contextWindow = 32_000;
   readonly maxOutputTokens = 4_096;
   readonly reasoning = true;
-  readonly supportedThinkingLevels = ["low"] as const;
+  readonly supportedThinkingLevels = ["low", "high"] as const;
   readonly contexts: Context[] = [];
   active = 0;
   maximumActive = 0;
@@ -51,14 +52,14 @@ function user(text: string, timestamp: number): Message {
   return { role: "user", content: text, timestamp };
 }
 
-test("Dreamer evidence excludes thinking, ordinary tool output, and tool arguments", () => {
-  const ask = fauxToolCall("ask", { secretArgument: "exclude-ask-args" }, { id: "ask-1" });
-  const read = fauxToolCall("read", { path: "exclude-read-args" }, { id: "read-1" });
+test("Dreamer receives the interaction and agent work trajectory", () => {
+  const ask = fauxToolCall("ask", { question: "which option?" }, { id: "ask-1" });
+  const read = fauxToolCall("read", { path: "source.ts" }, { id: "read-1" });
   const messages: Message[] = [
-    user("explicit user preference", 1),
+    user("user correction after repeated friction", 1),
     fauxAssistantMessage([
-      { type: "thinking", thinking: "exclude private thinking" },
-      { type: "text", text: "visible assistant context" },
+      { type: "thinking", thinking: "reasoning about the attempted approach" },
+      { type: "text", text: "visible assistant response" },
       ask,
       read,
     ], { stopReason: "toolUse", timestamp: 2 }),
@@ -74,20 +75,20 @@ test("Dreamer evidence excludes thinking, ordinary tool output, and tool argumen
       role: "toolResult",
       toolCallId: read.id,
       toolName: read.name,
-      content: [fauxText("exclude ordinary output")],
+      content: [fauxText("observed tool outcome")],
       isError: false,
       timestamp: 4,
     },
   ];
 
   const evidence = dreamerConversation(messages);
-  assert.match(evidence, /explicit user preference/);
-  assert.match(evidence, /visible assistant context/);
-  assert.match(evidence, /explicit answer/);
-  assert.doesNotMatch(evidence, /private thinking|secretArgument|exclude-ask-args|exclude-read-args|ordinary output/);
+  assert.match(evidence, /user correction after repeated friction/);
+  assert.match(evidence, /visible assistant response/);
+  assert.match(evidence, /reasoning about the attempted approach/);
+  assert.match(evidence, /which option\?|source\.ts|explicit answer|observed tool outcome/);
 });
 
-test("Dreamer waits for the turn threshold and idle window, then runs compaction batches immediately", async (t) => {
+test("Dreamer waits for the turn threshold and Main idle window", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "thread-dreamer-scheduler-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }));
   const root = path.join(directory, "project");
@@ -102,48 +103,48 @@ test("Dreamer waits for the turn threshold and idle window, then runs compaction
   });
   t.after(() => scheduler.close());
 
+  scheduler.foregroundStarting();
   scheduler.recordTurn([user("turn one", 1)]);
+  scheduler.foregroundFinished();
   await new Promise((resolve) => setTimeout(resolve, 35));
   assert.equal(model.contexts.length, 0);
 
+  scheduler.foregroundStarting();
   scheduler.recordTurn([user("turn two", 2)]);
+  scheduler.foregroundFinished();
   await waitFor(() => model.contexts.length === 1);
-  assert.equal(profile.thinkingLevel, "low");
+  assert.equal(profile.thinkingLevel, "high");
   assert.deepEqual(profile.tools.list().map((tool) => tool.name), ["read", "write", "edit"]);
   assert.match(JSON.stringify(model.contexts[0]!.messages), /turn one/);
   assert.match(JSON.stringify(model.contexts[0]!.messages), /turn two/);
-
-  scheduler.recordCompaction([user("compacted original content", 3)]);
-  await waitFor(() => model.contexts.length === 2);
-  assert.match(JSON.stringify(model.contexts[1]!.messages), /compacted original content/);
   assert.equal(model.maximumActive, 1, "only one Dreamer instance runs at a time");
 
   scheduler.setProfile(undefined);
-  scheduler.recordCompaction([user("disabled content", 4)]);
+  scheduler.recordTurn([user("disabled content", 3)]);
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(model.contexts.length, 2);
+  assert.equal(model.contexts.length, 1);
   await assert.rejects(readFile(memoryPath, "utf8"), /ENOENT/);
 });
 
-test("foreground input safely cancels Dreamer and reschedules the unfinished batch", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "thread-dreamer-cancel-"));
+test("foreground input leaves a running Dreamer in the background", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "thread-dreamer-background-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }));
   const root = path.join(directory, "project");
   await mkdir(root, { recursive: true });
+  let finishFirst: (() => void) | undefined;
+  let firstSignal: AbortSignal | undefined;
 
-  class InterruptibleModel extends DreamerModel {
+  class BackgroundModel extends DreamerModel {
     override async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
       this.contexts.push(structuredClone(context));
-      if (this.contexts.length > 1) return fauxAssistantMessage(fauxText("retry complete"));
-      await new Promise<void>((_resolve, reject) => {
-        if (options.signal.aborted) return reject(options.signal.reason);
-        options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
-      });
-      return fauxAssistantMessage(fauxText("unreachable"));
+      if (this.contexts.length > 1) return fauxAssistantMessage(fauxText("next batch complete"));
+      firstSignal = options.signal;
+      await new Promise<void>((resolve) => { finishFirst = resolve; });
+      return fauxAssistantMessage(fauxText("first batch complete"));
     }
   }
 
-  const model = new InterruptibleModel();
+  const model = new BackgroundModel();
   const scheduler = new DreamerScheduler(root, path.join(directory, ".THREAD.md"), createDreamerProfile(model), {
     idleTurns: 1,
     idleMs: 1,
@@ -151,13 +152,17 @@ test("foreground input safely cancels Dreamer and reschedules the unfinished bat
   });
   t.after(() => scheduler.close());
 
-  scheduler.recordCompaction([user("must survive cancellation", 1)]);
+  scheduler.foregroundStarting();
+  scheduler.recordTurn([user("first batch", 1)]);
+  scheduler.foregroundFinished();
   await waitFor(() => model.contexts.length === 1);
-  await scheduler.foregroundStarting();
-  assert.equal(model.contexts.length, 1);
+  scheduler.foregroundStarting();
+  assert.equal(firstSignal?.aborted, false);
+  scheduler.recordTurn([user("foreground turn", 2)]);
+  finishFirst?.();
   scheduler.foregroundFinished();
   await waitFor(() => model.contexts.length === 2);
-  assert.match(JSON.stringify(model.contexts[1]!.messages), /must survive cancellation/);
+  assert.match(JSON.stringify(model.contexts[1]!.messages), /foreground turn/);
 });
 
 test("Dreamer retains a failed batch and reports the latest error before an idle retry", async (t) => {
@@ -182,7 +187,9 @@ test("Dreamer retains a failed batch and reports the latest error before an idle
   });
   t.after(() => scheduler.close());
 
-  scheduler.recordCompaction([user("retain after failure", 1)]);
+  scheduler.foregroundStarting();
+  scheduler.recordTurn([user("retain after failure", 1)]);
+  scheduler.foregroundFinished();
   await waitFor(() => scheduler.lastError !== undefined);
   assert.match(scheduler.lastError ?? "", /temporary Dreamer failure/);
   await waitFor(() => model.contexts.length === 2);
@@ -213,10 +220,14 @@ test("Dreamer can write only the exact global memory file", async (t) => {
 
   const model = new WritingDreamerModel();
   const scheduler = new DreamerScheduler(root, memoryPath, createDreamerProfile(model), {
+    idleTurns: 1,
+    idleMs: 1,
     maxRuntimeMs: 1_000,
   });
   t.after(() => scheduler.close());
-  scheduler.recordCompaction([user("I explicitly prefer concise answers", 1)]);
+  scheduler.foregroundStarting();
+  scheduler.recordTurn([user("interaction evidence", 1)]);
+  scheduler.foregroundFinished();
   await waitFor(() => model.contexts.length === 2);
   await waitFor(() => scheduler.lastError === undefined);
   assert.equal(await readFile(memoryPath, "utf8"), "- [2026-09-03] remembered\n");

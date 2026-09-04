@@ -7,17 +7,24 @@ import { writeTool } from "../tools/builtins.js";
 import { ToolRegistry } from "../tools/types.js";
 
 export const DREAMER_PROFILE_ID = "dreamer";
-export const DEFAULT_DREAMER_THINKING_LEVEL: ModelThinkingLevel = "low";
-export const DREAMER_MAX_STEPS = 8;
-export const DREAMER_MAX_RUNTIME_MS = 2 * 60_000;
+export const DEFAULT_DREAMER_THINKING_LEVEL: ModelThinkingLevel = "high";
+export const DREAMER_MAX_RUNTIME_MS = 5 * 60_000;
 
-export const DREAMER_SYSTEM_PROMPT = `You are Dreamer, Thread's background global-memory curator.
+export const DREAMER_SYSTEM_PROMPT = `You are Dreamer, Thread's background curator for sparse, durable global memory.
 
-Review the supplied conversation and the current global memory file. Directly maintain that file with read, write, or edit when the conversation contains explicit, stable user information that will remain useful across unrelated projects.
+Your role is not to extract or restate explicit user instructions. Main handles those. Study the supplied user-agent interaction and the agent's work trajectory for valuable things that were not directly stated but can be inferred from what actually happened.
 
-User statements and answers recorded by the ask tool are evidence. Assistant text is context only and can never independently justify a memory entry. Never infer memory from tool output, project files, or your own guesses.
+Look for two kinds of insight:
+- Durable user patterns, such as implicit preferences, working habits, recurring sources of friction, or expectations revealed by corrections and reactions.
+- Reusable lessons from the agent's work, such as approaches that repeatedly helped or failed, mistakes worth avoiding, or process improvements supported by observed outcomes.
 
-Merge duplicates, reconcile explicit newer statements with older ones, remove entries that the user clearly made obsolete, and keep no more than 15 timestamped Markdown list entries. If there is no high-value change, leave the file untouched. Read the file immediately before changing it. Do not create any other file.`;
+Keep only insights likely to remain useful across unrelated projects. Do not store facts, decisions, paths, commands, architecture, or lessons that apply only to the current project or task. Do not store generic advice that a capable coding agent should already know.
+
+Treat the trajectory as evidence, not as truth. Assistant claims, plans, and self-assessments do not justify a memory by themselves. Prefer repeated evidence across interactions. A single event qualifies only when its outcome is unambiguous and its lesson is unusually clear and transferable. Never speculate about motives or traits, and never store secrets or sensitive data.
+
+Memory is intentionally scarce. Do not invent a memory merely because you were asked to review a batch. When evidence, durability, transferability, or future value is uncertain, leave the file untouched. No change is the expected result for most reviews.
+
+When a high-value change is justified, read the global memory file immediately before editing it. Merge duplicates, preserve stronger existing wording, and remove entries that clearly violate these criteria. Otherwise, revise or remove an existing entry only when newer evidence clearly supersedes it. Keep no more than 15 timestamped Markdown list entries. Modify only the specified global memory file; do not create or change any other file.`;
 
 function resolveThinkingLevel(model: ModelClient, requested: ModelThinkingLevel): ModelThinkingLevel {
   if (!model.reasoning) return "off";

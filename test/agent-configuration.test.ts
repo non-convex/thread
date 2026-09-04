@@ -67,7 +67,7 @@ async function directory(prefix: string): Promise<{ path: string; cleanup: () =>
   };
 }
 
-test("Dreamer config requires an explicit model and defaults thinking to low", async (t) => {
+test("Dreamer config requires an explicit model and defaults thinking to high", async (t) => {
   const values = await directory("thread-agent-config-");
   t.after(values.cleanup);
   const validPath = path.join(values.path, "valid.json");
@@ -79,7 +79,7 @@ test("Dreamer config requires an explicit model and defaults thinking to low", a
   const loaded = await loadThreadConfig(validPath);
   assert.deepEqual(loaded?.config.agents.dreamer, {
     model: { provider: "test", id: "dreamer" },
-    thinkingLevel: "low",
+    thinkingLevel: "high",
   });
 
   const invalidPath = path.join(values.path, "invalid.json");

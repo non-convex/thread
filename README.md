@@ -142,7 +142,7 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 
 Global memory is the single Markdown file `${THREAD_HOME}/.THREAD.md`. Its contents do not enter the Session Tree, search, rewind, or compaction. The main agent may update only that exact external file when the current user message explicitly contains stable, cross-project information. Each Session keeps the snapshot captured when it began; disk changes become visible after `/new` or restart.
 
-Dreamer is an optional background memory curator. Enable it with `/agent dreamer model <provider>/<model>`. It reviews conversational evidence after a successful compaction, or after ten settled turns followed by ten idle minutes. It uses only `read`, `write`, and `edit`, runs one instance at a time, and stays silent on success.
+Dreamer is an optional background memory curator. Enable it with `/agent dreamer model <provider>/<model>`. Rather than duplicating explicit instructions handled by Main, it looks for well-supported, implicit user patterns and reusable lessons from the interaction and agent work trajectory that remain useful across unrelated projects. Most reviews should produce no memory change. After ten settled turns, it runs once the Main agent has remained idle for ten minutes; it stays silent alongside later foreground work, uses `high` thinking, has no step limit, and has a five-minute runtime limit. Review backlogs larger than half of the selected model's context window are split into batches capped at that size.
 
 ## Implementation workers
 

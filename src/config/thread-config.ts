@@ -315,7 +315,7 @@ function parseDreamer(value: unknown, label: string): DreamerConfig {
       id: string(selected.id, `${label}.model.id`),
     },
     thinkingLevel: input.thinkingLevel === undefined
-      ? "low"
+      ? "high"
       : thinkingLevel(input.thinkingLevel, `${label}.thinkingLevel`),
   };
 }

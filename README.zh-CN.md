@@ -142,7 +142,7 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 
 全局记忆的唯一持久状态是 `${THREAD_HOME}/.THREAD.md`。它不进入 Session Tree、搜索、rewind 或 compaction。只有用户当前消息明确包含稳定、跨项目仍有价值的信息时，Main 才可以额外修改这个精确文件。每个 Session 始终使用创建时绑定的快照；磁盘变更会在 `/new` 或重启后可见。
 
-Dreamer 是可选的后台记忆整理 Agent。使用 `/agent dreamer model <provider>/<model>` 选择模型并启用。它会在成功压缩后，或累计十个已结束 turn 并空闲十分钟后审阅对话证据；仅拥有 `read`、`write`、`edit`，同一时间只运行一个实例，成功时保持静默。
+Dreamer 是可选的后台记忆整理 Agent。使用 `/agent dreamer model <provider>/<model>` 选择模型并启用。它不重复处理由 Main 负责的明确指令，而是从互动与 Agent 工作轨迹中寻找证据充分、可用于无关项目的隐含用户模式和可迁移经验；大多数审阅都不应产生新记忆。累计十个已结束 turn 后，它会在 Main 连续空闲十分钟时运行。运行期间保持静默，并可与之后的前台工作并行；默认使用 `high` thinking，不限制 step，最长运行五分钟。待审阅内容超过所选模型上下文窗口的 50% 时，会拆成不超过该上限的多个批次。
 
 ## Implementation worker
 

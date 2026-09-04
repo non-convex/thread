@@ -1,79 +1,33 @@
 import type { Message } from "@earendil-works/pi-ai";
-import type { AgentProfile } from "../agent/profile.js";
 import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
+import type { AgentProfile } from "../agent/profile.js";
 import { AgentStepRunner } from "../agent/step-runner.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { settlesWithin } from "../utils/async.js";
-import {
-  DREAMER_MAX_RUNTIME_MS,
-  DREAMER_MAX_STEPS,
-} from "./profile.js";
+import { DREAMER_MAX_RUNTIME_MS } from "./profile.js";
+import { createDreamerReviewBatches } from "./review.js";
 
 export const DREAMER_IDLE_TURNS = 10;
 export const DREAMER_IDLE_MS = 10 * 60_000;
 export const DREAMER_SHUTDOWN_GRACE_MS = 2_000;
 
-function textBlocks(content: Message["content"]): string {
-  if (typeof content === "string") return content.trim();
-  return (content as readonly { type: string; text?: string }[])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("\n")
-    .trim();
-}
-
-/** Keep only conversational evidence; ordinary tool traces are intentionally omitted. */
-export function dreamerConversation(messages: readonly Message[]): string {
-  const askCalls = new Set<string>();
-  const lines: string[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const text = textBlocks(message.content);
-      if (text) lines.push(`[user]\n${text}`);
-      continue;
-    }
-    if (message.role === "assistant") {
-      for (const block of message.content) {
-        if (block.type === "toolCall" && block.name === "ask") askCalls.add(block.id);
-      }
-      const text = textBlocks(message.content);
-      if (text) lines.push(`[assistant context]\n${text}`);
-      continue;
-    }
-    if (message.role === "toolResult" && (message.toolName === "ask" || askCalls.has(message.toolCallId))) {
-      const text = textBlocks(message.content);
-      if (text) lines.push(`[explicit user answer via ask]\n${text}`);
-    }
-  }
-  return lines.join("\n\n");
-}
-
-function reviewMessage(memoryPath: string, messages: readonly Message[]): Message {
-  const conversation = dreamerConversation(messages) || "(no conversational text)";
-  return {
-    role: "user",
-    timestamp: Date.now(),
-    content: `Global memory file: ${memoryPath}\nCurrent time: ${new Date().toISOString()}\n\nConversation to review:\n\n${conversation}`,
-  };
-}
-
 export interface DreamerSchedulerOptions {
   idleTurns?: number;
   idleMs?: number;
-  maxSteps?: number;
   maxRuntimeMs?: number;
 }
 
-/** Coalesces deterministic triggers and runs Dreamer only while the foreground is idle. */
+/** Reviews accumulated turns after the Main agent has remained idle long enough. */
 export class DreamerScheduler {
   private profile: AgentProfile | undefined;
-  private readonly pending: Message[] = [];
-  private settledTurns = 0;
-  private immediate = false;
-  private revision = 0;
-  private immediateRevision = 0;
+  /** Settled turns that have not yet reached a review trigger. */
+  private readonly waitingTurns: Message[][] = [];
+  /** Triggered snapshot retained across partial completion and retries. */
+  private readonly reviewBacklog: Message[][] = [];
   private foregroundActive = false;
+  private foregroundIdleSince = Date.now();
+  private retryAfter = 0;
   private timer: NodeJS.Timeout | undefined;
   private controller: AbortController | undefined;
   private running: Promise<void> | undefined;
@@ -81,7 +35,6 @@ export class DreamerScheduler {
   private currentError: string | undefined;
   private readonly idleTurns: number;
   private readonly idleMs: number;
-  private readonly maxSteps: number;
   private readonly maxRuntimeMs: number;
 
   constructor(
@@ -93,7 +46,6 @@ export class DreamerScheduler {
     this.profile = profile;
     this.idleTurns = options.idleTurns ?? DREAMER_IDLE_TURNS;
     this.idleMs = options.idleMs ?? DREAMER_IDLE_MS;
-    this.maxSteps = options.maxSteps ?? DREAMER_MAX_STEPS;
     this.maxRuntimeMs = options.maxRuntimeMs ?? DREAMER_MAX_RUNTIME_MS;
   }
 
@@ -106,10 +58,7 @@ export class DreamerScheduler {
     if (!profile) {
       this.clearTimer();
       this.controller?.abort(new DOMException("Dreamer disabled", "AbortError"));
-      this.pending.splice(0);
-      this.settledTurns = 0;
-      this.immediate = false;
-      this.immediateRevision = 0;
+      this.clearPending();
       return;
     }
     this.schedule();
@@ -117,31 +66,19 @@ export class DreamerScheduler {
 
   recordTurn(messages: readonly Message[]): void {
     if (!this.enabled) return;
-    this.pending.push(...messages.map((message) => structuredClone(message)));
-    this.settledTurns += 1;
-    this.revision += 1;
+    this.waitingTurns.push(messages.map((message) => structuredClone(message)));
     this.schedule();
   }
 
-  recordCompaction(messages: readonly Message[]): void {
-    if (!this.enabled) return;
-    this.pending.push(...messages.map((message) => structuredClone(message)));
-    this.revision += 1;
-    this.immediate = true;
-    this.immediateRevision = this.revision;
-    this.schedule();
-  }
-
-  async foregroundStarting(): Promise<void> {
+  foregroundStarting(): void {
     this.foregroundActive = true;
+    this.foregroundIdleSince = 0;
     this.clearTimer();
-    if (!this.running) return;
-    this.controller?.abort(new DOMException("Foreground input started", "AbortError"));
-    await this.running.catch(() => undefined);
   }
 
   foregroundFinished(): void {
     this.foregroundActive = false;
+    this.foregroundIdleSince = Date.now();
     this.schedule();
   }
 
@@ -151,50 +88,50 @@ export class DreamerScheduler {
     this.controller?.abort(new DOMException("Thread application closed", "AbortError"));
     const running = this.running;
     if (running) await settlesWithin(running, DREAMER_SHUTDOWN_GRACE_MS);
-    this.pending.splice(0);
-    this.settledTurns = 0;
-    this.immediate = false;
-    this.immediateRevision = 0;
+    this.clearPending();
+  }
+
+  private clearPending(): void {
+    this.waitingTurns.splice(0);
+    this.reviewBacklog.splice(0);
+    this.retryAfter = 0;
   }
 
   private schedule(): void {
     this.clearTimer();
-    if (this.closing || this.foregroundActive || this.running || !this.profile || this.pending.length === 0) return;
-    if (this.immediate) {
-      this.timer = setTimeout(() => this.launch(), 0);
+    const hasTriggeredReview = this.reviewBacklog.length > 0;
+    const hasEnoughWaitingTurns = this.waitingTurns.length > 0 && this.waitingTurns.length >= this.idleTurns;
+    if (this.closing || this.foregroundActive || this.running || !this.profile ||
+        (!hasTriggeredReview && !hasEnoughWaitingTurns)) {
       return;
     }
-    if (this.settledTurns >= this.idleTurns) {
-      this.timer = setTimeout(() => this.launch(), this.idleMs);
-    }
+    const now = Date.now();
+    const idleRemaining = Math.max(0, this.idleMs - (now - this.foregroundIdleSince));
+    const retryRemaining = Math.max(0, this.retryAfter - now);
+    this.timer = setTimeout(() => this.launch(), Math.max(idleRemaining, retryRemaining));
   }
 
   private launch(): void {
     this.timer = undefined;
-    if (this.closing || this.foregroundActive || this.running || !this.profile || this.pending.length === 0) return;
+    if (this.closing || this.foregroundActive || this.running || !this.profile) return;
+    if (this.reviewBacklog.length === 0) {
+      if (this.waitingTurns.length === 0 || this.waitingTurns.length < this.idleTurns) return;
+      this.reviewBacklog.push(...this.waitingTurns.splice(0));
+    }
     const profile = this.profile;
-    const reviewedCount = this.pending.length;
-    const reviewedTurns = this.settledTurns;
-    const reviewedRevision = this.revision;
+    const turns = this.reviewBacklog.slice();
     const controller = new AbortController();
     this.controller = controller;
-    const run = this.runProfile(profile, this.pending.slice(0, reviewedCount), controller.signal)
+    const run = this.runProfile(profile, turns, controller.signal, (completedTurns) => {
+      this.reviewBacklog.splice(0, completedTurns);
+    })
       .then(() => {
-        this.pending.splice(0, reviewedCount);
-        this.settledTurns = Math.max(0, this.settledTurns - reviewedTurns);
-        if (this.immediateRevision <= reviewedRevision) {
-          this.immediate = false;
-          this.immediateRevision = 0;
-        }
+        this.retryAfter = 0;
         this.currentError = undefined;
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
-        if (this.immediateRevision <= reviewedRevision) {
-          this.immediate = false;
-          this.immediateRevision = 0;
-        }
-        this.settledTurns = Math.max(this.settledTurns, this.idleTurns);
+        this.retryAfter = Date.now() + this.idleMs;
         this.currentError = error instanceof Error ? error.message : String(error);
       })
       .finally(() => {
@@ -206,10 +143,15 @@ export class DreamerScheduler {
     void run.catch(() => undefined);
   }
 
-  private async runProfile(profile: AgentProfile, messages: readonly Message[], parentSignal: AbortSignal): Promise<void> {
+  private async runProfile(
+    profile: AgentProfile,
+    turns: readonly (readonly Message[])[],
+    parentSignal: AbortSignal,
+    onBatchReviewed: (turnCount: number) => void,
+  ): Promise<void> {
     const timeout = AbortSignal.timeout(this.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
-    const journal = new EphemeralAgentJournal([reviewMessage(this.memoryPath, messages)]);
+    const batches = createDreamerReviewBatches(this.memoryPath, turns, profile.model.contextWindow);
     const toolRunner = new ToolCallExecutor(
       this.rootPath,
       profile.tools,
@@ -224,21 +166,26 @@ export class DreamerScheduler {
     );
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     const runner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
-    for (let step = 1; step <= this.maxSteps; step++) {
+
+    for (const batch of batches) {
+      const journal = new EphemeralAgentJournal([batch.message]);
+      for (let step = 1; ; step++) {
+        signal.throwIfAborted();
+        const result = await runner.run({
+          systemPrompt: profile.systemPrompt,
+          messages: journal.conversationMessages(),
+          tools: profile.tools.modelDefinitions(),
+        }, journal, { signal, step });
+        if (result.response.stopReason === "aborted") {
+          throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
+        }
+        if (result.response.stopReason === "error") {
+          throw new Error(result.response.errorMessage ?? "Dreamer model request failed");
+        }
+        if (result.calls.length === 0) break;
+      }
       signal.throwIfAborted();
-      const result = await runner.run({
-        systemPrompt: profile.systemPrompt,
-        messages: journal.conversationMessages(),
-        tools: profile.tools.modelDefinitions(),
-      }, journal, { signal, step });
-      if (result.response.stopReason === "aborted") {
-        throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
-      }
-      if (result.response.stopReason === "error") {
-        throw new Error(result.response.errorMessage ?? "Dreamer model request failed");
-      }
-      if (result.calls.length === 0) return;
-      if (step === this.maxSteps) throw new Error(`Dreamer exceeded ${this.maxSteps} model steps`);
+      onBatchReviewed(batch.turnCount);
     }
   }
 

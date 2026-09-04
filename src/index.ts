@@ -83,16 +83,15 @@ export {
   createDreamerProfile,
   DEFAULT_DREAMER_THINKING_LEVEL,
   DREAMER_MAX_RUNTIME_MS,
-  DREAMER_MAX_STEPS,
   DREAMER_PROFILE_ID,
 } from "./dreamer/profile.js";
 export {
   DREAMER_IDLE_MS,
   DREAMER_IDLE_TURNS,
   DreamerScheduler,
-  dreamerConversation,
   type DreamerSchedulerOptions,
 } from "./dreamer/scheduler.js";
+export { dreamerConversation } from "./dreamer/review.js";
 export {
   GLOBAL_MEMORY_FILE,
   GlobalMemorySnapshots,

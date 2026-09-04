@@ -1,4 +1,4 @@
-import type { Message, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRuntime } from "../agent/runtime.js";
 import type { ModelClient } from "../agent/model-client.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
@@ -25,7 +25,6 @@ export interface CreateRuntimeInput {
   agentTasks: AgentTaskOrchestrator;
   askPresenter: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
-  onCompacted?: (messages: readonly Message[]) => void;
 }
 
 export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
@@ -38,7 +37,6 @@ export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
     input.tree,
     input.model,
     input.reasoning,
-    input.onCompacted,
   );
   const toolRunner = new ToolCallExecutor(
     input.rootPath,

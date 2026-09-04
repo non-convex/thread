@@ -486,7 +486,6 @@ export class ThreadApp {
       agentTasks: this.agentTasks,
       askPresenter: () => this.askPresenter,
       writableExternalPaths: [this.globalMemory.filePath],
-      onCompacted: (messages) => this.dreamer.recordCompaction(messages),
     });
   }
 
@@ -788,7 +787,7 @@ export class ThreadApp {
     if (this.inputActive) throw new Error("Wait for the active turn or command to finish");
     this.inputActive = true;
     try {
-      await this.dreamer.foregroundStarting();
+      this.dreamer.foregroundStarting();
       const result = await this.inputRouter.route(input, options);
       if (result.kind === "turn") {
         this.dreamer.recordTurn(this.sessionTree.messagesForTurn(result.result.turn.id));
