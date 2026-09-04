@@ -939,7 +939,7 @@ export function SessionScreen(props: {
               minHeight={COMPOSER_MIN_LINES}
               maxHeight={COMPOSER_MAX_LINES}
               wrapMode="word"
-              placeholder="ask thread, / commands, @ files, Ctrl+V image…"
+              placeholder="ask thread, / commands, @ files, Ctrl+V paste…"
               placeholderColor={theme.muted}
               textColor={theme.text}
               focusedTextColor={theme.text}
