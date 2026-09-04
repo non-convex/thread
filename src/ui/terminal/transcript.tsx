@@ -156,7 +156,7 @@ function MarkdownReply(props: {
 function TurnBlock(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
   const theme = props.resources.theme;
   return (
-    <box flexDirection="column" width="100%" marginBottom={2}>
+    <box flexDirection="column" width="100%">
       <box 
         flexDirection="column" 
         width="100%" 
