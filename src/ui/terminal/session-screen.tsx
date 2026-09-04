@@ -240,15 +240,32 @@ function ModelPickerOverlay(props: {
   const theme = () => props.resources.theme;
   const visible = createMemo(() =>
     selectedWindow(props.screen().models, props.selected(), MODEL_OVERLAY_MAX_ROWS));
+  const rowWidth = () => props.contentWidth() - 2;
+  const identifierWidth = createMemo(() => {
+    const longest = props.screen().models.reduce(
+      (length, model) => Math.max(length, `${model.providerId}/${model.modelId}`.length),
+      8,
+    );
+    const proportionalLimit = Math.max(8, Math.floor(rowWidth() * 0.45));
+    const available = Math.max(8, rowWidth() - 8);
+    return Math.min(longest, proportionalLimit, available);
+  });
+  const detailWidth = () => Math.max(4, rowWidth() - identifierWidth() - 4);
+  const title = () => {
+    const target = props.screen().agentId === "main"
+      ? "Main model"
+      : props.screen().agentId === "dreamer"
+        ? "Dreamer model"
+        : "Implementation worker model";
+    return props.screen().scope === "all" ? `${target} · all` : target;
+  };
   return (
     // Inside a bordered box, OpenTUI 0.5.7 lets flexGrow/stretch children
     // overshoot the right border by ~2 cells; explicit widths clip exactly.
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
-      <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
+      <box flexDirection="row" width={rowWidth()} height={1} marginBottom={1}>
         <text width={Math.max(8, props.contentWidth() - 23)} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme().accent} attributes={bold}>
-          {props.screen().scope === "all"
-            ? `⚙ Models · ${props.screen().agentId}`
-            : `⚙ Models · /agent ${props.screen().agentId} model all`}
+          {title()}
         </text>
         <text height={1} wrapMode="none" fg={theme().faint}>
           {props.screen().agentId === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
@@ -262,7 +279,7 @@ function ModelPickerOverlay(props: {
           return (
             <box
               flexDirection="row"
-              width={props.contentWidth() - 2}
+              width={rowWidth()}
               height={1}
               backgroundColor={selected() ? theme().surfaceHigh : "transparent"}
               paddingX={1}
@@ -271,7 +288,7 @@ function ModelPickerOverlay(props: {
                 {selected() ? `${STATUS_ICONS.selected} ` : current() ? `${STATUS_ICONS.current} ` : "  "}
               </text>
               <text
-                width={30}
+                width={identifierWidth()}
                 flexShrink={1}
                 height={1}
                 wrapMode="none"
@@ -281,8 +298,9 @@ function ModelPickerOverlay(props: {
               >
                 {model.providerId}/{model.modelId}
               </text>
+              <text width={2} height={1} wrapMode="none">  </text>
               <text
-                width={Math.max(4, props.contentWidth() - 34)}
+                width={detailWidth()}
                 flexShrink={1}
                 height={1}
                 wrapMode="none"
@@ -682,8 +700,8 @@ export function SessionScreen(props: {
   const modelOverlayHeight = () => {
     const picker = modelPicker();
     if (!picker) return 0;
-    // header + windowed rows + optional busy/error lines + border
-    return 1 + Math.min(MODEL_OVERLAY_MAX_ROWS, picker.models.length)
+    // Header, its one-row margin, windowed rows, optional status, and border.
+    return 2 + Math.min(MODEL_OVERLAY_MAX_ROWS, picker.models.length)
       + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
   };
   const agentPickerOverlayHeight = () => {
