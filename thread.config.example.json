@@ -9,6 +9,9 @@
     }
   },
   "defaultThinkingLevel": "medium",
+  "attribution": {
+    "commit": "Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>"
+  },
   "agents": {
     "implementation-worker": {
       "model": {

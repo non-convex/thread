@@ -1,3 +1,18 @@
+export const DEFAULT_COMMIT_ATTRIBUTION =
+  "Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>";
+
+export function formatCommitAttributionPrompt(attribution: string): string {
+  const trailer = attribution.trim();
+  if (!trailer) return "";
+  return `# Git commit attribution
+
+When you create or amend a Git commit, append the following exact trailer after a blank line:
+
+${trailer}
+
+Add it exactly once, preserve any other trailers, and keep the user's configured Git author and committer unchanged.`;
+}
+
 export const DEFAULT_SYSTEM_PROMPT = `You are thread, a coding agent working in a project with a persistent Session Tree. Use the provided tools to inspect and modify the workspace. Keep changes scoped to the user's request and verify important edits.
 
 The current request includes only the active Session's live path. Earlier turns may have been compacted out of this input, left on a path after rewind, or belong to another root Session.

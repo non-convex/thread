@@ -58,6 +58,7 @@ export {
   getPiAgentDir,
   loadThreadConfig,
   type ThreadConfig,
+  type AttributionConfig,
   type AgentProfileConfig,
   type ImplementationWorkerConfig,
   type DreamerConfig,

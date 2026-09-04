@@ -58,6 +58,11 @@ export interface DreamerConfig {
   thinkingLevel: ModelThinkingLevel;
 }
 
+export interface AttributionConfig {
+  /** Empty disables the commit trailer. */
+  commit: string;
+}
+
 export interface ThreadConfig {
   model?: ModelSelectionConfig;
   agents: {
@@ -72,6 +77,7 @@ export interface ThreadConfig {
    * routinely exceed five minutes.
    */
   cacheRetention?: CacheRetention;
+  attribution?: AttributionConfig;
   modelOverrides?: Record<string, ModelOverrideConfig>;
   providers: Record<string, CustomProviderConfig>;
 }
@@ -320,6 +326,12 @@ function parseDreamer(value: unknown, label: string): DreamerConfig {
   };
 }
 
+function parseAttribution(value: unknown): AttributionConfig {
+  const input = object(value, "attribution");
+  if (typeof input.commit !== "string") throw new Error("attribution.commit must be a string");
+  return { commit: input.commit };
+}
+
 function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: string[] } {
   const input = object(value, "config");
   let model: ModelSelectionConfig | undefined;
@@ -366,11 +378,13 @@ function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: 
   const retention = input.cacheRetention === undefined
     ? undefined
     : cacheRetention(input.cacheRetention, "cacheRetention");
+  const attribution = input.attribution === undefined ? undefined : parseAttribution(input.attribution);
   return {
     config: {
       ...(model ? { model } : {}),
       ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
       ...(retention ? { cacheRetention: retention } : {}),
+      ...(attribution ? { attribution } : {}),
       agents,
       modelOverrides,
       providers,

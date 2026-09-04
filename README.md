@@ -190,6 +190,8 @@ Thread reads `~/.thread/config.json` by default and falls back to compatible set
 
 `THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Main-model, thinking-level, and secondary-agent choices are remembered in `~/.thread/state.json`.
 
+Git commits created or amended by Thread include `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>` by default. This keeps the user's configured Git author intact while linking Thread's GitHub account as a co-author. To disable or replace the trailer, set `attribution.commit` in `~/.thread/config.json`; an empty string disables it.
+
 Project state lives outside the workspace:
 
 ```text

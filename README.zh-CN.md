@@ -190,6 +190,8 @@ Thread 默认读取 `~/.thread/config.json`；该文件不存在时，会回退�
 
 `THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。主模型、thinking level 和次级 Agent 选择会保存在 `~/.thread/state.json`。
 
+Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>`。用户原有的 Git author 保持不变，GitHub 会把 Thread 识别为共同作者。可通过 `~/.thread/config.json` 中的 `attribution.commit` 替换这段 trailer；设为空字符串即可关闭。
+
 项目状态位于工作区之外：
 
 ```text

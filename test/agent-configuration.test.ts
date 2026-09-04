@@ -72,6 +72,7 @@ test("Dreamer config requires an explicit model and defaults thinking to high", 
   t.after(values.cleanup);
   const validPath = path.join(values.path, "valid.json");
   await writeFile(validPath, JSON.stringify({
+    attribution: { commit: "" },
     agents: {
       dreamer: { model: { provider: "test", id: "dreamer" } },
     },
@@ -81,6 +82,7 @@ test("Dreamer config requires an explicit model and defaults thinking to high", 
     model: { provider: "test", id: "dreamer" },
     thinkingLevel: "high",
   });
+  assert.equal(loaded?.config.attribution?.commit, "");
 
   const invalidPath = path.join(values.path, "invalid.json");
   await writeFile(invalidPath, JSON.stringify({ agents: { dreamer: {} } }), "utf8");
@@ -142,6 +144,10 @@ test("/model selects the main model and /agent configures secondary agents", asy
     assert.ok(!suggestions.some((item) => item.name === "subagent"));
 
     assert.deepEqual(app.agentProfiles.list().map((profile) => profile.id), ["main"]);
+    assert.match(
+      app.agentProfiles.get("main")?.systemPrompt ?? "",
+      /Co-authored-by: Thread <324980244\+thread-agent@users\.noreply\.github\.com>/,
+    );
     const overview = await app.handleInput("/agent", { signal: new AbortController().signal });
     assert.equal(overview.kind, "command");
     assert.match(overview.result.content, /main: on/);

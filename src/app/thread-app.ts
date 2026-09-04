@@ -1,6 +1,10 @@
 import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRuntime } from "../agent/runtime.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../agent/system-prompt.js";
+import {
+  DEFAULT_COMMIT_ATTRIBUTION,
+  DEFAULT_SYSTEM_PROMPT,
+  formatCommitAttributionPrompt,
+} from "../agent/system-prompt.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
 import {
   AgentProfileRegistry,
@@ -68,6 +72,7 @@ export interface ThreadAppOptions {
   modelCatalog?: ModelCatalog;
   thinkingLevel?: ModelThinkingLevel;
   systemPrompt?: string;
+  commitAttribution?: string;
   cacheRetention?: CacheRetention;
   skills?: LoadedSkills;
   workspaceExcludedPaths?: readonly string[];
@@ -109,6 +114,7 @@ export class ThreadApp {
   private readonly loadedSkills: LoadedSkills;
   private readonly modelCatalog: ModelCatalog | undefined;
   private readonly configuredSystemPrompt: string | undefined;
+  private readonly commitAttribution: string;
   private readonly cacheRetention: CacheRetention | undefined;
   private readonly mainAgent: MainAgentController;
   private readonly workerSettings: ImplementationWorkerProfileSettings;
@@ -145,6 +151,7 @@ export class ThreadApp {
     this.loadedSkills = values.skills;
     this.modelCatalog = options.modelCatalog;
     this.configuredSystemPrompt = options.systemPrompt;
+    this.commitAttribution = options.commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION;
     this.cacheRetention = options.cacheRetention;
     this.threadState = structuredClone(options.state ?? {});
     this.onStateChange = options.onStateChange;
@@ -458,6 +465,7 @@ export class ThreadApp {
     const skills = formatSkillsSection(this.loadedSkills.skills);
     const systemPrompt = [
       this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      formatCommitAttributionPrompt(this.commitAttribution),
       this.agentTasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "",
       skills,
       formatGlobalMemoryPrompt(

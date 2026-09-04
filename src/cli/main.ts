@@ -255,6 +255,9 @@ async function main(): Promise<void> {
     agentProfileDiagnostics,
     ...(state ? { state } : {}),
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+    ...(loadedConfig?.config.attribution
+      ? { commitAttribution: loadedConfig.config.attribution.commit }
+      : {}),
     ...(loadedConfig?.config.cacheRetention
       ? { cacheRetention: loadedConfig.config.cacheRetention }
       : {}),
