@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { stdout as output } from "node:process";
+import { stderr as errorOutput, stdout as output } from "node:process";
 import { ThreadApp } from "../app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
 import type { AgentProfileDiagnostic } from "../agent/profile.js";
@@ -11,6 +11,7 @@ import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../
 import { loadExtension } from "../extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
+import { settlesWithin } from "../utils/async.js";
 import { loginProvider, logoutProvider, showAuthStatus } from "./subscription-auth.js";
 
 interface CliOptions {
@@ -27,6 +28,8 @@ type CliCommand =
   | { type: "login"; providerId: string }
   | { type: "logout"; providerId: string }
   | { type: "auth_status" };
+
+const APPLICATION_SHUTDOWN_GRACE_MS = 5_000;
 
 function parseCommand(argv: string[]): CliCommand | undefined {
   if (argv[0] === "login") {
@@ -222,6 +225,7 @@ async function main(): Promise<void> {
       model = modelCatalog.createClient(configured!.provider, configured!.id);
     }
   }
+  let stateSave: Promise<void> = Promise.resolve();
   const app = await ThreadApp.open({
     rootPath: options.rootPath,
     ...(model ? { model } : {}),
@@ -255,9 +259,9 @@ async function main(): Promise<void> {
       ? { cacheRetention: loadedConfig.config.cacheRetention }
       : {}),
     onStateChange: (nextState) => {
-      // Fire-and-forget: losing a remembered preference must never interrupt
-      // the session, so a failed write is silently ignored.
-      void saveThreadState(nextState).catch(() => undefined);
+      // Preference writes stay non-blocking during the session, but the latest
+      // queued write joins graceful shutdown before the CLI forces process exit.
+      stateSave = stateSave.then(() => saveThreadState(nextState)).catch(() => undefined);
     },
   });
   try {
@@ -271,7 +275,11 @@ async function main(): Promise<void> {
       await new terminalModule.ThreadTerminalApp(app, { mode: "fullscreen" }).run();
     }
   } finally {
-    await app.close();
+    const closed = await settlesWithin(
+      Promise.all([app.close(), stateSave]),
+      APPLICATION_SHUTDOWN_GRACE_MS,
+    );
+    if (!closed) errorOutput.write("Thread shutdown exceeded 5 seconds; exiting now.\n");
   }
 }
 
@@ -284,7 +292,10 @@ function formatCliError(error: unknown): string {
     : error.stack;
 }
 
-main().catch((error) => {
-  process.stderr.write(`${formatCliError(error)}\n`);
-  process.exitCode = 1;
-});
+void main().then(
+  () => process.exit(0),
+  (error) => {
+    errorOutput.write(`${formatCliError(error)}\n`);
+    process.exit(1);
+  },
+);

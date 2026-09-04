@@ -873,11 +873,14 @@ export class ThreadApp {
 
   async close(): Promise<void> {
     const failures: unknown[] = [];
-    await this.dreamer.close().catch((error) => failures.push(error));
-    await this.workspaceState.settle().catch((error) => failures.push(error));
-    await this.agentTasks.close().catch((error) => failures.push(error));
-    await this.repository.close().catch((error) => failures.push(error));
+    const collect = (task: Promise<unknown>) => task.catch((error) => failures.push(error));
+    // Start cancellation immediately, but do not make optional background work
+    // delay the durable Workspace and Session Tree shutdown sequence.
+    const background = [collect(this.dreamer.close()), collect(this.agentTasks.close())];
+    await collect(this.workspaceState.settle());
+    await collect(this.repository.close());
+    await Promise.all(background);
     if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) throw new AggregateError(failures, "Thread repositories failed to close cleanly");
+    if (failures.length > 1) throw new AggregateError(failures, "Thread resources failed to close cleanly");
   }
 }

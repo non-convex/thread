@@ -1,5 +1,6 @@
-import { createCliRenderer, type CliRenderer } from "@opentui/core";
+import { createCliRenderer, destroyTreeSitterClient, type CliRenderer } from "@opentui/core";
 import type { ThreadApp } from "../../app.js";
+import { settlesWithin } from "../../utils/async.js";
 import { ThreadTuiController } from "./controller.js";
 import { mountThreadView } from "./view.js";
 
@@ -8,6 +9,8 @@ export type TerminalMode = "fullscreen";
 export interface TerminalAppOptions {
   mode?: TerminalMode;
 }
+
+const TERMINAL_RESOURCE_SHUTDOWN_GRACE_MS = 1_000;
 
 /**
  * OpenTUI host for Thread's full-screen terminal experience. Session Tree history,
@@ -64,9 +67,18 @@ export class ThreadTerminalApp {
       this.controller.dispose();
       for (const [signal, handler] of this.signalHandlers) process.off(signal, handler);
       this.signalHandlers.clear();
-      await disposeResources?.();
-      this.renderer?.destroy();
-      this.renderer = undefined;
+      try {
+        if (disposeResources) {
+          await settlesWithin(Promise.resolve(disposeResources()), TERMINAL_RESOURCE_SHUTDOWN_GRACE_MS);
+        }
+        // OpenTUI starts this worker cleanup from renderer.destroy(), but does
+        // not await it. Waiting here avoids leaving Bun alive after the screen
+        // has already returned to the shell.
+        await settlesWithin(destroyTreeSitterClient(), TERMINAL_RESOURCE_SHUTDOWN_GRACE_MS);
+      } finally {
+        this.renderer?.destroy();
+        this.renderer = undefined;
+      }
     }
   }
 }

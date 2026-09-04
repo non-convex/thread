@@ -4,6 +4,7 @@ import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
 import { AgentStepRunner } from "../agent/step-runner.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
+import { settlesWithin } from "../utils/async.js";
 import {
   DREAMER_MAX_RUNTIME_MS,
   DREAMER_MAX_STEPS,
@@ -11,6 +12,7 @@ import {
 
 export const DREAMER_IDLE_TURNS = 10;
 export const DREAMER_IDLE_MS = 10 * 60_000;
+export const DREAMER_SHUTDOWN_GRACE_MS = 2_000;
 
 function textBlocks(content: Message["content"]): string {
   if (typeof content === "string") return content.trim();
@@ -147,7 +149,8 @@ export class DreamerScheduler {
     this.closing = true;
     this.clearTimer();
     this.controller?.abort(new DOMException("Thread application closed", "AbortError"));
-    await this.running?.catch(() => undefined);
+    const running = this.running;
+    if (running) await settlesWithin(running, DREAMER_SHUTDOWN_GRACE_MS);
     this.pending.splice(0);
     this.settledTurns = 0;
     this.immediate = false;
