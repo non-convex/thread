@@ -142,6 +142,7 @@ async function main(): Promise<void> {
   const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {}, {
     credentials,
     enabledProviderIds,
+    modelOverrides: loadedConfig?.config.modelOverrides ?? {},
   });
   // An explicit --provider/--model pair outranks the remembered choice, which in
   // turn outranks the configured default. parseArgs already guarantees the CLI

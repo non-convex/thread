@@ -36,6 +36,11 @@ export interface CustomProviderConfig {
   models: CustomModelConfig[];
 }
 
+/** Local metadata overrides keyed by `<provider>/<model-id>`. */
+export interface ModelOverrideConfig {
+  contextWindow: number;
+}
+
 export interface ImplementationWorkerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;
@@ -67,6 +72,7 @@ export interface ThreadConfig {
    * routinely exceed five minutes.
    */
   cacheRetention?: CacheRetention;
+  modelOverrides?: Record<string, ModelOverrideConfig>;
   providers: Record<string, CustomProviderConfig>;
 }
 
@@ -169,6 +175,38 @@ function parseModel(value: unknown, label: string): CustomModelConfig {
   };
 }
 
+function parseModelOverride(value: unknown, label: string): ModelOverrideConfig {
+  const input = object(value, label);
+  return { contextWindow: positiveInteger(input.contextWindow, `${label}.contextWindow`) };
+}
+
+function parseModelOverrides(value: unknown, label: string): Record<string, ModelOverrideConfig> {
+  const overrides: Record<string, ModelOverrideConfig> = {};
+  for (const [key, override] of Object.entries(object(value, label))) {
+    const separator = key.indexOf("/");
+    if (separator <= 0 || separator === key.length - 1) {
+      throw new Error(`${label} keys must use <provider>/<model-id>`);
+    }
+    overrides[key] = parseModelOverride(override, `${label}.${key}`);
+  }
+  return overrides;
+}
+
+function parsePiModelOverrides(
+  providerId: string,
+  value: unknown,
+  label: string,
+): Record<string, ModelOverrideConfig> {
+  const overrides: Record<string, ModelOverrideConfig> = {};
+  for (const [modelId, override] of Object.entries(object(value, label))) {
+    if (!modelId.trim()) throw new Error(`${label} model id cannot be empty`);
+    const input = object(override, `${label}.${modelId}`);
+    if (input.contextWindow === undefined) continue;
+    overrides[`${providerId}/${modelId}`] = parseModelOverride(input, `${label}.${modelId}`);
+  }
+  return overrides;
+}
+
 function parseProvider(providerId: string, value: unknown): CustomProviderConfig {
   const label = `providers.${providerId}`;
   const input = object(value, label);
@@ -186,8 +224,13 @@ function parseProvider(providerId: string, value: unknown): CustomProviderConfig
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     throw new Error(`${label}.baseUrl must use http or https`);
   }
-  const apiKeyEnv = string(input.apiKeyEnv, `${label}.apiKeyEnv`);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) throw new Error(`${label}.apiKeyEnv is not a valid environment name`);
+  const apiKeyEnv = input.apiKeyEnv === undefined ? undefined : string(input.apiKeyEnv, `${label}.apiKeyEnv`);
+  const apiKey = input.apiKey === undefined ? undefined : string(input.apiKey, `${label}.apiKey`);
+  if (apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+    throw new Error(`${label}.apiKeyEnv is not a valid environment name`);
+  }
+  if (apiKeyEnv && apiKey) throw new Error(`${label} must use either apiKeyEnv or apiKey, not both`);
+  if (!apiKeyEnv && !apiKey) throw new Error(`${label} must configure apiKeyEnv or apiKey`);
   if (!Array.isArray(input.models) || input.models.length === 0) {
     throw new Error(`${label}.models must be a non-empty array`);
   }
@@ -201,7 +244,8 @@ function parseProvider(providerId: string, value: unknown): CustomProviderConfig
     name: input.name === undefined ? providerId : string(input.name, `${label}.name`),
     api,
     baseUrl,
-    apiKeyEnv,
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
+    ...(apiKey ? { apiKey } : {}),
     ...(headers ? { headers } : {}),
     ...(compat ? { compat } : {}),
     models,
@@ -283,6 +327,9 @@ function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: 
     const selected = object(input.model, "model");
     model = { provider: string(selected.provider, "model.provider"), id: string(selected.id, "model.id") };
   }
+  const modelOverrides = input.modelOverrides === undefined
+    ? {}
+    : parseModelOverrides(input.modelOverrides, "modelOverrides");
   const providers: Record<string, CustomProviderConfig> = {};
   if (input.providers !== undefined) {
     for (const [providerId, provider] of Object.entries(object(input.providers, "providers"))) {
@@ -325,6 +372,7 @@ function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: 
       ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
       ...(retention ? { cacheRetention: retention } : {}),
       agents,
+      modelOverrides,
       providers,
     },
     agentDiagnostics,
@@ -378,8 +426,17 @@ async function loadPiThreadConfig(): Promise<LoadedThreadConfig | undefined> {
   try {
     const input = object(parsed, "pi models config");
     const providers: Record<string, CustomProviderConfig> = {};
+    const modelOverrides: Record<string, ModelOverrideConfig> = {};
     for (const [providerId, provider] of Object.entries(object(input.providers, "providers"))) {
-      providers[providerId] = parsePiProvider(providerId, provider);
+      const providerInput = object(provider, `providers.${providerId}`);
+      if (providerInput.modelOverrides !== undefined) {
+        Object.assign(
+          modelOverrides,
+          parsePiModelOverrides(providerId, providerInput.modelOverrides, `providers.${providerId}.modelOverrides`),
+        );
+      }
+      if (providerInput.models !== undefined) providers[providerId] = parsePiProvider(providerId, provider);
+      else if (providerInput.modelOverrides === undefined) providers[providerId] = parsePiProvider(providerId, provider);
     }
     let model: ModelSelectionConfig | undefined;
     let defaultThinkingLevel: ModelThinkingLevel | undefined;
@@ -403,6 +460,7 @@ async function loadPiThreadConfig(): Promise<LoadedThreadConfig | undefined> {
         ...(model ? { model } : {}),
         ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
         agents: {},
+        modelOverrides,
         providers,
       },
     };

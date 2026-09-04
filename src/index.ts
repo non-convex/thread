@@ -64,6 +64,7 @@ export {
   type CustomModelConfig,
   type CustomProviderConfig,
   type LoadedThreadConfig,
+  type ModelOverrideConfig,
   type ModelSelectionConfig,
   type SupportedCustomApi,
 } from "./config/thread-config.js";

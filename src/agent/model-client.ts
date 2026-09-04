@@ -22,7 +22,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { resolveConfigHeaders, resolveConfigValue } from "../config/config-value.js";
-import type { CustomProviderConfig, SupportedCustomApi } from "../config/thread-config.js";
+import type { CustomProviderConfig, ModelOverrideConfig, SupportedCustomApi } from "../config/thread-config.js";
 
 /** Transient provider errors (408/409/429/5xx and server-requested retries). */
 export const DEFAULT_MODEL_MAX_RETRIES = 10;
@@ -113,6 +113,7 @@ export interface ModelAuthProviderStatus {
 export interface ModelCatalogOptions {
   credentials?: CredentialStore;
   enabledProviderIds?: readonly string[];
+  modelOverrides?: Readonly<Record<string, ModelOverrideConfig>>;
 }
 
 export class PiModelClient implements ModelClient {
@@ -125,22 +126,25 @@ export class PiModelClient implements ModelClient {
   readonly cacheKey: string;
   readonly cacheRetention: CacheRetention | undefined;
   readonly acceptsImages: boolean;
+  private readonly model: Model<Api>;
 
   constructor(
     private readonly models: Models,
-    private readonly model: Model<Api>,
+    model: Model<Api>,
     cacheKey?: string,
     cacheRetention?: CacheRetention,
+    override?: ModelOverrideConfig,
   ) {
-    this.modelId = model.id;
-    this.providerId = model.provider;
-    this.contextWindow = model.contextWindow;
-    this.maxOutputTokens = model.maxTokens;
-    this.reasoning = model.reasoning;
-    this.supportedThinkingLevels = getSupportedThinkingLevels(model);
+    this.model = override ? { ...model, contextWindow: override.contextWindow } : model;
+    this.modelId = this.model.id;
+    this.providerId = this.model.provider;
+    this.contextWindow = this.model.contextWindow;
+    this.maxOutputTokens = this.model.maxTokens;
+    this.reasoning = this.model.reasoning;
+    this.supportedThinkingLevels = getSupportedThinkingLevels(this.model);
     this.cacheKey = cacheKey ?? `thread:${this.providerId}:${this.modelId}`;
     this.cacheRetention = cacheRetention;
-    this.acceptsImages = model.input.includes("image");
+    this.acceptsImages = this.model.input.includes("image");
   }
 
   /**
@@ -210,17 +214,27 @@ export class PiModelClient implements ModelClient {
 export class PiModelCatalog implements ModelCatalog {
   private readonly configuredModelKeys: ReadonlySet<string> | undefined;
   private readonly enabledProviderIds: ReadonlySet<string>;
+  private readonly modelOverrides: ReadonlyMap<string, ModelOverrideConfig>;
 
   constructor(
     private readonly models: Models,
     configuredModels?: readonly { providerId: string; modelId: string }[],
     private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
     enabledProviderIds: readonly string[] = [],
+    modelOverrides: Readonly<Record<string, ModelOverrideConfig>> = {},
   ) {
     this.configuredModelKeys = configuredModels === undefined
       ? undefined
       : new Set(configuredModels.map((model) => modelKey(model.providerId, model.modelId)));
     this.enabledProviderIds = new Set(enabledProviderIds);
+    this.modelOverrides = new Map(Object.entries(modelOverrides).map(([key, override]) => [key, { ...override }]));
+    for (const [key, override] of this.modelOverrides) {
+      const model = this.models.getModels().find((candidate) => modelOverrideKey(candidate.provider, candidate.id) === key);
+      if (!model) throw new Error(`Model override targets an unknown model: ${key}`);
+      if (override.contextWindow < model.maxTokens) {
+        throw new Error(`Model override contextWindow cannot be smaller than maxTokens for ${key}`);
+      }
+    }
   }
 
   list(providerId?: string): ModelDescriptor[] {
@@ -242,7 +256,7 @@ export class PiModelCatalog implements ModelCatalog {
         providerId: model.provider,
         modelId: model.id,
         name: model.name,
-        contextWindow: model.contextWindow,
+        contextWindow: this.modelOverrides.get(modelOverrideKey(model.provider, model.id))?.contextWindow ?? model.contextWindow,
         maxOutputTokens: model.maxTokens,
         reasoning: model.reasoning,
         acceptsImages: model.input.includes("image"),
@@ -253,7 +267,12 @@ export class PiModelCatalog implements ModelCatalog {
   }
 
   createClient(providerId: string, modelId: string): PiModelClient {
-    return selectModelClient(this.models, providerId, modelId);
+    return selectModelClient(
+      this.models,
+      providerId,
+      modelId,
+      this.modelOverrides.get(modelOverrideKey(providerId, modelId)),
+    );
   }
 
   async login(providerId: string, interaction: AuthInteraction): Promise<void> {
@@ -374,14 +393,29 @@ export function createConfiguredModelCatalog(
     registerCustomProvider(models, customProviderId, config);
     configuredModels.push(...config.models.map((model) => ({ providerId: customProviderId, modelId: model.id })));
   }
-  return new PiModelCatalog(models, configuredModels, credentials, options.enabledProviderIds);
+  return new PiModelCatalog(
+    models,
+    configuredModels,
+    credentials,
+    options.enabledProviderIds,
+    options.modelOverrides,
+  );
 }
 
 function modelKey(providerId: string, modelId: string): string {
   return `${providerId}\0${modelId}`;
 }
 
-function selectModelClient(models: Models, providerId: string, modelId: string): PiModelClient {
+function modelOverrideKey(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`;
+}
+
+function selectModelClient(
+  models: Models,
+  providerId: string,
+  modelId: string,
+  override?: ModelOverrideConfig,
+): PiModelClient {
   const model = models.getModel(providerId, modelId);
   if (!model) {
     const examples = models
@@ -393,5 +427,5 @@ function selectModelClient(models: Models, providerId: string, modelId: string):
       `Unknown model ${providerId}/${modelId}.${examples ? ` Available examples: ${examples}` : " Unknown provider."}`,
     );
   }
-  return new PiModelClient(models, model);
+  return new PiModelClient(models, model, undefined, undefined, override);
 }

@@ -75,6 +75,8 @@ thread --root /path/to/project --provider openai-codex --model <model-id>
 
 Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/auth.json`（或 `$THREAD_HOME/auth.json`），应按密码文件保护。使用 `thread logout openai-codex` 可以删除登录信息。
 
+可以在 `~/.thread/config.json` 中覆盖内置模型的本地元数据，而不替换它的 provider 或登录方式。例如，`"modelOverrides": { "openai-codex/gpt-5.6-sol": { "contextWindow": 500000 } }` 会改变 Thread 的上下文预算、显示和压缩阈值，但不能突破 provider 在服务端执行的限制。当 Thread 回退读取 `~/.pi/agent/models.json` 时，也会识别 pi 的 `providers.<provider>.modelOverrides` 嵌套格式。
+
 如果使用 API key 或兼容中转服务，把 [`thread.config.example.json`](./thread.config.example.json) 复制到 `~/.thread/config.json`，修改 provider 与 model，再设置 `apiKeyEnv` 指定的环境变量。自定义 provider 支持 `openai-responses`、`openai-completions` 和 `anthropic-messages`。
 
 ## 工作原理
