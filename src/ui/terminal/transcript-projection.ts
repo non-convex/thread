@@ -21,10 +21,10 @@ function summarizeArgs(args: Record<string, unknown>): string {
 }
 
 function compactionEntryDetail(entry: CompactionEntry): string | undefined {
-  const summary = entry.summary.trim();
-  if (summary) return summary;
-  if (entry.progressSummary) return entry.progressSummary.trim();
-  return undefined;
+  const summaries = [entry.summary, entry.progressSummary ?? ""]
+    .map((summary) => summary.trim())
+    .filter(Boolean);
+  return summaries.length > 0 ? summaries.join("\n\n---\n\n") : undefined;
 }
 
 export function projectLiveUser(turn: Pick<LiveTurn, "id" | "input">): TranscriptItem {
