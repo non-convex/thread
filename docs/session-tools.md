@@ -46,6 +46,7 @@ agent 可以先调用 `session_search`：
 type ToolResult = {
   content: string;
   isError: boolean;
+  details?: unknown;
 };
 ```
 
@@ -181,10 +182,23 @@ rewind 只移动当前路径的末端，旧的 turn 和分支仍然保留，可�
 | `toolResults` | 布尔值 | 选填 | 默认 `false`，是否返回工具结果 |
 | `before` | 数字 | 选填 | 默认 0，附带目标之前的祖先 turn 数量 |
 | `after` | 数字 | 选填 | 默认 0，附带目标之后的 turn 数量 |
+| `offset` | 整数 | 选填 | 默认 0；续读时使用上一页返回的 UTF-8 字节位置 |
 
 `before` 和 `after` 都会向下取整，限制在 0–10。目标 turn 自身也会返回，因此理论上一次最多读取 21 个 turn；实际数量取决于对应路径上还有多少历史。
 
-当前没有按 `entryId` 单独读取、按字符分页或设置返回长度的参数。开启工具结果或展开很多轮时，输出可能较长。
+每次返回最多 64KiB，包含分页提示。较长的历史会分页，末尾给出 `Continue with offset=...`；把这个值传回 `offset`，并保持 `turnId`、`thinking`、`toolCalls`、`toolResults`、`before` 和 `after` 不变，即可继续读取。字节位置由工具计算，分页不会拆开中文字符或 emoji。
+
+例如，首次使用 `{"turnId":"turn_demo","toolResults":true}`，结果提示 `offset=65024` 时，下一次传入：
+
+```json
+{
+  "turnId": "turn_demo",
+  "toolResults": true,
+  "offset": 65024
+}
+```
+
+`details` 同时提供 `offset`、`shownBytes`、`totalBytes`，还有未读内容时提供 `nextOffset`。这些位置针对按本次选项格式化后的整段历史，不包含分页提示。最后一页没有 `nextOffset`。短历史仍按原来的格式完整返回；原始记录不会因分页被截断或修改。当前没有按 `entryId` 单独读取或自定义每页长度的参数。
 
 ### 想看工具执行细节时
 

@@ -7,6 +7,9 @@ import type { AgentTool, ToolResult } from "./types.js";
 const STALENESS_NOTICE = "Historical Session Tree evidence; verify the current workspace when correctness depends on it.";
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 50;
+export const SESSION_READ_MAX_BYTES = 64 * 1024;
+// Leave room for the range, staleness notice, and continuation instructions.
+const SESSION_READ_FOOTER_BYTES = 512;
 
 function ok(content: string): ToolResult {
   return { content, isError: false };
@@ -52,6 +55,28 @@ function formatPath(details: SessionTurnDetail[]): string {
   ).join("\n\n");
 }
 
+function presentReadPage(text: string, offset: number): ToolResult {
+  const buffer = Buffer.from(text, "utf8");
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("offset must be a non-negative safe integer");
+  if (offset >= buffer.length) throw new Error(`Offset ${offset} is beyond end of history (${buffer.length} bytes total)`);
+  if ((buffer[offset]! & 0xc0) === 0x80) throw new Error("offset is inside a UTF-8 character; use the continuation offset from the previous result");
+  const paginated = offset > 0 || buffer.length > SESSION_READ_MAX_BYTES;
+  let end = Math.min(buffer.length, offset + SESSION_READ_MAX_BYTES - (paginated ? SESSION_READ_FOOTER_BYTES : 0));
+  // Do not split a Chinese character or emoji between pages.
+  while (end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end--;
+  const more = end < buffer.length;
+  const footer = paginated
+    ? `\n\n[${STALENESS_NOTICE}\nShowing UTF-8 bytes ${offset}–${end - 1} of ${buffer.length}. ${
+        more ? `Continue with offset=${end} and the same turnId, thinking, toolCalls, toolResults, before, and after options.` : "End of history."
+      }]`
+    : "";
+  return {
+    content: buffer.subarray(offset, end).toString("utf8") + footer,
+    isError: false,
+    details: { offset, shownBytes: end - offset, totalBytes: buffer.length, ...(more ? { nextOffset: end } : {}) },
+  };
+}
+
 export function createSessionSearchTool(recall: SessionRecallService): AgentTool<{ queries: string[]; limit?: number }> {
   return {
     name: "session_search",
@@ -89,12 +114,14 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
   toolResults?: boolean;
   before?: number;
   after?: number;
+  offset?: number;
 }> {
   return {
     name: "session_read",
     description:
-      "Read one complete historical turn returned by session_search. Narrative is returned by default; " +
-      "thinking, tool calls, and tool results are opt-in because they can be large.",
+      "Read a historical turn returned by session_search, in pages of at most 64KB. Narrative is returned by default; " +
+      "thinking, tool calls, and tool results are opt-in because they can be large. " +
+      "Use the continuation offset with the same turnId and read options to read the next page.",
     parameters: Type.Object({
       turnId: Type.String(),
       thinking: Type.Optional(Type.Boolean()),
@@ -102,6 +129,7 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
       toolResults: Type.Optional(Type.Boolean()),
       before: Type.Optional(Type.Number({ description: "Include up to 10 ancestor turns before the selected turn." })),
       after: Type.Optional(Type.Number({ description: "Include up to 10 later turns when the selected turn is on its Session's saved live path." })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "UTF-8 byte offset from the previous page; default 0. Keep all other read options unchanged." })),
     }),
     replay: "safe",
     execution: {
@@ -113,7 +141,7 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
       try {
         context.signal.throwIfAborted();
         const details = recall.readPath(args.turnId, args);
-        return details.length ? ok(formatPath(details)) : fail(new Error(`Unknown turn: ${args.turnId}`));
+        return details.length ? presentReadPage(formatPath(details), args.offset ?? 0) : fail(new Error(`Unknown turn: ${args.turnId}`));
       } catch (error) {
         return fail(error);
       }

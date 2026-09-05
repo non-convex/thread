@@ -1,7 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { Type } from "@earendil-works/pi-ai";
-import { cooperativeYield } from "../utils/async.js";
 import { ProcessError, runProcess } from "../utils/process.js";
 import { workspacePathClaim } from "./execution.js";
 import { resolveWorkspacePath } from "./path-safety.js";
@@ -15,6 +15,7 @@ export const GREP_MAX_CONTEXT = 5;
 export const GREP_SCAN_BYTES = 8 * 1024 * 1024;
 const MODEL_OUTPUT_LIMIT = 64 * 1024;
 const CURSOR_PREFIX = "g1.";
+const SCAN_LIMIT_NOTICE = `scan capped at ${GREP_SCAN_CAP} matches or ${GREP_SCAN_BYTES / 1024 / 1024}MB of ripgrep output; refine the pattern or glob`;
 
 export type GrepOutputMode = "content" | "files";
 
@@ -229,8 +230,8 @@ function detailsFor(options: {
 }
 
 function emptyResult(details: GrepDetails, scanCapped: boolean): { content: string; details: GrepDetails } {
-  const notices = scanCapped ? [`scan capped at ${GREP_SCAN_CAP} matches; refine the pattern or glob`] : [];
-  return { content: ["No matches found.", ...notices].filter(Boolean).join("\n"), details };
+  const notices = scanCapped ? [SCAN_LIMIT_NOTICE] : [];
+  return { content: [scanCapped ? "No complete matches collected before the scan limit." : "No matches found.", ...notices].join("\n"), details };
 }
 
 export function presentFilesPage(options: {
@@ -257,7 +258,7 @@ export function presentFilesPage(options: {
     options.offset + 1
   }–${options.offset + page.length}, ranked by git changes then recency.`;
   const body = page.map((file) => `${file} (${totals.get(file) ?? 0})`);
-  const extra = options.scanCapped ? ["", `scan capped at ${GREP_SCAN_CAP} matches; refine the pattern or glob`] : [];
+  const extra = options.scanCapped ? ["", SCAN_LIMIT_NOTICE] : [];
   const footer = details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : [];
   return { content: [header, "", ...body, ...extra, ...footer].join("\n"), details };
 }
@@ -308,7 +309,7 @@ export function presentContentPage(options: {
     blocks.push(`${file} (${range})`, ...groupRendered(chunk, render));
     index += count;
   }
-  const extra = options.scanCapped ? ["", `scan capped at ${GREP_SCAN_CAP} matches; refine the pattern or glob`] : [];
+  const extra = options.scanCapped ? ["", SCAN_LIMIT_NOTICE] : [];
   const footer = details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : [];
   return { content: [header, "", ...blocks, ...extra, ...footer].join("\n"), details };
 }
@@ -426,21 +427,51 @@ export function parseRgMatches(stdout: string, root: string): { matches: GrepMat
   return { matches, scanCapped: false };
 }
 
-async function parseRgMatchesResponsive(
-  stdout: string,
+async function scanRgMatches(
+  args: readonly string[],
   root: string,
   signal: AbortSignal,
 ): Promise<{ matches: GrepMatch[]; scanCapped: boolean }> {
   const matches: GrepMatch[] = [];
-  const maybeYield = cooperativeYield();
-  let lines = 0;
-  for (let start = 0; start < stdout.length;) {
-    const end = nextLineEnd(stdout, start);
-    if (appendRgMatch(stdout.slice(start, end), root, matches)) return { matches, scanCapped: true };
-    start = end + 1;
-    if (++lines % 64 === 0) await maybeYield(signal);
+  const stop = new AbortController();
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let bytes = 0;
+  let scanCapped = false;
+  const cap = () => {
+    scanCapped = true;
+    pending = "";
+    stop.abort();
+  };
+  const result = await runProcess("rg", args, {
+    cwd: root,
+    signal: AbortSignal.any([signal, stop.signal]),
+    allowExitCodes: "any",
+    maxOutputBytes: GREP_SCAN_BYTES,
+    onStdout(chunk) {
+      if (scanCapped || signal.aborted) return;
+      const accepted = chunk.subarray(0, GREP_SCAN_BYTES - bytes);
+      bytes += accepted.length;
+      pending += decoder.write(accepted);
+      let start = 0;
+      for (let end = pending.indexOf("\n", start); end >= 0; end = pending.indexOf("\n", start)) {
+        if (appendRgMatch(pending.slice(start, end), root, matches)) {
+          cap();
+          return;
+        }
+        start = end + 1;
+      }
+      pending = pending.slice(start);
+      if (bytes >= GREP_SCAN_BYTES) cap();
+    },
+  });
+  // Reaching our scan cap is successful partial output; user cancellation and rg errors are not.
+  signal.throwIfAborted();
+  if (!scanCapped) {
+    if (![0, 1].includes(result.code)) throw new ProcessError(result);
+    scanCapped = appendRgMatch(pending + decoder.end(), root, matches);
   }
-  return { matches, scanCapped: false };
+  return { matches, scanCapped };
 }
 
 async function gitBoostFor(root: string, signal: AbortSignal): Promise<Map<string, number>> {
@@ -536,21 +567,14 @@ export const grepTool: AgentTool<GrepArgs> = {
       if (search.literal) rgArgs.push("--fixed-strings");
       if (search.glob) rgArgs.push("--glob", search.glob);
       rgArgs.push("--", search.pattern, target);
-      let stdout: string;
+      let parsed: { matches: GrepMatch[]; scanCapped: boolean };
       try {
-        const result = await runProcess("rg", rgArgs, {
-          cwd: context.rootPath,
-          signal: context.signal,
-          allowExitCodes: [0, 1],
-          maxOutputBytes: GREP_SCAN_BYTES,
-        });
-        stdout = result.stdout.toString("utf8");
+        parsed = await scanRgMatches(rgArgs, context.rootPath, context.signal);
       } catch (error) {
         if (error instanceof ProcessError) throw error;
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("ripgrep (rg) was not found on PATH");
         throw error;
       }
-      const parsed = await parseRgMatchesResponsive(stdout, context.rootPath, context.signal);
       const gitBoost = await gitBoostFor(context.rootPath, context.signal);
       const mtimes = await mtimesFor(context.rootPath, new Set(parsed.matches.map((match) => match.file)));
       const ordered = orderMatches(parsed.matches, gitBoost, mtimes);

@@ -30,6 +30,8 @@ export interface RunProcessOptions {
   allowExitCodes?: readonly number[] | "any";
   maxOutputBytes?: number;
   overflow?: "kill" | "truncate";
+  /** Consume stdout as it arrives instead of buffering it. The consumer owns its size limit. */
+  onStdout?: (chunk: Buffer) => void;
 }
 
 class ByteTail {
@@ -81,6 +83,7 @@ export async function runProcess(
   args: readonly string[],
   options: RunProcessOptions = {},
 ): Promise<ProcessResult> {
+  options.signal?.throwIfAborted();
   const maxOutputBytes = options.maxOutputBytes ?? 64 * 1024 * 1024;
   const overflow = options.overflow ?? "kill";
   const result = await new Promise<ProcessResult>((resolve, reject) => {
@@ -117,6 +120,16 @@ export async function runProcess(
     };
 
     child.stdout!.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      if (options.onStdout) {
+        try {
+          options.onStdout(chunk);
+        } catch (error) {
+          if (child.pid !== undefined) killProcessTree(child.pid);
+          finish(() => reject(error));
+        }
+        return;
+      }
       if (overflow === "truncate") {
         stdoutTail.push(chunk);
         return;

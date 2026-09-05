@@ -66,25 +66,35 @@ function parseMcpPayload(payload: string): string | undefined {
   const trimmed = payload.trim();
   if (!trimmed.startsWith("{")) return undefined;
   const parsed = JSON.parse(trimmed) as unknown;
-  if (typeof parsed !== "object" || parsed === null || !("result" in parsed)) return undefined;
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if ("error" in parsed) {
+    const error = parsed.error;
+    const message = typeof error === "object" && error !== null && "message" in error
+      ? String(error.message) : JSON.stringify(error);
+    throw new Error(`Web search RPC error: ${message}`);
+  }
+  if (!("result" in parsed)) return undefined;
   const result = parsed.result;
-  if (typeof result !== "object" || result === null || !("content" in result) || !Array.isArray(result.content)) {
-    return undefined;
+  if (typeof result !== "object" || result === null) throw new Error("Invalid web search result");
+  const content = "content" in result && Array.isArray(result.content) ? result.content : undefined;
+  const text = (content ?? []).flatMap((item) =>
+    typeof item === "object" && item !== null && "type" in item && item.type === "text" &&
+    "text" in item && typeof item.text === "string" ? [item.text] : []
+  ).join("\n\n");
+  if ("isError" in result && result.isError === true) {
+    throw new Error(`Web search failed: ${text || "provider returned a tool error"}`);
   }
-  for (const item of result.content) {
-    if (typeof item !== "object" || item === null || !("text" in item)) continue;
-    if (typeof item.text === "string" && item.text) return item.text;
-  }
-  return undefined;
+  if (!content) throw new Error("Invalid web search result: missing content");
+  return text;
 }
 
 export function parseMcpSearchResponse(body: string): string | undefined {
   const direct = body.trim() ? parseMcpPayload(body) : undefined;
-  if (direct) return direct;
+  if (direct !== undefined) return direct;
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith("data:")) continue;
     const data = parseMcpPayload(line.slice(5));
-    if (data) return data;
+    if (data !== undefined) return data;
   }
   return undefined;
 }
@@ -216,7 +226,8 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
         if (!response.ok) throw new Error(`${provider} web search failed with HTTP ${response.status}`);
         const body = (await readBoundedBody(response, WEB_SEARCH_RESPONSE_LIMIT_BYTES, signal)).toString("utf8");
         const result = parseMcpSearchResponse(body);
-        return ok(result ?? "No search results found. Try a different query.", { provider, query });
+        if (result === undefined) throw new Error("Invalid web search response: no result received");
+        return ok(result || "No search results found. Try a different query.", { provider, query });
       } catch (error) {
         return fail(error);
       }
