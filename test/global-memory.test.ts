@@ -63,6 +63,7 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
     const firstModel = new CapturingModel();
     const app = await ThreadApp.open({
       rootPath: values.root,
+      search: { semantic: false },
       model: firstModel,
       skills: { skills: [], diagnostics: [] },
     });
@@ -89,7 +90,7 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
       assert.match(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v1/);
       assert.doesNotMatch(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v2/);
 
-      assert.equal(app.search.search(["stable-memory-v1"]).hits.length, 0);
+      assert.equal((await app.recall.search(["stable-memory-v1"])).hits.length, 0);
       assert.doesNotMatch(JSON.stringify(app.liveContextMessages()), /stable-memory-v[12]/);
       await app.handleInput(`/session ${secondSession}`, { signal: new AbortController().signal });
     } finally {

@@ -228,6 +228,7 @@ async function main(): Promise<void> {
   let stateSave: Promise<void> = Promise.resolve();
   const app = await ThreadApp.open({
     rootPath: options.rootPath,
+    ...(loadedConfig?.config.search ? { search: loadedConfig.config.search } : {}),
     ...(model ? { model } : {}),
     modelCatalog,
     implementationWorker: {
@@ -295,7 +296,9 @@ function formatCliError(error: unknown): string {
     : error.stack;
 }
 
-void main().then(
+if (process.argv[2] === "--internal-embedding-worker" && process.send) {
+  await import("../session-recall/embedding-worker.js");
+} else void main().then(
   () => process.exit(0),
   (error) => {
     errorOutput.write(`${formatCliError(error)}\n`);

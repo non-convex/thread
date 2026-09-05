@@ -27,3 +27,4 @@ async function build(entrypoint: string, naming: string): Promise<void> {
 
 await build("src/cli/main.ts", "thread.js");
 await build("src/index.ts", "index.js");
+await build("src/session-recall/embedding-worker.ts", "embedding-worker.js");

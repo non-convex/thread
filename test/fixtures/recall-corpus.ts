@@ -1,0 +1,23 @@
+/** Fixed synthetic project history: no user conversations or remote inference. */
+export const recallCorpus = [
+  { text: "所有交互按顺序写入追加日志。即使上下文被压缩，之前的消息也会保存在磁盘上，不会被删除。", query: "聊天内容太长整理过以后，之前聊的东西还在吗？" },
+  { text: "回滚仅改变当前分支的末端指针，放弃的路径仍留在会话树中，可以重新查看当时的失败尝试。", query: "撤销操作之后，走过的那条旧路线还能找回来吗？" },
+  { text: "工具执行前必须先持久化有效参数，以便程序崩溃后知道哪些操作可能已经产生副作用。", query: "进程突然挂掉时，怎样判断某个命令有没有开始执行？" },
+  { text: "只把稳定的个人偏好和跨仓库通用事实写入全局记忆。项目内部决定继续保存在项目会话树。", query: "换到另一个代码库时，哪些信息应该跟着用户过去？" },
+  { text: "终端渲染按帧合并流式文本更新，降低重绘频率，让键盘输入保持流畅。", query: "回答不断生成的时候，界面卡顿应该怎样缓解？" },
+  { text: "文件编辑会先创建工作区快照。用户可以恢复修改之前的代码，包括被删除的文件。", query: "改坏了代码后，有没有办法拿回原来的文件？" },
+  { text: "模型下载到用户主目录，各项目复用同一份权重。准备完成后，向量生成不需要联网。", query: "断开网络以后，电脑上还能计算文本的语义表示吗？" },
+  { text: "Large tool outputs are excluded from semantic embeddings. Command arguments and diagnostics remain available through lexical search.", query: "How can we keep verbose execution logs from dominating meaning-based retrieval?" },
+  { text: "Only one process may hold the project write lock. Another instance must refuse to open the same state for writing.", query: "What prevents two running agents from simultaneously corrupting the same project history?" },
+  { text: "Historical search ranks evidence by relevance and returns a source turn identifier. Read the original conversation before acting on an old decision.", query: "How should an agent verify a recalled decision before relying on it?" },
+  { text: "更新登录状态后需要刷新可用模型列表。", query: "" },
+  { text: "图片使用剪贴板粘贴或文件路径附加到当前输入。", query: "" },
+  { text: "HTTP 客户端遇到限流时遵循服务端的 Retry-After 响应头。", query: "" },
+  { text: "测试目录允许同名文件，通过绝对路径区分不同项目。", query: "" },
+  { text: "命令行的帮助页面列出参数以及使用示例。", query: "" },
+  { text: "函数 parseReceipt 校验支付回执，错误码 E_RECEIPT_9281。路径 src/payments/receipt.ts。", query: "" },
+  { text: "数据库连接池最多使用八个连接，空闲连接会在超时后关闭。", query: "" },
+  { text: "发布文件使用 zip 或 tar.gz 压缩，按平台架构命名。", query: "" },
+  { text: "CSS uses a dark palette with high contrast for error messages.", query: "" },
+  { text: "用户取消当前请求时，发送取消信号并停止后续任务。", query: "" },
+] as const;

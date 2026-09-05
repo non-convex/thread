@@ -131,13 +131,15 @@ const search: ThreadCommand = {
   async execute(args, context) {
     if (args.length === 0) throw new Error("Usage: /thread search <query> [<query> ...]");
     context.signal.throwIfAborted();
-    const result = context.search.search(args, 20);
+    const result = await context.recall.search(args, 20, context.signal);
     const content = result.hits.length
       ? result.hits.map((hit) =>
-        `${short(hit.turnId)} session=${short(hit.sessionId)} ${hit.pathStatus} ${hit.matched.join(", ")}\n  ${hit.snippet}`
+        `${short(hit.turnId)} session=${short(hit.sessionId)} ${hit.pathStatus} kind=${hit.kind} ${hit.sources.join(", ")}\n  ${hit.snippet}`
       ).join("\n")
-      : "(no matching turns)";
-    return viewResult(content, { type: "document", title: "Session Tree search", content });
+      : "(no related turns found)";
+    const display = [`Keyword coverage: ${result.coverage.keywordTurns}/${result.coverage.totalTurns}; semantic: ${result.semantic} (${result.coverage.semanticTurns}/${result.coverage.totalTurns})`,
+      ...result.diagnostics, content].join("\n");
+    return viewResult(display, { type: "document", title: "Session Tree search", content: display });
   },
 };
 

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import solidPlugin from "@opentui/solid/bun-plugin";
+import { recallNativePlugin } from "./recall-bundle.js";
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -15,7 +16,7 @@ await mkdir(dirname(outfile), { recursive: true });
 const result = await Bun.build({
   entrypoints: [resolve(import.meta.dir, "../src/cli/main.ts")],
   target: "bun",
-  plugins: [solidPlugin],
+  plugins: [solidPlugin, recallNativePlugin(target)],
   minify: true,
   compile: {
     target: target as Bun.Build.CompileTarget,

@@ -40,7 +40,7 @@ import { ExtensionEvents } from "../extensions/events.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
 import type { Project } from "../project/model.js";
 import { ProjectService } from "../project/service.js";
-import { SessionSearchService } from "../session-tree/search.js";
+import { SessionRecallService, type SessionRecallOptions } from "../session-recall/service.js";
 import { SessionTreeRepository } from "../session-tree/repository.js";
 import { SessionTreeService } from "../session-tree/service.js";
 import {
@@ -68,6 +68,7 @@ export type { InputResult } from "./input-router.js";
 
 export interface ThreadAppOptions {
   rootPath: string;
+  search?: SessionRecallOptions;
   model?: ModelClient;
   modelCatalog?: ModelCatalog;
   thinkingLevel?: ModelThinkingLevel;
@@ -100,7 +101,7 @@ export class ThreadApp {
   readonly rootPath: string;
   readonly sessionTree: SessionTreeService;
   readonly workspaceState: WorkspaceStateService;
-  readonly search: SessionSearchService;
+  readonly recall: SessionRecallService;
   readonly agentProfiles: AgentProfileRegistry;
   readonly agentTasks: AgentTaskOrchestrator;
   readonly tools = new ToolRegistry();
@@ -136,7 +137,7 @@ export class ThreadApp {
     tree: SessionTreeService;
     workspace: WorkspaceStateService;
     builder: ContextBuilder;
-    search: SessionSearchService;
+    recall: SessionRecallService;
     skills: LoadedSkills;
     agentTaskRepository: AgentTaskRepository;
     globalMemory: GlobalMemorySnapshots;
@@ -147,7 +148,8 @@ export class ThreadApp {
     this.sessionTree = values.tree;
     this.workspaceState = values.workspace;
     this.contextBuilder = values.builder;
-    this.search = values.search;
+    this.recall = values.recall;
+    this.events.on("turn_end", () => this.recall.turnFinished());
     this.loadedSkills = values.skills;
     this.modelCatalog = options.modelCatalog;
     this.configuredSystemPrompt = options.systemPrompt;
@@ -188,8 +190,8 @@ export class ThreadApp {
     );
 
     registerBuiltinTools(this.tools);
-    this.tools.register(createSessionSearchTool(this.search));
-    this.tools.register(createSessionReadTool(this.search));
+    this.tools.register(createSessionSearchTool(this.recall));
+    this.tools.register(createSessionReadTool(this.recall));
     if (values.skills.skills.some((skill) => !skill.disableModelInvocation)) {
       this.tools.register(createSkillTool(() => this.loadedSkills.skills));
     }
@@ -206,6 +208,7 @@ export class ThreadApp {
     const project = await ProjectService.open(options.rootPath);
     let repository: SessionTreeRepository | undefined;
     let agentTaskRepository: AgentTaskRepository | undefined;
+    let recall: SessionRecallService | undefined;
     try {
       repository = await SessionTreeRepository.open(project);
       const tree = new SessionTreeService(repository);
@@ -217,7 +220,7 @@ export class ThreadApp {
       await workspaceRepository.initialize();
       const workspace = new WorkspaceStateService(workspaceRepository);
       const builder = new ContextBuilder(tree);
-      const search = new SessionSearchService(tree);
+      recall = new SessionRecallService(tree, options.search);
       const skills = options.skills ?? await loadSkills();
       agentTaskRepository = await AgentTaskRepository.open(project);
       const app = new ThreadApp(options, {
@@ -226,7 +229,7 @@ export class ThreadApp {
         tree,
         workspace,
         builder,
-        search,
+        recall,
         skills,
         agentTaskRepository,
         globalMemory,
@@ -234,6 +237,7 @@ export class ThreadApp {
       await app.agentTasks.initialize();
       return app;
     } catch (error) {
+      await recall?.close();
       await agentTaskRepository?.close().catch(() => undefined);
       await repository?.close();
       throw error;
@@ -811,7 +815,7 @@ export class ThreadApp {
     return {
       rootPath: this.rootPath,
       tree: this.sessionTree,
-      search: this.search,
+      recall: this.recall,
       skills: this.skills,
       skillDiagnostics: this.skillDiagnostics,
       signal,
@@ -883,7 +887,7 @@ export class ThreadApp {
     const collect = (task: Promise<unknown>) => task.catch((error) => failures.push(error));
     // Start cancellation immediately, but do not make optional background work
     // delay the durable Workspace and Session Tree shutdown sequence.
-    const background = [collect(this.dreamer.close()), collect(this.agentTasks.close())];
+    const background = [collect(this.dreamer.close()), collect(this.agentTasks.close()), collect(this.recall.close())];
     await collect(this.workspaceState.settle());
     await collect(this.repository.close());
     await Promise.all(background);

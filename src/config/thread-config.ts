@@ -64,6 +64,7 @@ export interface AttributionConfig {
 }
 
 export interface ThreadConfig {
+  search?: { semantic: boolean };
   model?: ModelSelectionConfig;
   agents: {
     "implementation-worker"?: ImplementationWorkerConfig;
@@ -379,12 +380,19 @@ function parseConfig(value: unknown): { config: ThreadConfig; agentDiagnostics: 
     ? undefined
     : cacheRetention(input.cacheRetention, "cacheRetention");
   const attribution = input.attribution === undefined ? undefined : parseAttribution(input.attribution);
+  let search: ThreadConfig["search"];
+  if (input.search !== undefined) {
+    const value = object(input.search, "search");
+    if (value.semantic !== undefined && typeof value.semantic !== "boolean") throw new Error("search.semantic must be a boolean");
+    search = { semantic: value.semantic === undefined ? true : value.semantic as boolean };
+  }
   return {
     config: {
       ...(model ? { model } : {}),
       ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
       ...(retention ? { cacheRetention: retention } : {}),
       ...(attribution ? { attribution } : {}),
+      ...(search ? { search } : {}),
       agents,
       modelOverrides,
       providers,

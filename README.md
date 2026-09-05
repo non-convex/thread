@@ -123,7 +123,11 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 
 ### Search and recall
 
-`session_search` searches every Session and historical branch. `session_read` retrieves one matching turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it. The model does not yet see the whole tree by default; whole-tree awareness is planned.
+`session_search` combines Chinese-aware BM25, exact identifiers, and local semantic retrieval across ended turns in every Session and historical branch. Results identify their source entry and retrieval method. `session_read` retrieves the original turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it.
+
+The first search downloads a pinned multilingual-e5-small Q8 model and tokenizer (about 135 MB) into `${THREAD_HOME}/models`. Model preparation and vector indexing run in the background; keyword search works immediately. Later searches can run offline. Set `HF_ENDPOINT` for a download mirror, or configure `"search": { "semantic": false }` to use keywords without downloading a model. Text and queries remain on the machine.
+
+Search indexes live under the project's state directory in `session-search` and can be rebuilt from the Session Tree. Tool logs and thinking are searchable by keyword; only user and assistant narrative is embedded. Recall tool outputs and compaction copies are excluded from indexing, while `session_read` can still return original evidence. Search reports indexing coverage and any fallback. See [how project memory search works](./docs/session-recall.md) and [Session tool parameters and examples](./docs/session-tools.md).
 
 ## Context policy
 
@@ -217,7 +221,8 @@ bun run build
 Main code boundaries:
 
 ```text
-src/session-tree/     persistent project history, paths, search, and recall
+src/session-tree/     persistent project history and paths
+src/session-recall/   history retrieval, derived indexes, and local embeddings
 src/workspace-state/  checkpoint capture, verification, restore, and GC
 src/context/          live-path projection and compaction
 src/agent/            model steps, tool scheduling, journals, and turns
@@ -233,6 +238,7 @@ Thread also exports its runtime, stores, model catalog, tools, commands, skills 
 Further reading:
 
 - [Subagent architecture](./docs/subagent-architecture.md)
+- [Session recall architecture](./docs/session-recall.md)
 - [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)
 - [Full-screen TUI](./docs/tui.md) (Chinese)
 - [Pasting clipboard images into the TUI](./docs/tui-image-paste.md) (Chinese)

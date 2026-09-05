@@ -1,5 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
-import type { SessionSearchService } from "../session-tree/search.js";
+import type { SessionRecallService } from "../session-recall/service.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 
 export interface HistoryViewItem {
@@ -43,7 +43,7 @@ export interface CommandResult {
 export interface ThreadCommandContext {
   rootPath: string;
   tree: SessionTreeService;
-  search: SessionSearchService;
+  recall: SessionRecallService;
   skillDiagnostics?: readonly import("../skills/loader.js").SkillDiagnostic[];
   skills?: readonly import("../skills/loader.js").Skill[];
   signal: AbortSignal;

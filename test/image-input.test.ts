@@ -228,6 +228,7 @@ test("vision turns reach the model and remain visible in Session Tree history", 
     const model = new CapturingModel("vision", true);
     const app = await ThreadApp.open({
       rootPath: values.root,
+      search: { semantic: false },
       model,
       skills: { skills: [], diagnostics: [] },
     });
@@ -245,7 +246,7 @@ test("vision turns reach the model and remain visible in Session Tree history", 
       const messages = app.sessionTree.messagesForTurn(result.kind === "turn" ? result.result.turn.id : "");
       assert.deepEqual(messages[0]?.content, [IMAGE, { type: "text", text: "describe this" }]);
       assert.equal(app.sessionTree.rewindCandidates()[0]?.label, "[image] describe this");
-      assert.equal(app.search.search(["[image]"]).totalMatchingTurns, 1);
+      assert.equal((await app.recall.search(["[image]"])).hits.length, 1);
 
       const entries = app.sessionTree.entriesForTurn(result.kind === "turn" ? result.result.turn.id : "");
       assert.equal(projectTranscript(entries)[0]?.content, "[image]\ndescribe this");

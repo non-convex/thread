@@ -117,6 +117,7 @@ test("rewind restores the previous turn checkpoint and retains the abandoned pat
   await withThreadHome(values.home, async () => {
     const app = await ThreadApp.open({
       rootPath: values.root,
+      search: { semantic: false },
       model: new CapturingModel(),
       skills: { skills: [], diagnostics: [] },
     });
@@ -148,7 +149,7 @@ test("rewind restores the previous turn checkpoint and retains the abandoned pat
       assert.ok(app.sessionTree.projection.turns.has(second), "the abandoned turn remains factual history");
       assert.deepEqual(app.sessionTree.livePath().map((turn) => turn.id), [first, replacement]);
 
-      const found = app.search.search(["unique-needle"]);
+      const found = await app.recall.search(["unique-needle"]);
       assert.equal(found.hits[0]?.turnId, second);
       assert.equal(found.hits[0]?.pathStatus, "current-session-off-path");
       assert.deepEqual(await app.fsck(), []);
