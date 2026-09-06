@@ -2,7 +2,7 @@
 
 # Thread
 
-**Thread helps coding agents remember an entire project, then resume, revisit, and move the work forward at any time.**
+**One project, one Session Tree. Your interactions with the agent are the project's memory.**
 
 [简体中文](./README.zh-CN.md) · [Releases](https://github.com/non-convex/thread/releases) · [Development](#development)
 
@@ -12,9 +12,58 @@
 
 </div>
 
-Thread is a coding-agent runtime for work that should outlast a single chat. Inside a project, one persistent Session Tree turns every interaction and execution into history you can resume, rewind, search, and recall. Across projects, a small global memory carries only the stable facts that should travel with you.
+Thread is a coding-agent runtime built around project memory. How a requirement emerged, why an approach was chosen, what execution revealed, and how the user corrected the direction—all of these interactions persist in one Session Tree. Together, they form the project's memory, ready to be searched, recalled, and continued as work progresses.
 
-The design follows three rules: stay small and add no entity without need; manage and compact context carefully to preserve cache hits; and admit only information that must enter context so the window does not grow too quickly.
+Thread follows two design principles: **add no entity without necessity; manage context with care.**
+
+## Interaction is project memory
+
+Each project has one persistent Session Tree. Each round of interaction between the user and agent forms a turn; successive turns form a path, and continuing after a rewind creates a branch. A project can have multiple Sessions, all within the same tree and all available to project-wide search and recall.
+
+```text
+Project
+├── Workspace
+└── Session Tree
+    ├── Session A
+    │   └── Turn 1
+    │       └── Turn 2
+    │           ├── Turn 3 → Turn 4
+    │           └── Turn 3′ → ...  (after rewind)
+    └── Session B
+        └── Turn 1 → ...          (created by /new)
+```
+
+**A memory's position in the tree preserves the clues needed to understand it.**
+
+- **Context comes with the memory.** A decision belongs to a particular interaction, follows earlier discussion, and sits on a specific branch. Recall can return to the original conversation and read nearby turns along that path.
+- **Its basis can be examined.** The user's request, the agent's response, and the turn's tool calls and results are recorded together. They show the conditions and evidence behind a conclusion.
+- **Revisions have a history.** Later additions, corrections, and reversals become new interactions. Trying again after a rewind creates a branch while preserving the previous path. Memory evolves with the project, retaining earlier judgments and the process that changed them.
+
+For example, an early constraint leads the project to choose approach A. When that constraint changes, the user and agent discuss it and adopt B. Both discussions remain in project memory. Asked later why B was chosen, the agent can search for those turns and return to the discussion to understand how the choice evolved.
+
+Position provides provenance and context. Deciding whether a historical conclusion still applies requires reading relevant revisions and, when needed, checking the current files.
+
+## Two design principles
+
+### 1. Add no entity without necessity
+
+Let existing structures do the work they naturally support. The Session Tree carries conversation history, project memory, context paths, and rewind branches. Search indexes are derived from the tree and can be rebuilt. Compaction summaries are stored as new entries in the same tree.
+
+This grounds project memory directly in real interactions. New requirements, discoveries, and revisions enter history through continued conversation, and search and recall can always return to the source. A new mechanism should solve a concrete problem the existing structure cannot handle.
+
+### 2. Manage context with care
+
+Project memory keeps growing; each model request is organized around the work at hand. Thread builds model-visible context from the active Session's current path, or live path, recalls other history as needed, and compacts earlier content when necessary.
+
+- **Read on demand.** Search returns relevant turn locations and snippets first. The agent then reads the original conversation and necessary context, explicitly expanding execution details when useful.
+- **Keep the prefix stable.** Skills load at startup into a stable system-prompt prefix, and global memory uses a fixed per-Session snapshot to help preserve prompt-cache hits.
+- **Compact carefully.** Compaction happens at complete model-step boundaries, preserves recent complete steps, and proceeds only when the estimated context reduction is material.
+- **Preserve original history.** Compaction shapes later requests; the original interactions remain in the tree for search, recall, and rewind.
+- **Bound execution detail in context.** Workers keep their full execution traces in a separate journal. The main agent receives compact task results and inspects the workspace directly.
+
+`/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and retains more recent content when the roughly 20K-token target budget allows.
+
+Live-path context, on-demand recall, and compaction are implemented. Model awareness of the whole tree and finer-grained control over what enters context remain planned.
 
 ## Interface
 
@@ -79,34 +128,23 @@ Built-in model metadata can be overridden in `~/.thread/config.json` without rep
 
 For an API key or compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, and set the environment variable named by `apiKeyEnv`. Custom providers can use `openai-responses`, `openai-completions`, or `anthropic-messages`.
 
-## How it works
+## Working within the tree
 
-### Sessions are paths through one history
+### Start and resume
 
-A project owns one virtual Root and any number of top-level Sessions. A Session is not a copy of the workspace; it is an independent path through project history.
+Each Session saves the end of its current path, or live tip. All Sessions use the same project workspace.
 
-```text
-Project
-├── Current workspace
-└── Persistent Session Tree
-    ├── Session A: Turn 1 → Turn 2 → Turn 3
-    │                            └────→ Turn 3′ after rewind
-    └── Session B: independent context created by /new
-```
-
-- `/new` creates and activates an empty Session without copying messages, calling the model, summarizing history, or changing files.
+- `/new` creates and activates an empty Session with independent context. Project history remains available for recall.
 - `/session` lists Sessions.
-- `/session <id>` resumes one at its saved live tip, again without changing files.
+- `/session <id>` resumes the selected Session at its saved live tip.
 
-The model normally sees only the active Session's live path. Everything else remains in project memory and can be recalled when needed.
+Creating and switching Sessions leave workspace files unchanged. `/new` does not copy messages, call the model, or summarize history.
 
 ### Turns connect interaction, execution, and workspace state
 
 Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and a workspace-state ID. The workspace state is the checkpoint before that user turn.
 
 Thread captures the next checkpoint when a turn ends and reuses it for the next send. The first turn in a process performs a bootstrap scan. Interrupted and failed turns are sealed into valid conversation prefixes and remain the live tip, so the next request can continue from factual history.
-
-Worker execution traces are kept in the same project's Agent Task journal rather than injected into the parent context. The parent receives compact task results and reviews the shared workspace directly.
 
 ### Rewind creates a branch
 
@@ -123,38 +161,37 @@ A checkpoint comes from the previous completed turn. Manual edits made after tha
 
 ### Search and recall
 
-`session_search` combines Chinese-aware BM25, exact identifiers, and local semantic retrieval across ended turns in every Session and historical branch. Results identify their source entry and retrieval method. `session_read` retrieves the original turn or a bounded path around it. Recalled information can be stale, so the agent is instructed to check current files whenever correctness depends on it.
+The agent uses two tools to access project memory:
 
-The first search downloads a pinned multilingual-e5-small Q8 model and tokenizer (about 135 MB) into `${THREAD_HOME}/models`. Model preparation and vector indexing run in the background; keyword search works immediately. Later searches can run offline. Set `HF_ENDPOINT` for a download mirror, or configure `"search": { "semantic": false }` to use keywords without downloading a model. Text and queries remain on the machine.
+| Tool | Purpose |
+| --- | --- |
+| `session_search` | Search ended turns across all Sessions and historical branches, returning sources, path status, and relevant snippets. |
+| `session_read` | Read an original turn, optionally including nearby turns, tool calls, tool results, or saved thinking. |
 
-Search indexes live under the project's state directory in `session-search` and can be rebuilt from the Session Tree. Tool logs and thinking are searchable by keyword; only user and assistant narrative is embedded. Recall tool outputs and compaction copies are excluded from indexing, while `session_read` can still return original evidence. Search reports indexing coverage and any fallback. See [how project memory search works](./docs/session-recall.md) and [Session tool parameters and examples](./docs/session-tools.md).
+Search combines Chinese-aware BM25, exact identifier matching, and local semantic retrieval. Results distinguish the current path, historical branches of the current Session, and other Sessions, helping the agent interpret their relationship to current work.
 
-## Context policy
+Nearby turns are read along a tree path. For a branch that is no longer on its Session's saved path, the current reader expands only the target's ancestors. Long content is paginated, and execution details are omitted by default and expanded on request.
 
-- Normal requests contain the active live path; off-path history enters only through explicit recall.
-- Skills are loaded once into a stable system-prompt prefix.
-- `${THREAD_HOME}/.THREAD.md` is loaded as a fixed per-Session global-memory snapshot after the system prompt. `/new` reloads it for the new Session.
-- Compaction happens only at complete model-step boundaries and is stored as another append-only tree entry.
-- A compaction pass proceeds only when its estimated context benefit is material.
-- Finer-grained admission is still planned.
+The first search downloads a pinned multilingual-e5-small Q8 model and tokenizer (about 135 MB) into `${THREAD_HOME}/models`. Model preparation and vector indexing run in the background; keyword search works immediately. Later retrieval can run offline. Set `HF_ENDPOINT` for a download mirror, or configure `"search": { "semantic": false }` to disable semantic retrieval and model downloads. Indexing and retrieval computation run locally.
 
-`/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and expands the retained working set while its roughly 20K-token budget allows. Earlier history remains available to rewind, search, and recall.
+Tool logs and saved thinking are searchable by keyword; only user and assistant narrative is embedded. Recall tool calls and results, compaction summaries, and copied content are excluded from indexing. Original evidence remains readable through `session_read`. Search reports indexing coverage and any fallback.
 
-## Agents and global memory
+Users can also run `/thread search "why was this designed this way"` directly. See [how project memory search works](./docs/session-recall.md) and [Session tool parameters and examples](./docs/session-tools.md).
 
-`/agent` is the common entry point for model selection and agent settings. Thread has three built-in profiles: `main`, `implementation-worker`, and `dreamer`. The secondary agents start disabled and require an explicit model selection.
+## Cross-project memory and optional agents
 
-Global memory is the single Markdown file `${THREAD_HOME}/.THREAD.md`. Its contents do not enter the Session Tree, search, rewind, or compaction. The main agent may update only that exact external file when the current user message explicitly contains stable, cross-project information. Each Session keeps the snapshot captured when it began; disk changes become visible after `/new` or restart.
+Stable information that applies across projects lives in one Markdown file, `${THREAD_HOME}/.THREAD.md`. Main maintains it only when the user's current message explicitly provides stable information useful across projects. A fixed snapshot enters the system prompt and counts toward the context budget; the file itself stays outside the Session Tree, search, rewind, and compaction. `/new` reads the latest contents for the new Session, and restarting refreshes all Session snapshots.
 
-Dreamer is an optional background memory curator. Enable it with `/agent dreamer model <provider>/<model>`. Rather than duplicating explicit instructions handled by Main, it looks for well-supported, implicit user patterns and reusable lessons from the interaction and agent work trajectory that remain useful across unrelated projects. Most reviews should produce no memory change. After ten settled turns, it runs once the Main agent has remained idle for ten minutes; it stays silent alongside later foreground work, uses `high` thinking, has no step limit, and has a five-minute runtime limit. Review backlogs larger than half of the selected model's context window are split into batches capped at that size.
+`/agent` is the common entry point for model selection and agent settings. Thread has three built-in profiles: `main`, `implementation-worker`, and `dreamer`. Both secondary agents start disabled and are enabled by explicitly selecting a model:
 
-## Implementation workers
+| Agent | Enable with | Role |
+| --- | --- | --- |
+| `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
+| `dreamer` | `/agent dreamer model <provider>/<model>` | Review interactions and execution traces in the background for well-supported implicit user patterns and lessons useful across projects, maintaining global memory. |
 
-Implementation workers start disabled. Run `/agent implementation-worker model <provider>/<model>` to select a model and enable them. The main agent can then delegate one or two independent leaf tasks with non-overlapping `writeScope` values.
+Workers edit the current workspace directly, with `writeScope` serving as a coordination boundary. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to restore the whole workspace. See [the subagent architecture](./docs/subagent-architecture.md).
 
-Workers edit the current project directly. There is no private clone or apply step, and `writeScope` is a coordination boundary rather than a filesystem sandbox. The main agent reviews the files and tests; completed workers can receive revision feedback in the same context.
-
-Workers belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to restore the whole workspace. See [the subagent architecture](./docs/subagent-architecture.md) for details.
+Dreamer starts after ten ended turns and ten continuous minutes of Main being idle. It stays silent and runs for at most five minutes; most reviews should leave memory unchanged. See [global memory and Dreamer architecture](./docs/global-memory-architecture.md).
 
 ## Commands
 
@@ -203,10 +240,11 @@ Project state lives outside the workspace:
 ├── project.json
 ├── session-tree/{tree.json,events.jsonl}
 ├── workspace-states/{states,blobs}
+├── session-search/
 └── agent-tasks/events.jsonl
 ```
 
-Session Tree and Agent Task records are independent append-only logs. Workspace states are content-addressed. Checkpoints exclude Thread metadata and common generated directories such as `.git`, `.thread`, `node_modules`, `dist`, `build`, `coverage`, `target`, virtual environments, and framework caches.
+Session Tree and Agent Task records are independent append-only logs. Workspace states are content-addressed. `session-search` holds derived indexes that can be rebuilt from the Session Tree. Checkpoints exclude Thread metadata and common generated directories such as `.git`, `.thread`, `node_modules`, `dist`, `build`, `coverage`, `target`, virtual environments, and framework caches.
 
 `/rewind` never restores excluded paths, paths outside the project, processes, databases, network effects, or other external state. Thread does not implement general-purpose version control.
 
@@ -239,6 +277,7 @@ Further reading:
 
 - [Subagent architecture](./docs/subagent-architecture.md)
 - [Session recall architecture](./docs/session-recall.md)
+- [Session tool parameters and examples](./docs/session-tools.md)
 - [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)
 - [Full-screen TUI](./docs/tui.md) (Chinese)
 - [Pasting clipboard images into the TUI](./docs/tui-image-paste.md) (Chinese)

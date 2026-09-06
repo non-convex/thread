@@ -2,7 +2,7 @@
 
 # Thread
 
-**Thread 让 coding agent 记住整个项目，随时接续、回溯并推进工作。**
+**一个项目，一棵 Session Tree。你与 agent 的互动，就是项目的记忆。**
 
 [English](./README.md) · [Releases](https://github.com/non-convex/thread/releases) · [开发](#开发)
 
@@ -12,9 +12,58 @@
 
 </div>
 
-Thread 面向不该随着一次对话结束而消失的编码工作。在一个项目里，一棵持久化 Session Tree 把与 agent 的每次交互和执行变成可接续、可回溯、可搜索、可召回的项目历史。在项目之间，只有真正稳定、值得带走的事实才会进入跨项目记忆。
+Thread 是一个围绕项目记忆设计的 coding-agent runtime。需求如何提出，方案为什么被选中，执行得到了什么结果，用户又如何纠正方向——这些互动持续保存在同一棵 Session Tree 中，构成整个项目的记忆，供之后的工作搜索、召回和接续。
 
-设计遵循三点：保持精简，如无必要勿增实体；精心管理和压缩上下文，尽量维持缓存命中；只让确实需要的信息进入上下文，避免窗口过快膨胀。
+Thread 的设计遵循两条理念：**如无必要，勿增实体；精心的上下文管理。**
+
+## 交互本身就是项目记忆
+
+一个项目只有一棵持久化 Session Tree。每轮用户与 agent 的交互构成一个 turn；连续的 turn 形成路径，回溯后继续工作会产生分支。项目可以拥有多个 Session，它们都属于这棵树，共享项目历史的搜索与召回能力。
+
+```text
+Project
+├── Workspace
+└── Session Tree
+    ├── Session A
+    │   └── Turn 1
+    │       └── Turn 2
+    │           ├── Turn 3 → Turn 4
+    │           └── Turn 3′ → ...  (after rewind)
+    └── Session B
+        └── Turn 1 → ...          (created by /new)
+```
+
+**记忆在树中的位置，本身就保留了理解它所需的线索。**
+
+- **上下文自然存在。** 一条决定属于哪次交互、基于哪些前置讨论、位于哪条分支，都能沿路径追溯。召回时可以回到原始对话，读取相关的前后轮次。
+- **记忆有据可查。** 用户的要求、agent 的回应，以及当轮的工具调用和结果保存在一起，可以据此查看某个结论是在什么条件下、根据什么证据形成的。
+- **更新和修改有过程。** 后续的补充、纠正和推翻继续成为新的交互；回溯后的尝试成为新分支，原有路径仍然保留。记忆随着项目推进而演变，旧判断和改变它的过程都有迹可循。
+
+例如，项目早期因某项约束采用了方案 A；后来约束变化，用户与 agent 讨论后改用方案 B。这两次讨论都属于项目记忆。再次问起“为什么采用 B”时，agent 可以搜索相关 turn，回到当时的讨论，理解选择如何变化。
+
+树中的位置提供来源和脉络；判断一条历史结论今天是否仍然适用，还需要阅读相关修订，并在必要时核对当前文件。
+
+## 两条设计理念
+
+### 1. 如无必要，勿增实体
+
+优先让已有结构承担它自然能够承担的职责。Session Tree 同时承载对话历史、项目记忆、上下文路径与回溯分支；搜索索引从树中派生，可以重建；压缩摘要也作为树中的新记录保存。
+
+这让项目记忆直接建立在真实互动上。新需求、新认识和修订通过后续交互进入历史，搜索与召回始终可以回到原文。新增机制应当解决已有结构无法承担的具体问题。
+
+### 2. 精心的上下文管理
+
+项目记忆持续积累，每次模型请求则围绕当前工作组织上下文。Thread 从活动 Session 的当前路径（live path）构建模型可见内容，按需召回其他历史，并在必要时压缩较早的内容。
+
+- **按需读取。** 搜索先返回相关 turn 的位置与片段，agent 再读取原文和必要的上下文；工具执行细节可以显式展开。
+- **保持稳定。** Skills 在启动时加载为稳定的系统提示前缀，全局记忆使用固定的 Session 快照，尽量维持 prompt cache 命中。
+- **谨慎压缩。** Compaction 只在完整 model-step 边界发生，保留近期完整步骤，并且只有预计能显著缩减上下文时才执行。
+- **保留原始历史。** 压缩结果用于后续请求，原始交互仍留在树中，可继续搜索、召回和回溯。
+- **控制执行细节的占用。** Worker 的完整执行轨迹保存在独立 journal 中，主 agent 接收精简任务结果，并直接检查工作区。
+
+`/compact` 可手动请求压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 的目标预算内尽量保留更多近期内容。
+
+目前已实现当前路径构建、按需召回与压缩；模型对整棵树的全局感知，以及更细粒度的信息准入机制，仍待实现。
 
 ## 界面
 
@@ -79,34 +128,23 @@ Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/au
 
 如果使用 API key 或兼容中转服务，把 [`thread.config.example.json`](./thread.config.example.json) 复制到 `~/.thread/config.json`，修改 provider 与 model，再设置 `apiKeyEnv` 指定的环境变量。自定义 provider 支持 `openai-responses`、`openai-completions` 和 `anthropic-messages`。
 
-## 工作原理
+## 在同一棵树中工作
 
-### Session 是同一份历史中的不同路径
+### 新建与接续
 
-一个项目只有一个虚拟 Root，可以拥有任意数量的顶层 Session。Session 不是工作区副本，而是项目历史中的一条独立路径。
+每个 Session 保存自己的当前路径末端（live tip）。所有 Session 使用同一个项目工作区。
 
-```text
-Project
-├── Current workspace
-└── Persistent Session Tree
-    ├── Session A: Turn 1 → Turn 2 → Turn 3
-    │                            └────→ rewind 后的 Turn 3′
-    └── Session B: /new 创建的独立上下文
-```
-
-- `/new` 创建并激活空 Session；它不复制消息、不调用模型、不总结历史，也不修改文件。
+- `/new` 创建并激活一个空 Session，开始一段独立上下文；项目历史继续保留，可按需召回。
 - `/session` 列出 Session。
-- `/session <id>` 从保存的 live tip 继续，同样不改变文件。
+- `/session <id>` 从目标 Session 保存的 live tip 接续工作。
 
-模型默认只看到活动 Session 的 live path，其他内容继续留在项目记忆中，需要时再召回。
+新建和切换 Session 都保持工作区文件不变。`/new` 不复制消息、不调用模型，也不总结历史。
 
 ### Turn 连接交互、执行与工作区状态
 
 每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和 workspace-state ID。这个 workspace state 是用户 turn 开始前的检查点。
 
 Turn 结束时，Thread 捕获供下一次发送使用的新检查点；进程中的第一个 turn 会先做启动扫描。失败或中断的 turn 会被补成合法对话前缀并继续作为 live tip，让下一条请求从真实发生过的历史继续。
-
-Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进父 agent 上下文。父 agent 只接收精简任务结果，并直接检查共享工作区。
 
 ### Rewind 产生分支
 
@@ -123,34 +161,37 @@ Worker 执行轨迹写入同一项目的 Agent Task journal，不会直接灌进
 
 ### 搜索与召回
 
-`session_search` 搜索所有 Session 和历史分支；`session_read` 读取一个命中 turn，或它附近的一段有界路径。召回的信息可能已经过时，因此正确性依赖它时，agent 会重新核对当前文件。模型默认还看不到整棵树，整棵树的全局感知仍待实现。
+Agent 通过两个工具使用项目记忆：
 
-## 上下文策略
+| 工具 | 用途 |
+| --- | --- |
+| `session_search` | 搜索所有 Session 和历史分支中已结束的 turn，返回来源、路径身份和相关片段。 |
+| `session_read` | 读取指定 turn 的原文，按需附带附近轮次、工具调用、工具结果或已保存的 thinking。 |
 
-- 普通请求只包含 active live path；路径之外的历史通过显式召回按需进入。
-- Skills 只在启动时加载一次，成为稳定的 system-prompt 前缀。
-- `${THREAD_HOME}/.THREAD.md` 作为固定的 Session 全局记忆快照加载在 system prompt 之后；`/new` 会为新 Session 重新读取。
-- Compaction 只发生在完整 model-step 边界，并作为新的 append-only tree entry 保存。
-- 只有预计能显著缩减上下文时，才会执行 compaction。
-- 更细粒度的准入机制仍待实现。
+搜索结合支持中文的 BM25、精确标识符匹配与本地语义检索。结果标明内容来自当前路径、当前 Session 的历史分支，还是其他 Session，帮助 agent 判断它与当前工作的关系。
 
-`/compact` 手动请求一次压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 工作集预算允许时向前扩展。更早的历史仍可用于 rewind、搜索和召回。
+读取附近轮次时，前后关系沿树中的路径计算。当前实现对已离开的历史分支只展开目标的祖先路径；长内容会分页，工具细节默认省略，按需开启。
 
-## Agent 与全局记忆
+首次搜索会下载固定版本的 multilingual-e5-small Q8 模型和 tokenizer（约 135 MB）到 `${THREAD_HOME}/models`。模型准备与向量索引在后台运行，关键词搜索可以先用；之后的检索可离线运行。可通过 `HF_ENDPOINT` 设置下载镜像，或配置 `"search": { "semantic": false }` 关闭语义检索和模型下载。索引与检索计算都在本机完成。
 
-`/agent` 是模型选择和 Agent 设置的统一入口。Thread 内置 `main`、`implementation-worker` 与 `dreamer` 三个 Profile。两个次级 Agent 默认关闭，并且必须显式选择模型。
+工具日志和已保存的 thinking 支持关键词搜索，只有用户与 assistant 的正文参与语义索引。召回工具的调用与结果、压缩摘要和复制内容不重复进入索引；原始证据仍可通过 `session_read` 读取。搜索会报告索引覆盖情况与降级原因。
 
-全局记忆的唯一持久状态是 `${THREAD_HOME}/.THREAD.md`。它不进入 Session Tree、搜索、rewind 或 compaction。只有用户当前消息明确包含稳定、跨项目仍有价值的信息时，Main 才可以额外修改这个精确文件。每个 Session 始终使用创建时绑定的快照；磁盘变更会在 `/new` 或重启后可见。
+用户也可以运行 `/thread search "之前为什么这样设计"` 直接搜索。完整说明见[项目记忆搜索原理](./docs/session-recall.md)与[Session 工具参数及示例](./docs/session-tools.md)。
 
-Dreamer 是可选的后台记忆整理 Agent。使用 `/agent dreamer model <provider>/<model>` 选择模型并启用。它不重复处理由 Main 负责的明确指令，而是从互动与 Agent 工作轨迹中寻找证据充分、可用于无关项目的隐含用户模式和可迁移经验；大多数审阅都不应产生新记忆。累计十个已结束 turn 后，它会在 Main 连续空闲十分钟时运行。运行期间保持静默，并可与之后的前台工作并行；默认使用 `high` thinking，不限制 step，最长运行五分钟。待审阅内容超过所选模型上下文窗口的 50% 时，会拆成不超过该上限的多个批次。
+## 跨项目记忆与可选 Agent
 
-## Implementation worker
+跨项目的稳定信息保存在一个 Markdown 文件 `${THREAD_HOME}/.THREAD.md` 中。Main 只在用户当前消息明确给出稳定、跨项目仍有价值的信息时维护它。它作为固定快照进入系统提示，计入上下文预算；文件本身不进入 Session Tree、搜索、rewind 或 compaction。`/new` 为新 Session 读取最新内容，重启时为所有 Session 刷新快照。
 
-Implementation worker 默认关闭。运行 `/agent implementation-worker model <provider>/<model>` 选择模型并启用。Main 随后可以委派一到两个 `writeScope` 互不重叠的独立叶子任务。
+`/agent` 是模型选择和 Agent 设置的统一入口。Thread 内置 `main`、`implementation-worker` 与 `dreamer` 三个 Profile。两个次级 Agent 默认关闭，显式选择模型后启用：
 
-Worker 直接编辑当前项目，不存在私有副本或 apply 步骤；`writeScope` 是协调边界，不是文件系统沙箱。主 agent 负责检查文件与测试，也可以在同一 worker 上下文中要求返工。
+| Agent | 启用命令 | 职责 |
+| --- | --- | --- |
+| `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | 在共享工作区完成一到两个写入范围互不重叠的独立叶子任务，由主 agent 检查文件与测试，并按需要求返工。 |
+| `dreamer` | `/agent dreamer model <provider>/<model>` | 在后台审阅互动与执行轨迹，寻找证据充分、可跨项目复用的隐含用户模式和经验，维护全局记忆。 |
 
-Worker 只属于创建它的父 turn。Turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，同时保留已经写入的文件。需要恢复整个工作区时使用 `/rewind`。完整说明见 [Subagent 架构](./docs/subagent-architecture.md)。
+Worker 直接编辑当前工作区，`writeScope` 是协调边界。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。恢复整个工作区使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
+
+Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。它保持静默，单次运行最多五分钟；大多数审阅都应保持记忆不变。详见[全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)。
 
 ## 命令
 
@@ -199,10 +240,11 @@ Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <32
 ├── project.json
 ├── session-tree/{tree.json,events.jsonl}
 ├── workspace-states/{states,blobs}
+├── session-search/
 └── agent-tasks/events.jsonl
 ```
 
-Session Tree 与 Agent Task 分别使用独立的 append-only log，workspace state 使用内容寻址。检查点会排除 Thread 元数据和常见生成目录，例如 `.git`、`.thread`、`node_modules`、`dist`、`build`、`coverage`、`target`、虚拟环境和框架缓存。
+Session Tree 与 Agent Task 分别使用独立的 append-only log，workspace state 使用内容寻址。`session-search` 是可从 Session Tree 重建的派生索引。检查点会排除 Thread 元数据和常见生成目录，例如 `.git`、`.thread`、`node_modules`、`dist`、`build`、`coverage`、`target`、虚拟环境和框架缓存。
 
 `/rewind` 永远不会恢复排除路径、项目外路径、进程、数据库、网络副作用或其他外部状态。Thread 不实现通用版本控制。
 
@@ -217,7 +259,8 @@ bun run build
 主要代码边界：
 
 ```text
-src/session-tree/     持久化项目历史、路径、搜索与召回
+src/session-tree/     持久化项目历史与路径
+src/session-recall/   历史检索、派生索引与本地 embedding
 src/workspace-state/  检查点捕获、校验、恢复与 GC
 src/context/          live-path 投影与 compaction
 src/agent/            模型 step、工具调度、journal 与 turn
@@ -233,6 +276,8 @@ Thread 也导出了 runtime、store、model catalog、tool、command、skills lo
 延伸阅读：
 
 - [Subagent 架构](./docs/subagent-architecture.md)
+- [项目记忆搜索原理](./docs/session-recall.md)
+- [Session 工具参数及示例](./docs/session-tools.md)
 - [全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)
 - [全屏 TUI](./docs/tui.md)
 - [把剪贴板里的图交给模型](./docs/tui-image-paste.md)
