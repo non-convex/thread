@@ -51,9 +51,11 @@ Thread exercises restraint when adding features and capabilities. An addition ea
 
 ### 2. Manage context with care
 
-Project memory keeps growing; each model request is organized around the work at hand. Thread builds model-visible context from the active Session's current path, or live path, recalls other history as needed, and compacts earlier content when necessary.
+**Only information that must enter the model's context should enter it.** Project memory keeps growing; each model request is organized around the work at hand. Thread builds model-visible context from the active Session's current path, or live path, recalls other history as needed, and compacts earlier content when necessary.
 
 - **Read on demand.** Search returns relevant turn locations and snippets first. The agent then reads the original conversation and necessary context, explicitly expanding execution details when useful.
+- **Paginate tool results.** Tools such as `read`, `grep`, and `session_read` return long content in pages. The agent reads further as needed, controlling how much information enters context at a time.
+- **Tool result offloading (planned).** Store full tool results outside the model's context, keeping only necessary references and information in context and reading relevant content when needed.
 - **Keep the prefix stable.** Skills load at startup into a stable system-prompt prefix, and global memory uses a fixed per-Session snapshot to help preserve prompt-cache hits.
 - **Compact carefully.** Compaction happens at complete model-step boundaries, preserves recent complete steps, and proceeds only when the estimated context reduction is material.
 - **Preserve original history.** Compaction shapes later requests; the original interactions remain in the tree for search, recall, and rewind.
@@ -61,7 +63,7 @@ Project memory keeps growing; each model request is organized around the work at
 
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and retains more recent content when the roughly 20K-token target budget allows.
 
-Live-path context, on-demand recall, and compaction are implemented. Model awareness of the whole tree and finer-grained control over what enters context remain planned.
+Live-path context, on-demand recall, tool-result pagination, and compaction are implemented. Tool result offloading, model awareness of the whole tree, and finer-grained control over what enters context remain planned.
 
 ## Interface
 
