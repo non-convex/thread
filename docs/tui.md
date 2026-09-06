@@ -48,7 +48,7 @@ border / borderStrong       轻边框只给卡片和浮层
 └──────────────────────────────────────────┘
 ```
 
-欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」，以及两行项目定位文案「One project. One Session Tree.」「Your interactions are the project's memory.」。命令指引保留两行：第一行是 `/session` 接续和 `/thread search <query>` 搜索项目记忆；第二行是 `/agent` 设置 Agent。第三行单独提示 `Ctrl+V` / `Alt+V` 贴图和 `Shift+Tab` 切换 thinking level。
+欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」，以及两行项目定位文案「One project. One Session Tree.」「Your interactions are the project's memory.」。命令指引保留两行：第一行说明 `/session` 接续工作和 `/thread search <query>` 搜索历史；第二行说明 `/agent` 选择模型与启用 Agent。第三行单独提示 `Ctrl+V` / `Alt+V` 贴图和 `Shift+Tab` 切换 thinking level。
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 

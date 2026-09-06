@@ -768,13 +768,13 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       <text fg={theme.softText} marginBottom={1}>Your interactions are the project's memory.</text>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/session</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> resume · </text>
+        <text fg={theme.muted} height={1} wrapMode="none"> resume work · </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread search</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"}</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"} search history</text>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/agent</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> agent settings</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> choose models &amp; enable agents</text>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">Ctrl+V</text>
@@ -782,7 +782,7 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
         <text fg={theme.accentDim} height={1} wrapMode="none">Alt+V</text>
         <text fg={theme.muted} height={1} wrapMode="none"> paste image</text>
         <text fg={theme.accentDim} height={1} wrapMode="none"> · Shift+Tab</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> thinking level</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> change thinking level</text>
       </box>
     </box>
   );
