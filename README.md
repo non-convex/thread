@@ -14,7 +14,7 @@
 
 Thread is a coding-agent runtime built around project memory. How a requirement emerged, why an approach was chosen, what execution revealed, and how the user corrected the direction—all of these interactions persist in one Session Tree. Together, they form the project's memory, ready to be searched, recalled, and continued as work progresses.
 
-Thread follows two design principles: **add no entity without necessity; manage context with care.**
+Thread follows two design principles: **add features with restraint; manage context with care.**
 
 ## Interaction is project memory
 
@@ -45,11 +45,9 @@ Position provides provenance and context. Deciding whether a historical conclusi
 
 ## Two design principles
 
-### 1. Add no entity without necessity
+### 1. Add features with restraint
 
-Let existing structures do the work they naturally support. The Session Tree carries conversation history, project memory, context paths, and rewind branches. Search indexes are derived from the tree and can be rebuilt. Compaction summaries are stored as new entries in the same tree.
-
-This grounds project memory directly in real interactions. New requirements, discoveries, and revisions enter history through continued conversation, and search and recall can always return to the source. A new mechanism should solve a concrete problem the existing structure cannot handle.
+Thread exercises restraint when adding features and capabilities. An addition earns its place only when it is clearly useful in helping users and agents get project work done. Keep the product small and focus effort on capabilities that bring real value.
 
 ### 2. Manage context with care
 
