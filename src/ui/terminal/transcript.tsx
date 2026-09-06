@@ -764,24 +764,33 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
       >
         <ascii_font text="thread" font="tiny" color={theme.accent} backgroundColor={theme.surface} />
       </box>
-      <text fg={theme.softText} marginBottom={1}>Persistent Session Tree · turn-level workspace rewind</text>
+      <text fg={theme.softText}>One project. One Session Tree.</text>
+      <text fg={theme.softText} marginBottom={1}>Your interactions are the project's memory.</text>
       <box flexDirection="row" height={1}>
-        <text fg={theme.muted} height={1} wrapMode="none">type a task to start working, or </text>
+        <text fg={theme.muted} height={1} wrapMode="none">Type a task to begin, or </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">/model</text>
         <text fg={theme.muted} height={1} wrapMode="none"> to switch model</text>
+      </box>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.accentDim} height={1} wrapMode="none">/new</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> new session · </text>
+        <text fg={theme.accentDim} height={1} wrapMode="none">/session</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> resume · </text>
+        <text fg={theme.accentDim} height={1} wrapMode="none">/thread search</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"}</text>
+      </box>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.accentDim} height={1} wrapMode="none">/agent</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> agent settings</text>
+        <text fg={theme.accentDim} height={1} wrapMode="none"> · /compact</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> compact context</text>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">Ctrl+V</text>
         <text fg={theme.muted} height={1} wrapMode="none"> / </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">Alt+V</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> pastes a screenshot from the clipboard</text>
-      </box>
-      <box flexDirection="row" height={1}>
-        <text fg={theme.accentDim} height={1} wrapMode="none">/thread</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> Sessions · history · search</text>
-        <text fg={theme.accentDim} height={1} wrapMode="none"> · /compact</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> workers</text>
-        <text fg={theme.accentDim} height={1} wrapMode="none"> · ⇧⇥</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> paste image</text>
+        <text fg={theme.accentDim} height={1} wrapMode="none"> · Shift+Tab</text>
         <text fg={theme.muted} height={1} wrapMode="none"> thinking level</text>
       </box>
     </box>
