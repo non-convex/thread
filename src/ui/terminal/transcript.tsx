@@ -770,9 +770,11 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
         <text fg={theme.accentDim} height={1} wrapMode="none">/session</text>
         <text fg={theme.muted} height={1} wrapMode="none"> resume · </text>
         <text fg={theme.accentDim} height={1} wrapMode="none">/thread search</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"} · </text>
+        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"}</text>
+      </box>
+      <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">/agent</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> settings</text>
+        <text fg={theme.muted} height={1} wrapMode="none"> agent settings</text>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.accentDim} height={1} wrapMode="none">Ctrl+V</text>
