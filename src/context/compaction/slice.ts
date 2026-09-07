@@ -72,9 +72,9 @@ export function progressSummaryContext(
   trajectory: readonly Message[],
 ): Context {
   const history = [
-    "[Previous-turn history — background only]",
+    "[Project-state background — background only]",
     historySummary,
-    "[End previous-turn history]",
+    "[End project-state background]",
     "",
     "[Current-turn content to summarize follows]",
   ].join("\n");

@@ -330,7 +330,7 @@ test("a mid-turn cut copies the request and inserts a progress checkpoint", asyn
   assert.equal(progressContext.tools?.length, 0);
   assert.match(progressContext.systemPrompt, /context-compaction summarizer/);
   assert.doesNotMatch(progressContext.systemPrompt, /MAIN_AGENT_SYSTEM_PROMPT_SENTINEL/);
-  assert.match(text(progressContext.messages[0]!), /Previous-turn history/);
+  assert.match(text(progressContext.messages[0]!), /Project-state background/);
   assert.match(text(progressContext.messages[0]!), /Current project state\n\nhistory/);
   assert.equal(text(progressContext.messages[1]!), "ORIGINAL REQUEST");
 });

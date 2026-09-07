@@ -16,7 +16,7 @@ const HISTORY_INSTRUCTION = [
   "",
   "Long-term memory contains at most 25 independently useful, current entries in the exact form `- [YYYY-MM-DD] (memory content)`. Preserve goals, user decisions, architectural constraints, failed approaches and their reasons, external facts, and discoveries that cannot safely be recovered from files. Remove superseded or obsolete entries and merge repetitions.",
   "",
-  "Current project state states the active objective and phase, durable implemented results, validation evidence, remaining risks, unfinished work, and the exact next useful action. Distinguish completed work from proposals and successful checks from unrun or failed checks.",
+  "Current project state states the active objective and phase, durable implemented results, validation evidence, remaining risks, unfinished work, and the exact next useful action. Distinguish completed work from proposals and successful checks from unrun or failed checks. For files and artifacts still relevant to the work, preserve exact paths or identifiers and briefly state what changed. Distinguish files only inspected, changes actually made, and changes merely proposed. Retain the exact commands and error messages needed to understand unresolved failures.",
   "",
   "Recent user-agent conversation contains at most the 10 newest material interactions, oldest first, in the exact form `- [YYYY-MM-DD HH] (interaction content)`. It is a compact decision history, not a transcript.",
   "",
