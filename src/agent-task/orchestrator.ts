@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { FileHistoryService } from "../file-history/service.js";
 import type { AgentProfile, AgentProfileRegistry } from "../agent/profile.js";
 import type { UiEventSink } from "../ui/events.js";
 import { safeUiEvent } from "../ui/events.js";
@@ -37,8 +38,9 @@ export class AgentTaskOrchestrator {
     readonly profiles: AgentProfileRegistry,
     rootPath: string,
     private readonly workerSettings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+    fileHistory?: FileHistoryService,
   ) {
-    this.runner = new ImplementationTaskRunner(repository, rootPath);
+    this.runner = new ImplementationTaskRunner(repository, rootPath, fileHistory);
   }
 
   get enabled(): boolean {

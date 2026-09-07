@@ -75,7 +75,7 @@ export class SessionTreeRepository {
     try {
       manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
       const value = manifest as { format?: unknown; formatVersion?: unknown };
-      if (value.format !== SESSION_TREE_FORMAT || value.formatVersion !== 1) {
+      if (value.format !== SESSION_TREE_FORMAT || value.formatVersion !== 2) {
         throw new Error(`Unsupported Session Tree manifest at ${manifestPath}; old data is not loaded`);
       }
     } catch (error) {
@@ -128,7 +128,6 @@ export class SessionTreeRepository {
   async append(
     factory: (sequence: number, timestamp: number) => SessionTreeEvent,
     flush = false,
-    persistAfter?: Promise<unknown>,
   ): Promise<number> {
     this.assertWritable();
     if (flush) {
@@ -139,7 +138,7 @@ export class SessionTreeRepository {
     const timestamp = Date.now();
     const record = { sequence, timestamp, ...factory(sequence, timestamp) } as SessionTreeRecord;
     this.projection.applyRecord(record);
-    const persisted = this.enqueueWrite(record, flush, persistAfter);
+    const persisted = this.enqueueWrite(record, flush);
     if (flush) await persisted;
     return sequence;
   }
@@ -147,7 +146,6 @@ export class SessionTreeRepository {
   async appendBatch(
     factory: (sequence: number, timestamp: number) => SessionTreeEvent[],
     flush = false,
-    persistAfter?: Promise<unknown>,
   ): Promise<number> {
     this.assertWritable();
     if (flush) {
@@ -158,7 +156,7 @@ export class SessionTreeRepository {
     const timestamp = Date.now();
     const record: SessionTreeRecord = { sequence, timestamp, type: "batch", events: factory(sequence, timestamp) };
     this.projection.applyRecord(record);
-    const persisted = this.enqueueWrite(record, flush, persistAfter);
+    const persisted = this.enqueueWrite(record, flush);
     if (flush) await persisted;
     return sequence;
   }
@@ -169,11 +167,8 @@ export class SessionTreeRepository {
     if (flush) await this.eventsHandle.sync();
   }
 
-  private enqueueWrite(record: SessionTreeRecord, flush: boolean, persistAfter?: Promise<unknown>): Promise<void> {
-    const persisted = this.queue.then(async () => {
-      await persistAfter;
-      await this.write(record, flush);
-    });
+  private enqueueWrite(record: SessionTreeRecord, flush: boolean): Promise<void> {
+    const persisted = this.queue.then(() => this.write(record, flush));
     this.queue = persisted.catch((cause) => {
       this.writeFailure ??= cause instanceof Error ? cause : new Error(String(cause));
       throw this.writeFailure;

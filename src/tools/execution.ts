@@ -1,6 +1,5 @@
-import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { realPath, resolveWorkspacePath } from "./path-safety.js";
 
 export type ToolEffect = "read" | "write" | "process" | "interactive";
 export type ToolExecutionMode = "parallel" | "sequential";
@@ -92,7 +91,7 @@ function normalizeResourcePath(value: string): string {
 
 async function canonicalTarget(target: string): Promise<string> {
   try {
-    return normalizeResourcePath(await realpath(target));
+    return normalizeResourcePath(await realPath(target));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -104,7 +103,7 @@ async function canonicalTarget(target: string): Promise<string> {
     if (next === parent) return normalizeResourcePath(target);
     parent = next;
     try {
-      return normalizeResourcePath(path.join(await realpath(parent), ...missing));
+      return normalizeResourcePath(path.join(await realPath(parent), ...missing));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

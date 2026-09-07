@@ -7,17 +7,12 @@ export type {
   MessageEntry,
   ToolExecutionEntry,
   CompactionEntry,
+  FileEditEntry,
   CompactionReason,
   RetainedTurn,
   SessionTreeEvent,
   SessionTreeRecord,
 } from "./session-tree/model.js";
-export type {
-  StagedWorkspaceState,
-  WorkspaceEntry,
-  WorkspaceState,
-  WorkspaceStatePolicy,
-} from "./workspace-state/model.js";
 export type {
   AgentTask,
   AgentTaskRun,

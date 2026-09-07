@@ -140,24 +140,24 @@ Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/au
 
 新建和切换 Session 都保持工作区文件不变。`/new` 不复制消息、不调用模型，也不总结历史。
 
-### Turn 连接交互、执行与工作区状态
+### Turn 连接交互、执行与文件修改
 
-每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和 workspace-state ID。这个 workspace state 是用户 turn 开始前的检查点。
+每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和内置工具的文件编辑记录。`edit` 或 `write` 在一个 turn 内首次修改某个项目文件之前，Thread 保存其原始字节和权限，或记录它原先不存在。Implementation-worker 的编辑归入父 turn。
 
-Turn 结束时，Thread 捕获供下一次发送使用的新检查点；进程中的第一个 turn 会先做启动扫描。失败或中断的 turn 会被补成合法对话前缀并继续作为 live tip，让下一条请求从真实发生过的历史继续。
+打开项目、开始和结束 turn 都不会为了 checkpoint 扫描工作区，只有内置编辑工具实际改动的文件才会备份。Bash、脚本和其他工具的改动不被跟踪。失败或中断的 turn 保留已保存的编辑记录，并被补成合法对话前缀继续作为 live tip，让下一条请求从真实发生过的历史继续。
 
 ### Rewind 产生分支
 
 `/rewind` 列出 active live path 上的用户 turn。选择一个 turn 后，Thread 会：
 
-1. 校验并恢复它的 turn 前工作区检查点；
+1. 校验所需文件备份，将该 turn 及当前路径后续 turn 记录的文件，恢复到这段历史中首次内置编辑之前的状态；
 2. 把 Session live tip 移到该 turn 的父节点；
 3. 从新路径重建上下文；
 4. 在历史中保留所选 turn 及其所有后续内容。
 
-下一条消息会自然生成新的子路径。检查点缺失或损坏时，操作会在 live tip 移动之前失败。
+下一条消息会自然生成新的子路径。文件备份缺失或损坏时，操作会在恢复文件及移动 live tip 之前失败。没有文件记录的 turn 仍然可以回退对话。
 
-检查点来自上一个已完成 turn。Thread 空闲期间、检查点生成之后发生的手工修改，不属于下一 turn 的“turn 前状态”。
+回退直接覆盖已记录文件，不检测同一路径后续的手工或 bash 修改。内置工具创建的文件会被删除，其他文件不处理，新建的父目录可能保留为空目录。备份对应本 turn 首次内置编辑之前的状态，并非用户发送消息时的整工作区快照。
 
 ### 搜索与召回
 
@@ -189,7 +189,7 @@ Agent 通过两个工具使用项目记忆：
 | `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | 在共享工作区完成一到两个写入范围互不重叠的独立叶子任务，由主 agent 检查文件与测试，并按需要求返工。 |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | 在后台审阅互动与执行轨迹，寻找证据充分、可跨项目复用的隐含用户模式和经验，维护全局记忆。 |
 
-Worker 直接编辑当前工作区，`writeScope` 是协调边界。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。恢复整个工作区使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
+Worker 直接编辑当前工作区，`writeScope` 是协调边界。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。撤销已记录的内置文件编辑使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
 
 Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。它保持静默，单次运行最多五分钟；大多数审阅都应保持记忆不变。详见[全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)。
 
@@ -202,7 +202,7 @@ Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。�
 | `thread auth status` | 查看订阅认证状态。 |
 | `/new` | 创建空 Session，保持工作区文件不变。 |
 | `/session [<session-id>]` | 列出或恢复 Session。 |
-| `/rewind [<turn-id-or-user-entry-id>]` | 选择或直接恢复 turn 前检查点。 |
+| `/rewind [<turn-id-or-user-entry-id>]` | 撤销已记录的内置文件编辑，并回退对话。 |
 | `/compact` | 压缩 active live context。 |
 | `/model [all\|list [provider]\|<provider>/<model>]` | 查看或选择主模型。 |
 | `/agent` | 选择 Agent，再进入它的设置。 |
@@ -239,14 +239,16 @@ Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <32
 ~/.thread/projects/<project-id>/
 ├── project.json
 ├── session-tree/{tree.json,events.jsonl}
-├── workspace-states/{states,blobs}
+├── file-history/blobs/
 ├── session-search/
 └── agent-tasks/events.jsonl
 ```
 
-Session Tree 与 Agent Task 分别使用独立的 append-only log，workspace state 使用内容寻址。`session-search` 是可从 Session Tree 重建的派生索引。检查点会排除 Thread 元数据和常见生成目录，例如 `.git`、`.thread`、`node_modules`、`dist`、`build`、`coverage`、`target`、虚拟环境和框架缓存。
+Session Tree 与 Agent Task 分别使用独立的 append-only log。文件编辑记录保存在 Session Tree 中，引用按内容寻址的原文件备份；备份记录和内容不进入模型上下文、历史检索结果或可见 transcript。`session-search` 是可从 Session Tree 重建的派生索引。
 
-`/rewind` 永远不会恢复排除路径、项目外路径、进程、数据库、网络副作用或其他外部状态。Thread 不实现通用版本控制。
+内置工具显式编辑的项目文件都会被记录，包括 `.gitignore` 忽略的文件和生成目录内的文件；全局记忆与 Thread 自身状态不参与文件历史。`/rewind` 不跟踪 bash、脚本、其他工具、进程或网络副作用。Thread 不实现通用版本控制。
+
+项目和 Session Tree 使用第 2 版数据格式。旧项目数据会被明确拒读，报错给出其位置；Thread 不迁移或自动删除旧数据，需要新的项目状态才能使用新格式。
 
 ## 开发
 
@@ -261,7 +263,7 @@ bun run build
 ```text
 src/session-tree/     持久化项目历史与路径
 src/session-recall/   历史检索、派生索引与本地 embedding
-src/workspace-state/  检查点捕获、校验、恢复与 GC
+src/file-history/     内置文件编辑备份、恢复、校验与 GC
 src/context/          live-path 投影与 compaction
 src/agent/            模型 step、工具调度、journal 与 turn
 src/agent-task/       共享工作区 worker 生命周期与任务 journal

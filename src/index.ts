@@ -6,8 +6,8 @@ export { SessionTreeRepository } from "./session-tree/repository.js";
 export { SessionTreeProjection, SessionTreeCorruptionError } from "./session-tree/projection.js";
 export { SessionRecallService, type SessionRecallOptions } from "./session-recall/service.js";
 export type { RecallSearchResult, RecallSearchHit, SessionTurnDetail, ReadOptions } from "./session-recall/types.js";
-export { WorkspaceStateService } from "./workspace-state/service.js";
-export { WorkspaceStateRepository } from "./workspace-state/repository.js";
+export { FileHistoryService, type FileEditTracker, type FileContents } from "./file-history/service.js";
+export { FileHistoryStore } from "./file-history/store.js";
 export { ContextBuilder, type BuiltContext } from "./context/builder.js";
 export {
   ContextCompactionService,

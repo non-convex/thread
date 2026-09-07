@@ -40,7 +40,7 @@ async function fixture() {
   const tree = new SessionTreeService(repository);
   await tree.initialize();
   const turn = async (text: string, status: "completed" | "failed" | "interrupted" = "completed") => {
-    const started = await tree.startTurn(text, "workspace_test");
+    const started = await tree.startTurn(text);
     await tree.appendMessage({ turnId: started.id, message: fauxAssistantMessage(fauxText(`已处理：${text}`)) });
     await tree.finishTurn(started.id, status);
     return started.id;
@@ -64,7 +64,7 @@ test("Chinese BM25, exact identifiers, retained branches and current-turn exclus
     assert.equal((await recall.search(["失败的尝试"])).hits[0]?.pathStatus, "current-session-off-path");
     await f.tree.createSession();
     assert.equal((await recall.search(["失败的尝试"])).hits[0]?.pathStatus, "other-session");
-    const running = await f.tree.startTurn("uniquesearchtokenzxq", "ws");
+    const running = await f.tree.startTurn("uniquesearchtokenzxq");
     await f.tree.appendToolExecution({ turnId: running.id, assistantEntryId: "assistant1", toolIndex: 0,
       toolCallId: "call1", toolName: "session_search", effectiveArgs: { queries: ["uniquesearchtokenzxq"] }, replay: "safe" });
     assert.equal((await recall.search(["uniquesearchtokenzxq"])).hits.length, 0);
@@ -79,7 +79,7 @@ test("one extraction policy excludes recall copies and deduplicates tool calls w
   const f = await fixture();
   const recall = new SessionRecallService(f.tree, { semantic: false });
   try {
-    const running = await f.tree.startTurn("原始问题", "ws");
+    const running = await f.tree.startTurn("原始问题");
     const message = fauxAssistantMessage(fauxText("正文"));
     message.content.push({ type: "thinking", thinking: "private-thinking-marker" },
       { type: "toolCall", id: "bash1", name: "bash", arguments: { command: "exact-command" } },

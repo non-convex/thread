@@ -2,7 +2,7 @@
   "name": "thread",
   "version": "0.1.0",
   "private": true,
-  "description": "A coding-agent runtime with a persistent project Session Tree and turn-level workspace rewind.",
+  "description": "A coding-agent runtime with a persistent project Session Tree and turn-level file edit rewind.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -37,7 +37,7 @@
   },
   "packageManager": "bun@1.3.14",
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.85.1",
     "@huggingface/tokenizers": "0.1.3",
     "@opentui/core": "0.5.7",
     "@opentui/solid": "0.5.7",

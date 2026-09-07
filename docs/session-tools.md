@@ -165,7 +165,7 @@ omitted: thinking, tool calls, tool results
 
 [assistant]
 rewind 只移动当前路径的末端，旧的 turn 和分支仍然保留，可以继续搜索和读取。
-工作区文件会恢复到对应的检查点。
+该 turn 及后续 turn 记录的内置文件编辑会被撤销；未记录文件不处理。
 ```
 
 `[path turn 1/1]` 表示这次只返回了一轮。`omitted` 列出本轮存在、但按本次参数省略的内容。如果没有这类内容，就不显示这一行。

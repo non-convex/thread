@@ -1,10 +1,10 @@
 import type { Message } from "@earendil-works/pi-ai";
 
-export const SESSION_TREE_FORMAT = "thread-session-tree-v1" as const;
+export const SESSION_TREE_FORMAT = "thread-session-tree-v2" as const;
 
 export interface SessionTree {
   format: typeof SESSION_TREE_FORMAT;
-  formatVersion: 1;
+  formatVersion: 2;
   id: string;
   projectId: string;
   rootId: string;
@@ -26,7 +26,6 @@ export interface Turn {
   sessionId: string;
   parentTurnId: string | null;
   userEntryId: string;
-  workspaceStateId: string;
   status: TurnStatus;
   startedAt: number;
   finishedAt?: number;
@@ -61,6 +60,12 @@ export interface RetainedTurn {
   messages: Message[];
 }
 
+export interface FileEditEntry extends EntryBase {
+  type: "file_edit";
+  path: string;
+  before: { blobId: string; mode: number } | null;
+}
+
 export type CompactionReason = "manual" | "threshold" | "overflow";
 
 export interface CompactionEntry extends EntryBase {
@@ -76,7 +81,7 @@ export interface CompactionEntry extends EntryBase {
   reason: CompactionReason;
 }
 
-export type SessionEntry = MessageEntry | ToolExecutionEntry | CompactionEntry;
+export type SessionEntry = MessageEntry | ToolExecutionEntry | CompactionEntry | FileEditEntry;
 
 export type SessionTreeEvent =
   | { type: "tree_created"; tree: SessionTree }

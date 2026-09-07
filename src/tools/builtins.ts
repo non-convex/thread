@@ -1,8 +1,6 @@
-import { lstat, writeFile, mkdir } from "node:fs/promises";
-import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { workspacePathClaim } from "./execution.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { updateFile } from "./file-write.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
@@ -45,23 +43,7 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
       context.signal.throwIfAborted();
       const inputPath = args.path.trim();
       if (!inputPath) throw new Error("path cannot be empty");
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, {
-        forWrite: true,
-        ...(context.writableExternalPaths
-          ? { allowedOutsidePaths: context.writableExternalPaths }
-          : {}),
-      });
-      let existed = false;
-      try {
-        const info = await lstat(target);
-        if (info.isDirectory() || !info.isFile()) throw new Error(`Not a file: ${inputPath}`);
-        existed = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, args.content, "utf8");
-      const bytes = Buffer.byteLength(args.content, "utf8");
+      const { existed, bytes } = await updateFile(context, inputPath, () => Buffer.from(args.content, "utf8"));
       return ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`);
     } catch (error) {
       return fail(error);

@@ -60,7 +60,7 @@ completed ──request_revision──▶ running
 
 任务属于创建它的主回合。主回合结束前，运行中的任务必须被等待或取消。关闭应用或重启时发现 v2 历史中仍有 `running` 任务，也会把它标记为 `cancelled`。Thread 不让 worker 跨回合存活，也不提供后台 mailbox。
 
-失败、超时和取消都只停止 worker，不恢复文件。主 agent 必须检查共享目录中的部分修改；需要整体恢复时使用现有 `/rewind`。
+失败、超时和取消都只停止 worker，不恢复文件。主 agent 必须检查共享目录中的部分修改；需要撤销内置 `edit`、`write` 修改时使用 `/rewind`；bash 修改不被跟踪。
 
 ## 执行与记录
 
@@ -80,7 +80,7 @@ agent-tasks/
 
 旧 v1 记录、ChangeSet 清单和私有工作区数据不会迁移或读取。若现有 `events.jsonl` 不是 v2 格式，启动会快速失败，避免把旧语义误解成共享工作区任务。
 
-Workspace State 不再参与 subagent 合入，只继续服务于主回合 checkpoint、`/rewind` 恢复、完整性校验和垃圾回收。
+Worker 和主 agent 共用文件历史入口。内置 `edit`、`write` 写入前的记录保存在父 turn 的 Session Tree 中，每个 turn 对同一路径只保存首次编辑前的状态；worker 的 bash 改动不被跟踪。返工、失败和取消均保留已保存的编辑记录。
 
 ## 一次典型流程
 
@@ -98,5 +98,5 @@ Workspace State 不再参与 subagent 合入，只继续服务于主回合 check
 - `src/agent-task/task-runner.ts`：以项目根目录运行一个 worker。
 - `src/agent-task/model.ts` 与 `repository.ts`：v2 状态、事件和持久化。
 - `src/agent/step-runner.ts`：主 agent 与 worker 复用的单步执行核心。
-- `src/workspace-state/`：与 subagent 解耦后的 checkpoint、恢复、校验和 GC。
+- `src/file-history/`：主 agent 和 worker 共用的内置编辑备份、恢复、校验和 GC。
 - `src/ui/`：精简的任务卡片和 trace 展示。

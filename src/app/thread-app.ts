@@ -3,6 +3,7 @@ import { AgentRuntime } from "../agent/runtime.js";
 import {
   DEFAULT_COMMIT_ATTRIBUTION,
   DEFAULT_SYSTEM_PROMPT,
+  FILE_EDITING_PROMPT,
   formatCommitAttributionPrompt,
 } from "../agent/system-prompt.js";
 import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
@@ -30,7 +31,7 @@ import {
   viewResult,
   type CommandResult,
 } from "../commands/types.js";
-import type { ModelSelectionConfig } from "../config/thread-config.js";
+import { getThreadHome, type ModelSelectionConfig } from "../config/thread-config.js";
 import type { ThreadState } from "../config/thread-state.js";
 import { ContextBuilder } from "../context/builder.js";
 import { createDreamerProfile, DEFAULT_DREAMER_THINKING_LEVEL, DREAMER_PROFILE_ID } from "../dreamer/profile.js";
@@ -58,8 +59,7 @@ import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
 import { ToolRegistry } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
-import { WorkspaceStateRepository } from "../workspace-state/repository.js";
-import { WorkspaceStateService } from "../workspace-state/service.js";
+import { FileHistoryService } from "../file-history/service.js";
 import { createRuntime } from "./create-runtime.js";
 import { MainAgentController } from "./main-agent-controller.js";
 import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
@@ -76,7 +76,6 @@ export interface ThreadAppOptions {
   commitAttribution?: string;
   cacheRetention?: CacheRetention;
   skills?: LoadedSkills;
-  workspaceExcludedPaths?: readonly string[];
   implementationWorker?: {
     enabled: boolean;
     model?: ModelClient;
@@ -100,7 +99,7 @@ export class ThreadApp {
   readonly project: Project;
   readonly rootPath: string;
   readonly sessionTree: SessionTreeService;
-  readonly workspaceState: WorkspaceStateService;
+  readonly fileHistory: FileHistoryService;
   readonly recall: SessionRecallService;
   readonly agentProfiles: AgentProfileRegistry;
   readonly agentTasks: AgentTaskOrchestrator;
@@ -135,7 +134,7 @@ export class ThreadApp {
     project: Project;
     repository: SessionTreeRepository;
     tree: SessionTreeService;
-    workspace: WorkspaceStateService;
+    fileHistory: FileHistoryService;
     builder: ContextBuilder;
     recall: SessionRecallService;
     skills: LoadedSkills;
@@ -146,7 +145,7 @@ export class ThreadApp {
     this.rootPath = values.project.rootPath;
     this.repository = values.repository;
     this.sessionTree = values.tree;
-    this.workspaceState = values.workspace;
+    this.fileHistory = values.fileHistory;
     this.contextBuilder = values.builder;
     this.recall = values.recall;
     this.events.on("turn_end", () => this.recall.turnFinished());
@@ -182,6 +181,7 @@ export class ThreadApp {
       this.agentProfiles,
       values.project.rootPath,
       this.workerSettings,
+      this.fileHistory,
     );
     this.dreamer = new DreamerScheduler(
       values.project.rootPath,
@@ -214,11 +214,7 @@ export class ThreadApp {
       const tree = new SessionTreeService(repository);
       await tree.initialize();
       const globalMemory = await GlobalMemorySnapshots.open([...tree.projection.sessions.keys()]);
-      const workspaceRepository = new WorkspaceStateRepository(project, {
-        ...(options.workspaceExcludedPaths ? { excludedPaths: options.workspaceExcludedPaths } : {}),
-      });
-      await workspaceRepository.initialize();
-      const workspace = new WorkspaceStateService(workspaceRepository);
+      const fileHistory = new FileHistoryService(project, tree, [getThreadHome()]);
       const builder = new ContextBuilder(tree);
       recall = new SessionRecallService(tree, options.search);
       const skills = options.skills ?? await loadSkills();
@@ -227,7 +223,7 @@ export class ThreadApp {
         project,
         repository,
         tree,
-        workspace,
+        fileHistory,
         builder,
         recall,
         skills,
@@ -469,6 +465,7 @@ export class ThreadApp {
     const skills = formatSkillsSection(this.loadedSkills.skills);
     const systemPrompt = [
       this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      FILE_EDITING_PROMPT,
       formatCommitAttributionPrompt(this.commitAttribution),
       this.agentTasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "",
       skills,
@@ -491,7 +488,7 @@ export class ThreadApp {
       rootPath: this.rootPath,
       systemPrompt: profile.systemPrompt,
       tree: this.sessionTree,
-      workspace: this.workspaceState,
+      fileHistory: this.fileHistory,
       contextBuilder: this.contextBuilder,
       tools: profile.tools,
       extensions: this.events,
@@ -769,7 +766,7 @@ export class ThreadApp {
         if (args.length === 0) {
           const items = buildRewindItems(this.commandContext(options.signal));
           return { kind: "command", result: items.length
-            ? viewResult("Choose a current-path user message to rewind before.", { type: "rewind", items })
+            ? viewResult("Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten.", { type: "rewind", items })
             : ephemeral("(no user turns on the current live path)") };
         }
         const candidate = await this.rewindTo(args[0]!);
@@ -844,8 +841,8 @@ export class ThreadApp {
   async rewindTo(turnIdOrUserEntryId: string) {
     this.sessionTree.requireIdle();
     const candidate = this.sessionTree.resolveRewindCandidate(turnIdOrUserEntryId);
-    await this.workspaceState.verify(candidate.workspaceStateId);
-    await this.workspaceState.restore(candidate.workspaceStateId);
+    const livePath = this.sessionTree.livePath();
+    await this.fileHistory.restore(livePath.slice(livePath.findIndex((turn) => turn.id === candidate.turnId)));
     const turn = this.sessionTree.projection.turns.get(candidate.turnId);
     if (!turn) throw new Error(`Rewind target disappeared: ${candidate.turnId}`);
     await this.sessionTree.moveLiveTipForRewind(turn.parentTurnId);
@@ -867,28 +864,28 @@ export class ThreadApp {
         issues.push(`turn ${turn.id} has no leading user entry`);
       }
       try {
-        await this.workspaceState.verify(turn.workspaceStateId);
+        await this.fileHistory.verify(turn.id);
       } catch (error) {
-        issues.push(`turn ${turn.id} workspace state: ${error instanceof Error ? error.message : String(error)}`);
+        issues.push(`turn ${turn.id} file history: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     return issues;
   }
 
-  cleanupWorkspaceStates() {
-    const referenced = new Set<string>();
-    for (const turn of this.sessionTree.projection.turns.values()) referenced.add(turn.workspaceStateId);
-    for (const stateId of this.workspaceState.referencedStateIds()) referenced.add(stateId);
-    return this.workspaceState.cleanup(referenced);
+  cleanupFileHistory() {
+    this.sessionTree.requireIdle();
+    return this.fileHistory.garbageCollect();
   }
 
   async close(): Promise<void> {
     const failures: unknown[] = [];
     const collect = (task: Promise<unknown>) => task.catch((error) => failures.push(error));
     // Start cancellation immediately, but do not make optional background work
-    // delay the durable Workspace and Session Tree shutdown sequence.
-    const background = [collect(this.dreamer.close()), collect(this.agentTasks.close()), collect(this.recall.close())];
-    await collect(this.workspaceState.settle());
+    // delay the Session Tree shutdown after worker edits have settled.
+    const workers = collect(this.agentTasks.close());
+    const background = [collect(this.dreamer.close()), collect(this.recall.close())];
+    await workers;
+    await collect(this.fileHistory.settle());
     await collect(this.repository.close());
     await Promise.all(background);
     if (failures.length === 1) throw failures[0];

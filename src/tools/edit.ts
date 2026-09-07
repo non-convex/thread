@@ -1,7 +1,6 @@
-import { lstat, readFile, writeFile } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
 import { workspacePathClaim } from "./execution.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { updateFile } from "./file-write.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 export type EditArgs = {
@@ -81,43 +80,29 @@ export const editTool: AgentTool<EditArgs> = {
       if (!oldText) throw new Error("oldText cannot be empty");
       if (oldText === newText) throw new Error("oldText and newText are identical; nothing to change");
 
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, {
-        forWrite: true,
-        ...(context.writableExternalPaths
-          ? { allowedOutsidePaths: context.writableExternalPaths }
-          : {}),
-      });
-      let info;
-      try {
-        info = await lstat(target);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(`File not found: ${inputPath}`);
+      await updateFile(context, inputPath, (before) => {
+        if (!before) throw new Error(`File not found: ${inputPath}`);
+        const buffer = before.content;
+        if (buffer.includes(0)) throw new Error(`Binary file (${buffer.length} bytes): ${inputPath}`);
+
+        const { bom, text } = splitBom(buffer.toString("utf8"));
+        const ending = detectLineEnding(text);
+        const content = normalizeToLF(text);
+        const first = content.indexOf(oldText);
+        if (first < 0) {
+          throw new Error(
+            "oldText was not found. Re-read the file and copy the exact text; whitespace must match.",
+          );
         }
-        throw error;
-      }
-      if (info.isDirectory() || !info.isFile()) throw new Error(`Not a file: ${inputPath}`);
+        if (content.indexOf(oldText, first + oldText.length) >= 0) {
+          throw new Error(
+            `oldText occurs ${countOccurrences(content, oldText)} times; include more surrounding lines to make it unique`,
+          );
+        }
 
-      const buffer = await readFile(target);
-      if (buffer.includes(0)) throw new Error(`Binary file (${info.size} bytes): ${inputPath}`);
-
-      const { bom, text } = splitBom(buffer.toString("utf8"));
-      const ending = detectLineEnding(text);
-      const content = normalizeToLF(text);
-      const first = content.indexOf(oldText);
-      if (first < 0) {
-        throw new Error(
-          "oldText was not found. Re-read the file and copy the exact text; whitespace must match.",
-        );
-      }
-      if (content.indexOf(oldText, first + oldText.length) >= 0) {
-        throw new Error(
-          `oldText occurs ${countOccurrences(content, oldText)} times; include more surrounding lines to make it unique`,
-        );
-      }
-
-      const next = `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`;
-      await writeFile(target, `${bom}${restoreLineEndings(next, ending)}`, "utf8");
+        const next = `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`;
+        return Buffer.from(`${bom}${restoreLineEndings(next, ending)}`, "utf8");
+      });
       return ok(`Replaced 1 occurrence in ${inputPath}`);
     } catch (error) {
       return fail(error);

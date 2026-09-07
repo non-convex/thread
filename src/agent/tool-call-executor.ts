@@ -9,6 +9,7 @@ import {
 import type { AgentTool, ToolContext, ToolRegistry, ToolResult } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
 import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import type { FileEditTracker } from "../file-history/service.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 
 export interface PreparedToolCall {
@@ -57,6 +58,7 @@ export class ToolCallExecutor {
     private readonly extensions: ExtensionEvents,
     private readonly askPresenter?: () => AskPresenter | undefined,
     private readonly writableExternalPaths: readonly string[] = [],
+    private readonly fileHistory?: (executionId: string) => FileEditTracker,
   ) {}
 
   async prepare(input: {
@@ -163,6 +165,7 @@ export class ToolCallExecutor {
     if (!result && prepared.tool) {
       const ask = this.askPresenter?.();
       const context: ToolContext = {
+        ...(this.fileHistory ? { fileHistory: this.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
         ...(this.writableExternalPaths.length > 0
           ? { writableExternalPaths: this.writableExternalPaths }

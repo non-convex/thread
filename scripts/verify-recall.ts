@@ -40,7 +40,7 @@ const signal = AbortSignal.timeout(15 * 60_000);
 try {
   const ids: string[] = [];
   for (const item of recallCorpus) {
-    const turn = await tree.startTurn(item.text, "ws");
+    const turn = await tree.startTurn(item.text);
     await tree.finishTurn(turn.id, "completed");
     ids.push(turn.id);
   }

@@ -27,7 +27,7 @@ try {
   process.env.THREAD_HOME = home;
   const seed = await ThreadApp.open({ rootPath: root, search: { semantic: false }, skills: { skills: [], diagnostics: [] } });
   try {
-    const turn = await seed.sessionTree.startTurn("会话历史采用追加日志，旧记录会保留下来。文件 src/history/records.ts，错误码 E_HISTORY_271。", "ws");
+    const turn = await seed.sessionTree.startTurn("会话历史采用追加日志，旧记录会保留下来。文件 src/history/records.ts，错误码 E_HISTORY_271。");
     await seed.sessionTree.finishTurn(turn.id, "completed");
     turnId = turn.id;
     manifestPath = path.join(seed.project.statePath, "session-search/manifest.json");

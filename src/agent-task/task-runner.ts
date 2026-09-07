@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Usage } from "@earendil-works/pi-ai";
 import { AgentStepRunner } from "../agent/step-runner.js";
+import type { FileHistoryService } from "../file-history/service.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import { safeUiEvent, type AgentTaskLiveEvent, type UiEvent, type UiEventSink } from "../ui/events.js";
@@ -43,6 +44,7 @@ export class ImplementationTaskRunner {
   constructor(
     private readonly repository: AgentTaskRepository,
     private readonly rootPath: string,
+    private readonly fileHistory?: FileHistoryService,
   ) {}
 
   async run(
@@ -63,7 +65,10 @@ export class ImplementationTaskRunner {
     const signal = AbortSignal.any([parentSignal, timeout]);
     const journal = new AgentTaskJournal(this.repository, taskId);
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
-    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents());
+    const toolRunner = new ToolCallExecutor(
+      this.rootPath, profile.tools, new ExtensionEvents(), undefined, [],
+      this.fileHistory ? () => this.fileHistory!.forTurn(task.parentTurnId) : undefined,
+    );
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     const maxOutputTokens = Math.min(profile.model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)));
     const stepRunner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);

@@ -140,24 +140,24 @@ Each Session saves the end of its current path, or live tip. All Sessions use th
 
 Creating and switching Sessions leave workspace files unchanged. `/new` does not copy messages, call the model, or summarize history.
 
-### Turns connect interaction, execution, and workspace state
+### Turns connect interaction, execution, and file edits
 
-Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and a workspace-state ID. The workspace state is the checkpoint before that user turn.
+Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and built-in file edits. Before `edit` or `write` first changes a project file in a turn, Thread saves its original bytes and permissions, or records that it did not exist. Implementation-worker edits belong to the parent turn.
 
-Thread captures the next checkpoint when a turn ends and reuses it for the next send. The first turn in a process performs a bootstrap scan. Interrupted and failed turns are sealed into valid conversation prefixes and remain the live tip, so the next request can continue from factual history.
+Opening a project and starting or finishing a turn never scan the workspace for checkpoints. Only files actually changed by the built-in editing tools are backed up. Bash commands, scripts, and other tools are not tracked. Interrupted and failed turns retain their saved file edits and are sealed into valid conversation prefixes, so the next request can continue from factual history.
 
 ### Rewind creates a branch
 
 `/rewind` lists user turns on the active live path. Selecting one:
 
-1. verifies and restores its pre-turn workspace checkpoint;
+1. verifies the required file backups, then restores each file recorded by the selected turn or later turns on the active path to its state before the first selected built-in edit;
 2. moves the Session live tip to the turn's parent;
 3. rebuilds context from that path; and
 4. keeps the selected turn and all later turns in history.
 
-The next message creates a new child path. Missing or corrupt state fails before the live tip moves.
+The next message creates a new child path. Missing or corrupt backups fail before files are restored or the live tip moves. A turn without recorded file changes can still rewind the conversation.
 
-A checkpoint comes from the previous completed turn. Manual edits made after that checkpoint while Thread is idle are not part of the next turn's pre-turn state.
+Rewind directly overwrites recorded files without checking for later manual or bash edits to those same paths. Files created by the selected built-in edits are removed; other files are left alone, and newly created parent directories may remain empty. The saved state is the state before the first built-in edit in a turn, not a snapshot of the whole workspace when the prompt was sent.
 
 ### Search and recall
 
@@ -189,7 +189,7 @@ Stable information that applies across projects lives in one Markdown file, `${T
 | `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | Review interactions and execution traces in the background for well-supported implicit user patterns and lessons useful across projects, maintaining global memory. |
 
-Workers edit the current workspace directly, with `writeScope` serving as a coordination boundary. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to restore the whole workspace. See [the subagent architecture](./docs/subagent-architecture.md).
+Workers edit the current workspace directly, with `writeScope` serving as a coordination boundary. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the subagent architecture](./docs/subagent-architecture.md).
 
 Dreamer starts after ten ended turns and ten continuous minutes of Main being idle. It stays silent and runs for at most five minutes; most reviews should leave memory unchanged. See [global memory and Dreamer architecture](./docs/global-memory-architecture.md).
 
@@ -202,7 +202,7 @@ Dreamer starts after ten ended turns and ten continuous minutes of Main being id
 | `thread auth status` | Show subscription authentication status. |
 | `/new` | Create an empty Session; keep workspace files unchanged. |
 | `/session [<session-id>]` | List Sessions or resume one. |
-| `/rewind [<turn-id-or-user-entry-id>]` | Choose or directly restore a pre-turn checkpoint. |
+| `/rewind [<turn-id-or-user-entry-id>]` | Undo recorded built-in file edits and rewind the conversation. |
 | `/compact` | Compact the active live context. |
 | `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or select the main model. |
 | `/agent` | Choose an agent, then configure it. |
@@ -239,14 +239,16 @@ Project state lives outside the workspace:
 ~/.thread/projects/<project-id>/
 ├── project.json
 ├── session-tree/{tree.json,events.jsonl}
-├── workspace-states/{states,blobs}
+├── file-history/blobs/
 ├── session-search/
 └── agent-tasks/events.jsonl
 ```
 
-Session Tree and Agent Task records are independent append-only logs. Workspace states are content-addressed. `session-search` holds derived indexes that can be rebuilt from the Session Tree. Checkpoints exclude Thread metadata and common generated directories such as `.git`, `.thread`, `node_modules`, `dist`, `build`, `coverage`, `target`, virtual environments, and framework caches.
+Session Tree and Agent Task records are independent append-only logs. File-edit records live in the Session Tree and reference content-addressed backups. Backup records and contents do not enter model context, recall results, or the visible transcript. `session-search` holds derived indexes that can be rebuilt from the Session Tree.
 
-`/rewind` never restores excluded paths, paths outside the project, processes, databases, network effects, or other external state. Thread does not implement general-purpose version control.
+The built-in tools track explicitly edited project files even when `.gitignore` ignores them or they are inside a generated directory. Global memory and Thread state remain outside file history. `/rewind` does not track bash, scripts, other tools, processes, or network effects. Thread does not implement general-purpose version control.
+
+Project and Session Tree data use format version 2. Older project data is rejected with its location in the error; Thread neither migrates nor automatically deletes it. Start with fresh project state to use the new format.
 
 ## Development
 
@@ -261,7 +263,7 @@ Main code boundaries:
 ```text
 src/session-tree/     persistent project history and paths
 src/session-recall/   history retrieval, derived indexes, and local embeddings
-src/workspace-state/  checkpoint capture, verification, restore, and GC
+src/file-history/     built-in file edit backups, restore, verification, and GC
 src/context/          live-path projection and compaction
 src/agent/            model steps, tool scheduling, journals, and turns
 src/agent-task/       shared-workspace worker lifecycle and task journal

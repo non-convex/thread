@@ -1,3 +1,5 @@
+export const FILE_EDITING_PROMPT = `Prefer the built-in edit tool for partial file changes and write for creating or replacing files. Thread records project files before these tools modify them, including edits by implementation workers, so /rewind can restore them. File changes made through bash commands, scripts, or other tools are not tracked. Use bash for commands that require it, such as builds and tests; do not use shell redirection, sed, or scripts in place of edit/write for ordinary file edits. Rewind directly restores recorded files and may overwrite later manual or bash changes to those same files. Global memory and Thread state are outside project file history.`;
+
 export const DEFAULT_COMMIT_ATTRIBUTION =
   "Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>";
 

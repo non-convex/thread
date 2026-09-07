@@ -53,7 +53,6 @@ export type UiEvent =
       retainedSteps?: number;
       tokensSaved?: number;
     }
-  | { type: "workspace_checkpoint_started" }
   | {
       type: "turn_finished";
       outcome: "completed" | "interrupted" | "failed";

@@ -17,10 +17,10 @@ test("session_read pages a large historical turn without losing text or splittin
   const recall = new SessionRecallService(tree, { semantic: false });
   try {
     await tree.initialize();
-    const ancestor = await tree.startTurn("ancestor request", "ws");
+    const ancestor = await tree.startTurn("ancestor request");
     await tree.appendMessage({ turnId: ancestor.id, message: fauxAssistantMessage(fauxText("ancestor answer")) });
     await tree.finishTurn(ancestor.id, "completed");
-    const turn = await tree.startTurn("inspect history", "ws");
+    const turn = await tree.startTurn("inspect history");
     const originals: string[] = [];
     for (let index = 0; index < 12; index++) {
       const text = `begin-${index}\n${"历史😀".repeat(6_000)}\nend-${index}`;
@@ -32,7 +32,7 @@ test("session_read pages a large historical turn without losing text or splittin
         content: [{ type: "text", text }], isError: false, timestamp: Date.now() } });
     }
     await tree.finishTurn(turn.id, "completed");
-    const later = await tree.startTurn("later request", "ws");
+    const later = await tree.startTurn("later request");
     const laterText = "later answer: " + "中文😀".repeat(8_000);
     await tree.appendMessage({ turnId: later.id, message: fauxAssistantMessage(fauxText(laterText)) });
     await tree.finishTurn(later.id, "completed");

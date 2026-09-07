@@ -14,10 +14,15 @@ function comparable(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function inside(root: string, candidate: string): boolean {
-  const normalizedRoot = comparable(root);
-  const normalizedCandidate = comparable(candidate);
-  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${path.sep}`);
+/** Bun on Windows can return a bare drive letter for a volume root. */
+export async function realPath(target: string): Promise<string> {
+  const resolved = await realpath(target);
+  return process.platform === "win32" && /^[A-Za-z]:$/.test(resolved) ? `${resolved}\\` : resolved;
+}
+
+export function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(comparable(root), comparable(candidate));
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
 function samePath(left: string, right: string): boolean {
@@ -25,7 +30,7 @@ function samePath(left: string, right: string): boolean {
 }
 
 function confine(root: string, candidate: string, inputPath: string, kind: "path" | "resolved" | "parent"): void {
-  if (inside(root, candidate)) return;
+  if (isPathInside(root, candidate)) return;
   if (kind === "resolved") throw new Error(`Path resolves outside workspace: ${inputPath}`);
   if (kind === "parent") throw new Error(`Parent resolves outside workspace: ${inputPath}`);
   throw new Error(`Path is outside workspace: ${inputPath}`);
@@ -38,19 +43,20 @@ export async function resolveWorkspacePath(
 ): Promise<string> {
   const forWrite = options.forWrite === true;
   const allowOutside = options.allowOutside === true;
-  const root = await realpath(rootPath);
+  const root = await realPath(rootPath);
   const absolute = path.resolve(root, inputPath);
-  const externalAllowed = !inside(root, absolute) &&
+  const externalAllowed = !isPathInside(root, absolute) &&
     (options.allowedOutsidePaths ?? []).some((candidate) => samePath(path.resolve(candidate), absolute));
   if (!allowOutside && !externalAllowed) confine(root, absolute, inputPath, "path");
   try {
     const stat = await lstat(absolute);
     if (forWrite && stat.isSymbolicLink()) throw new Error(`Refusing to write through a symlink: ${inputPath}`);
-    const resolved = await realpath(absolute);
+    const resolved = await realPath(absolute);
     if (externalAllowed && !samePath(resolved, absolute)) {
       throw new Error(`Path resolves outside the allowed external file: ${inputPath}`);
     }
     if (!allowOutside && !externalAllowed) confine(root, resolved, inputPath, "resolved");
+    if (forWrite) return resolved;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw error;
@@ -59,7 +65,7 @@ export async function resolveWorkspacePath(
     let suffix = path.basename(absolute);
     while (true) {
       try {
-        const resolvedParent = await realpath(parent);
+        const resolvedParent = await realPath(parent);
         if (externalAllowed) {
           if (!samePath(path.join(resolvedParent, suffix), absolute)) {
             throw new Error(`Parent resolves outside the allowed external file: ${inputPath}`);
@@ -67,11 +73,12 @@ export async function resolveWorkspacePath(
         } else {
           confine(root, resolvedParent, inputPath, "parent");
         }
+        if (forWrite) return path.join(resolvedParent, suffix);
         break;
       } catch (parentError) {
         if ((parentError as NodeJS.ErrnoException).code !== "ENOENT") throw parentError;
         const next = path.dirname(parent);
-        if (next === parent || (!externalAllowed && !inside(root, next))) {
+        if (next === parent || (!externalAllowed && !isPathInside(root, next))) {
           throw new Error(`No workspace parent exists for: ${inputPath}`);
         }
         suffix = path.join(path.basename(parent), suffix);

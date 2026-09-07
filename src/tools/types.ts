@@ -12,6 +12,7 @@ export interface ToolContext {
   /** Exact files outside rootPath that this agent may write. */
   writableExternalPaths?: readonly string[];
   signal: AbortSignal;
+  fileHistory?: import("../file-history/service.js").FileEditTracker;
   invocation: {
     executionId: string;
     assistantEntryId: string;

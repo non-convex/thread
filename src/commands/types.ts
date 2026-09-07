@@ -5,7 +5,6 @@ import type { SessionTreeService } from "../session-tree/service.js";
 export interface HistoryViewItem {
   turnId: string;
   userEntryId: string;
-  workspaceStateId: string;
   label: string;
   outcome: "running" | "completed" | "interrupted" | "failed";
   startedAt: number;

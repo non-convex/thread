@@ -100,6 +100,7 @@ Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
 /model to select the main model, /agent to configure background agents, /clear, /compact,
 /thread for Session Tree history/search, /rewind <turn-id>, or /exit.
+Rewind restores recorded edit/write changes and the conversation; bash changes are not tracked.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }
 

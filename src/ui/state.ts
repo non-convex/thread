@@ -551,11 +551,8 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       }
       return;
     }
-    case "workspace_checkpoint_started":
-      if (state.liveTurn) state.liveTurn = endStreaming(state.liveTurn);
-      state.activity = "saving workspace";
-      return;
     case "turn_finished":
+      if (state.liveTurn) state.liveTurn = endStreaming(state.liveTurn);
       if (state.turnStartedAt !== undefined && state.turnFinishedAt === undefined) {
         state.turnFinishedAt = Date.now();
       }

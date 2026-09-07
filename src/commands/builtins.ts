@@ -65,7 +65,6 @@ function allHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
-        workspaceStateId: turn.workspaceStateId,
         label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
         outcome: turn.status,
         startedAt: turn.startedAt,
@@ -80,7 +79,6 @@ export function buildRewindItems(context: ThreadCommandContext): HistoryViewItem
   return context.tree.rewindCandidates().slice().reverse().map((candidate) => ({
     turnId: candidate.turnId,
     userEntryId: candidate.userEntryId,
-    workspaceStateId: candidate.workspaceStateId,
     label: candidate.label,
     outcome: candidate.status,
     startedAt: candidate.startedAt,

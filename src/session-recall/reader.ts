@@ -27,7 +27,7 @@ export function readTurn(tree: SessionTreeService, id: string, options: ReadOpti
   const lines: string[] = [];
   const omitted = new Set<string>();
   for (const entry of entries) {
-    if (entry.type === "compaction") continue;
+    if (entry.type === "compaction" || entry.type === "file_edit") continue;
     if (entry.type === "tool_execution") {
       if (options.toolCalls) lines.push(`[tool call ${entry.toolName}] ${JSON.stringify(entry.effectiveArgs)}`);
       else omitted.add("tool calls");

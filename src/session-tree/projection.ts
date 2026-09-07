@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ProjectSession,
   SessionEntry,
@@ -47,7 +48,7 @@ export class SessionTreeProjection {
     switch (event.type) {
       case "tree_created":
         if (this.tree) throw new SessionTreeCorruptionError("Session Tree was created more than once");
-        if (event.tree.format !== "thread-session-tree-v1" || event.tree.formatVersion !== 1 ||
+        if (event.tree.format !== "thread-session-tree-v2" || event.tree.formatVersion !== 2 ||
             typeof event.tree.id !== "string" || typeof event.tree.projectId !== "string" ||
             typeof event.tree.rootId !== "string" || typeof event.tree.rootPath !== "string") {
           throw new SessionTreeCorruptionError("Unsupported or invalid Session Tree metadata");
@@ -80,7 +81,6 @@ export class SessionTreeProjection {
         if (!this.sessions.has(turn.sessionId)) throw new SessionTreeCorruptionError(`Turn ${turn.id} has no session`);
         if (this.activeSessionId !== turn.sessionId) throw new SessionTreeCorruptionError(`Turn ${turn.id} started outside the active Session`);
         if (turn.status !== "running") throw new SessionTreeCorruptionError(`Turn ${turn.id} did not start running`);
-        if (!turn.workspaceStateId) throw new SessionTreeCorruptionError(`Turn ${turn.id} has no workspace state`);
         if ([...this.turns.values()].some((item) => item.status === "running")) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
         }
@@ -100,7 +100,7 @@ export class SessionTreeProjection {
       case "entry_appended": {
         const entry = event.entry;
         assertUnused(this.entries, entry.id, "entry");
-        if (entry.type !== "message" && entry.type !== "tool_execution" && entry.type !== "compaction") {
+        if (entry.type !== "message" && entry.type !== "tool_execution" && entry.type !== "compaction" && entry.type !== "file_edit") {
           throw new SessionTreeCorruptionError(`Unknown entry type: ${String((entry as { type?: unknown }).type)}`);
         }
         const turn = this.turns.get(entry.turnId);
@@ -118,6 +118,19 @@ export class SessionTreeProjection {
         if (entry.ordinal === 0 && (entry.type !== "message" || entry.message.role !== "user" ||
             entry.id !== turn.userEntryId)) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not begin with its user entry`);
+        }
+        if (entry.type === "file_edit") {
+          if (typeof entry.path !== "string" || !entry.path || entry.path.includes("\\") || entry.path.includes("\0") ||
+              path.posix.isAbsolute(entry.path) || path.win32.isAbsolute(entry.path) || /^[A-Za-z]:/.test(entry.path) ||
+              entry.path.split("/").some((part) => !part || part === "." || part === "..") ||
+              (entry.before !== null && (!entry.before || !/^[0-9a-f]{64}$/.test(entry.before.blobId) ||
+                !Number.isInteger(entry.before.mode) || entry.before.mode < 0 || entry.before.mode > 0o777))) {
+            throw new SessionTreeCorruptionError(`Invalid file edit entry: ${entry.id}`);
+          }
+          const key = (value: string) => process.platform === "win32" ? value.toLowerCase() : value;
+          if (turnEntries.some((prior) => prior.type === "file_edit" && key(prior.path) === key(entry.path))) {
+            throw new SessionTreeCorruptionError(`Duplicate file edit baseline: ${entry.path}`);
+          }
         }
         if (entry.type === "compaction") {
           const retainedTurnsValid = Array.isArray(entry.retainedTurns) &&

@@ -10,7 +10,7 @@ import type { ExtensionEvents } from "../extensions/events.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
 import type { AskPresenter } from "../ui/ask.js";
-import type { WorkspaceStateService } from "../workspace-state/service.js";
+import type { FileHistoryService } from "../file-history/service.js";
 
 export interface CreateRuntimeInput {
   model: ModelClient;
@@ -18,7 +18,7 @@ export interface CreateRuntimeInput {
   rootPath: string;
   systemPrompt: string;
   tree: SessionTreeService;
-  workspace: WorkspaceStateService;
+  fileHistory: FileHistoryService;
   contextBuilder: ContextBuilder;
   tools: ToolRegistry;
   extensions: ExtensionEvents;
@@ -44,6 +44,7 @@ export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
     input.extensions,
     input.askPresenter,
     input.writableExternalPaths,
+    (turnId) => input.fileHistory.forTurn(turnId),
   );
   const runner = new TurnRunner(
     input.model,
@@ -57,5 +58,5 @@ export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
     maxOutputTokens,
     input.reasoning,
   );
-  return new AgentRuntime(input.tree, input.workspace, runner, input.extensions, input.agentTasks);
+  return new AgentRuntime(input.tree, runner, input.extensions, input.agentTasks);
 }

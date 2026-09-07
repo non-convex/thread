@@ -13,7 +13,7 @@ function normalizedIdentity(rootPath: string): string {
 function parseManifest(value: unknown, manifestPath: string): ProjectManifest {
   if (typeof value !== "object" || value === null) throw new Error(`Invalid project manifest: ${manifestPath}`);
   const manifest = value as Partial<ProjectManifest>;
-  if (manifest.format !== PROJECT_FORMAT || manifest.formatVersion !== 1) {
+  if (manifest.format !== PROJECT_FORMAT || manifest.formatVersion !== 2) {
     throw new Error(`Unsupported Thread project data at ${manifestPath}; old data is not migrated or loaded`);
   }
   if (typeof manifest.id !== "string" || typeof manifest.rootPath !== "string" ||
@@ -43,7 +43,7 @@ export class ProjectService {
     } else {
       const manifest: ProjectManifest = {
         format: PROJECT_FORMAT,
-        formatVersion: 1,
+        formatVersion: 2,
         id,
         rootPath,
         createdAt: Date.now(),

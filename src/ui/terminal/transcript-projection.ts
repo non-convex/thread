@@ -87,6 +87,7 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
   }
   const output: TranscriptItem[] = [];
   for (const entry of entries) {
+    if (entry.type === "file_edit") continue;
     if (entry.type === "tool_execution") {
       for (const task of tasksByAnchor.get(entry.toolCallId) ?? []) {
         output.push({ id: `agent-task:${task.task.id}`, kind: "agent_task", content: "", agentTask: projectTask(task) });

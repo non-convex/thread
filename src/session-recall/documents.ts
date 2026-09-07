@@ -16,7 +16,7 @@ export function extractDocuments(entries: readonly SessionEntry[]): RecallDocume
         turnId: entry.turnId, kind, text, semantic: kind === "user" || kind === "assistant",
       });
     };
-    if (entry.type === "compaction") continue;
+    if (entry.type === "compaction" || entry.type === "file_edit") continue;
     if (entry.type === "tool_execution") {
       if (!RECALL_TOOLS.has(entry.toolName)) add("tool-call", `${entry.toolName} ${JSON.stringify(entry.effectiveArgs)}`);
       continue;

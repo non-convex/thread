@@ -4,7 +4,6 @@ import type { ExtensionEvents } from "../extensions/events.js";
 import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
-import type { WorkspaceStateService } from "../workspace-state/service.js";
 import { userContentDisplay } from "../session-tree/user-content.js";
 import { safeUiEvent } from "../ui/events.js";
 import type { RunTurnOptions, TurnRunner } from "./turn-runner.js";
@@ -19,7 +18,6 @@ export interface TurnResult {
 export class AgentRuntime {
   constructor(
     private readonly tree: SessionTreeService,
-    private readonly workspace: WorkspaceStateService,
     private readonly runner: TurnRunner,
     private readonly extensions: ExtensionEvents,
     private readonly agentTasks?: AgentTaskOrchestrator,
@@ -35,15 +33,9 @@ export class AgentRuntime {
       input: display,
       sessionId: planned.sessionId,
     });
-    const baseline = this.workspace.baseline();
-    void baseline.catch(() => undefined);
     const preparedContext = await this.runner.prepareCurrent();
     options.signal.throwIfAborted();
-    const turnReady = baseline.then((checkpoint) => this.tree.startPlannedTurn(
-      planned,
-      checkpoint.stateId,
-      checkpoint.persisted,
-    )).then((turn) => {
+    const turnReady = this.tree.startPlannedTurn(planned).then((turn) => {
       safeUiEvent(options.onUiEvent, {
         type: "turn_started",
         turnId: turn.id,
@@ -79,8 +71,6 @@ export class AgentRuntime {
       await this.tree.sealRunningTurn(turn.id, outcome, error);
     }
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
-    safeUiEvent(options.onUiEvent, { type: "workspace_checkpoint_started" });
-    await this.workspace.checkpoint();
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeUiEvent(options.onUiEvent, {
       type: "turn_finished",

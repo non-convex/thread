@@ -13,6 +13,7 @@ import {
   SESSION_TREE_FORMAT,
   type CompactionEntry,
   type CompactionReason,
+  type FileEditEntry,
   type MessageEntry,
   type ProjectSession,
   type RetainedTurn,
@@ -27,15 +28,13 @@ import type { SessionTreeRepository } from "./repository.js";
 export interface RewindCandidate {
   turnId: string;
   userEntryId: string;
-  workspaceStateId: string;
   label: string;
   status: TurnStatus;
   startedAt: number;
 }
 
 /**
- * Runtime-only identity for a user turn whose workspace checkpoint may still
- * be resolving. It is never written to the Session Tree on its own.
+ * Runtime-only identity reserved before the user turn is appended to the tree.
  */
 export interface PlannedTurn {
   id: string;
@@ -88,7 +87,7 @@ export class SessionTreeService {
       const session: ProjectSession = { id: createId("session"), treeId, createdAt: now };
       const tree: SessionTree = {
         format: SESSION_TREE_FORMAT,
-        formatVersion: 1,
+        formatVersion: 2,
         id: treeId,
         projectId: this.repository.project.id,
         rootId: `${treeId}:root`,
@@ -154,14 +153,12 @@ export class SessionTreeService {
     };
   }
 
-  async startTurn(input: string, workspaceStateId: string, persistAfter?: Promise<unknown>): Promise<Turn> {
-    return this.startPlannedTurn(this.planTurn(input), workspaceStateId, persistAfter);
+  async startTurn(input: string): Promise<Turn> {
+    return this.startPlannedTurn(this.planTurn(input));
   }
 
   async startPlannedTurn(
     planned: PlannedTurn,
-    workspaceStateId: string,
-    persistAfter?: Promise<unknown>,
   ): Promise<Turn> {
     const content = planned.content ?? planned.input;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
@@ -174,7 +171,6 @@ export class SessionTreeService {
       sessionId: planned.sessionId,
       parentTurnId: planned.parentTurnId,
       userEntryId: planned.userEntryId,
-      workspaceStateId,
       status: "running",
       startedAt: planned.startedAt,
     };
@@ -190,7 +186,7 @@ export class SessionTreeService {
     await this.repository.appendBatch(() => [
       { type: "turn_started", turn },
       { type: "entry_appended", entry: userEntry },
-    ], false, persistAfter);
+    ]);
     return structuredClone(turn);
   }
 
@@ -213,7 +209,10 @@ export class SessionTreeService {
       type: "message",
       message: structuredClone(input.message),
     };
-    await this.repository.append(() => ({ type: "entry_appended", entry }), flush);
+    await this.repository.append(() => {
+      entry.ordinal = this.projection.entriesByTurn.get(turn.id)!.length;
+      return { type: "entry_appended", entry };
+    }, flush);
     return structuredClone(entry);
   }
 
@@ -230,8 +229,28 @@ export class SessionTreeService {
       type: "tool_execution",
       ...structuredClone(input),
     };
-    await this.repository.append(() => ({ type: "entry_appended", entry }), true);
+    await this.repository.append(() => {
+      entry.ordinal = this.projection.entriesByTurn.get(turn.id)!.length;
+      return { type: "entry_appended", entry };
+    }, true);
     return structuredClone(entry);
+  }
+
+  async appendFileEdit(input: Pick<FileEditEntry, "turnId" | "path" | "before">): Promise<void> {
+    const turn = this.runningTurn(input.turnId);
+    // The factory runs after the durability barrier, so concurrent file edits
+    // receive their ordinal from the latest projection.
+    await this.repository.append(() => ({
+      type: "entry_appended",
+      entry: {
+        ...input,
+        id: createId("entry"),
+        sessionId: turn.sessionId,
+        ordinal: this.projection.entriesByTurn.get(turn.id)!.length,
+        timestamp: Date.now(),
+        type: "file_edit",
+      },
+    }), true);
   }
 
   async appendCompaction(input: {
@@ -323,7 +342,6 @@ export class SessionTreeService {
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
-        workspaceStateId: turn.workspaceStateId,
         label,
         status: turn.status,
         startedAt: turn.startedAt,

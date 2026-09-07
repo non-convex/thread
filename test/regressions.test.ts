@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   fauxAssistantMessage,
   fauxText,
+  fauxToolCall,
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
@@ -33,6 +34,24 @@ class CapturingModel implements ModelClient {
 
   async forkComplete(_context: Context, _instruction: string, _options: ModelRequestOptions): Promise<string> {
     return "summary";
+  }
+}
+
+class EditingModel extends CapturingModel {
+  override async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
+    const last = context.messages.at(-1);
+    if (last?.role === "user" && typeof last.content === "string") {
+      if (last.content === "first request" || last.content === "one") {
+        return fauxAssistantMessage(fauxToolCall("write", { path: "seed.txt", content: "B\n" }, { id: "write-seed" }), { stopReason: "toolUse" });
+      }
+      if (last.content === "second request unique-needle") {
+        return fauxAssistantMessage([
+          fauxToolCall("write", { path: "seed.txt", content: "C\n" }, { id: "write-next" }),
+          fauxToolCall("write", { path: "new.txt", content: "new\n" }, { id: "write-new" }),
+        ], { stopReason: "toolUse" });
+      }
+    }
+    return super.stream(context, options);
   }
 }
 
@@ -108,7 +127,7 @@ test("non-Git projects use one persistent Session Tree and /new creates empty ro
   });
 });
 
-test("rewind restores the previous turn checkpoint and retains the abandoned path", async (t) => {
+test("rewind restores tracked edits and retains the abandoned path", async (t) => {
   const values = await fixture("thread-rewind-");
   t.after(values.cleanup);
   await writeFile(path.join(values.root, "seed.txt"), "A\n");
@@ -118,15 +137,13 @@ test("rewind restores the previous turn checkpoint and retains the abandoned pat
     const app = await ThreadApp.open({
       rootPath: values.root,
       search: { semantic: false },
-      model: new CapturingModel(),
+      model: new EditingModel(),
       skills: { skills: [], diagnostics: [] },
     });
     try {
       await app.handleInput("first request", { signal: new AbortController().signal });
       const first = app.sessionTree.activeLiveTip!;
-      await writeFile(path.join(values.root, "seed.txt"), "B\n");
       await unlink(path.join(values.root, "old.txt"));
-      await writeFile(path.join(values.root, "new.txt"), "new\n");
 
       await app.handleInput("second request unique-needle", { signal: new AbortController().signal });
       const second = app.sessionTree.activeLiveTip!;
@@ -138,10 +155,10 @@ test("rewind restores the previous turn checkpoint and retains the abandoned pat
       assert.deepEqual(candidates.map((item) => item.turnId), [first, second]);
       await app.handleInput(`/rewind ${second}`, { signal: new AbortController().signal });
       assert.equal(app.sessionTree.activeLiveTip, first);
-      assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "A\n");
-      assert.equal(await readFile(path.join(values.root, "old.txt"), "utf8"), "old\n");
+      assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "B\n");
+      await assert.rejects(readFile(path.join(values.root, "old.txt")), /ENOENT/);
       await assert.rejects(readFile(path.join(values.root, "new.txt"), "utf8"), /ENOENT/);
-      await assert.rejects(readFile(path.join(values.root, "later.txt"), "utf8"), /ENOENT/);
+      assert.equal(await readFile(path.join(values.root, "later.txt"), "utf8"), "later\n");
 
       await app.handleInput("replacement request", { signal: new AbortController().signal });
       const replacement = app.sessionTree.activeLiveTip!;
@@ -159,7 +176,7 @@ test("rewind restores the previous turn checkpoint and retains the abandoned pat
   });
 });
 
-test("rewind refuses a missing workspace state before moving the live tip", async (t) => {
+test("rewind refuses a missing file backup before moving the live tip", async (t) => {
   const values = await fixture("thread-state-integrity-");
   t.after(values.cleanup);
   await writeFile(path.join(values.root, "seed.txt"), "A\n");
@@ -167,18 +184,18 @@ test("rewind refuses a missing workspace state before moving the live tip", asyn
   await withThreadHome(values.home, async () => {
     const app = await ThreadApp.open({
       rootPath: values.root,
-      model: new CapturingModel(),
+      model: new EditingModel(),
       skills: { skills: [], diagnostics: [] },
     });
     try {
       await app.handleInput("one", { signal: new AbortController().signal });
       const turnId = app.sessionTree.activeLiveTip!;
-      const stateId = app.sessionTree.projection.turns.get(turnId)!.workspaceStateId;
-      const statePath = path.join(app.workspaceState.repository.statesPath, `${stateId}.json`);
-      await rm(statePath, { force: true });
+      const edit = app.sessionTree.entriesForTurn(turnId).find((entry) => entry.type === "file_edit");
+      assert.ok(edit?.type === "file_edit" && edit.before);
+      await rm(app.fileHistory.store.blobPath(edit.before.blobId), { force: true });
       await assert.rejects(
         app.handleInput(`/rewind ${turnId}`, { signal: new AbortController().signal }),
-        /Workspace state is missing/,
+        /ENOENT/,
       );
       assert.equal(app.sessionTree.activeLiveTip, turnId);
     } finally {
@@ -194,8 +211,7 @@ test("startup seals unfinished turns as interrupted live tips", async (t) => {
 
   await withThreadHome(values.home, async () => {
     const first = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });
-    const state = await first.workspaceState.capture();
-    const running = await first.sessionTree.startTurn("unfinished", state.id);
+    const running = await first.sessionTree.startTurn("unfinished");
     await first.close();
 
     const reopened = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });

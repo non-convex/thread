@@ -44,7 +44,7 @@ export function primarySlashSuggestions(hasSkills: boolean): SlashSuggestion[] {
     { name: "session", description: "List or resume root Sessions" },
     ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
     { name: "thread", description: "Session Tree status, history, Sessions, and search" },
-    { name: "rewind", description: "Return to before a current-path user message" },
+    { name: "rewind", description: "Undo built-in file edits and rewind the conversation" },
     { name: "exit", description: "Exit thread" },
   ];
 }
