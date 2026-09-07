@@ -399,7 +399,9 @@ function AgentPickerOverlay(props: {
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
       <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
-        <text flexGrow={1} height={1} wrapMode="none" fg={theme().accent} attributes={bold}>⚙ Agents</text>
+        {/* Text presentation and a fixed slot avoid emoji-width overlap in terminals. */}
+        <text width={3} flexShrink={0} height={1} wrapMode="none" fg={theme().accent}>{"\u2699\uFE0E"}</text>
+        <text flexGrow={1} height={1} wrapMode="none" fg={theme().accent} attributes={bold}>Agents</text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ configure · esc</text>
       </box>
       <For each={props.screen().agents}>
@@ -472,7 +474,8 @@ function AgentSettingsOverlay(props: {
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
       <box flexDirection="row" width={props.contentWidth() - 2} height={1} marginBottom={1}>
-        <text flexGrow={1} height={1} wrapMode="none" fg={theme().accent} attributes={bold}>⚙ {props.screen().label}</text>
+        <text width={3} flexShrink={0} height={1} wrapMode="none" fg={theme().accent}>{"\u2699\uFE0E"}</text>
+        <text flexGrow={1} height={1} wrapMode="none" fg={theme().accent} attributes={bold}>{props.screen().label}</text>
         <text height={1} wrapMode="none" fg={theme().faint}>↑/↓ · ⏎ select · esc</text>
       </box>
       <For each={options}>
