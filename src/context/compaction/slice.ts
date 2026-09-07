@@ -46,14 +46,17 @@ export function locateSessionMessages(
 export function historySummaryContext(
   fullContext: Context,
   sessionMessages: readonly Message[],
-  summarizedUnits: readonly CompactableUnit[],
+  retainedUnits: readonly CompactableUnit[],
 ): Context {
   const sessionStart = locateSessionMessages(fullContext.messages, sessionMessages);
-  const summarizedCount = summarizedUnits.reduce((total, unit) => total + unit.messages.length, 0);
+  // Retained units form the raw-message suffix. Count back from its end so the
+  // earlier history document and checkpoint remain in the summarized prefix.
+  const retainedCount = retainedUnits.reduce((total, unit) => total + unit.messages.length, 0);
+  const retentionCut = sessionStart + sessionMessages.length - retainedCount;
   return {
     ...fullContext,
     messages: [
-      ...fullContext.messages.slice(0, sessionStart + summarizedCount),
+      ...fullContext.messages.slice(0, retentionCut),
       { role: "user", content: historySummaryInstruction(), timestamp: Date.now() },
     ],
   };

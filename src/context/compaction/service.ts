@@ -58,11 +58,17 @@ export class ContextCompactionService {
     if (!plan) return { compacted: false };
 
     const compactedAt = Date.now();
-    const previousProgressSummary = options.built.latestCompaction?.progressSummary;
+    const previousCompaction = options.built.latestCompaction;
+    // A checkpoint belongs to the first retained turn, not necessarily the turn
+    // where its compaction entry was recorded.
+    const previousProgressSummary =
+      previousCompaction?.retainedTurns[0]?.turnId === plan.retainedTurns[0]?.turnId
+        ? previousCompaction?.progressSummary
+        : undefined;
 
     const historySummary = await generateHistorySummary({
       model: this.model,
-      context: historySummaryContext(options.context, options.built.messages, plan.summarizedUnits),
+      context: historySummaryContext(options.context, options.built.messages, plan.retainedUnits),
       signal: options.signal,
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });

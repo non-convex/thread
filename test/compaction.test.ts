@@ -152,7 +152,12 @@ function rendered(messages: readonly Message[]): string {
 
 function builtFrom(turns: RetainedTurn[], previous?: CompactionEntry) {
   return {
-    messages: projectedContextMessages(previous?.summary ?? "", turns, previous?.timestamp ?? 1),
+    messages: projectedContextMessages(
+      previous?.summary ?? "",
+      turns,
+      previous?.timestamp ?? 1,
+      previous?.progressSummary,
+    ),
     compactableTurns: turns,
     ...(previous ? { latestCompaction: previous } : {}),
   };
@@ -274,6 +279,31 @@ test("history summary runs whenever there is anything to summarize", async () =>
   assert.equal(tree.appended[0]!.progressSummary, undefined);
   assert.equal(model.matching(isHistorySummaryInstruction).length, 1);
   assert.equal(model.matching(isProgressSummaryInstruction).length, 0);
+  assert.deepEqual(model.contexts[0]!.messages.slice(0, -1), turns[0]!.messages);
+});
+
+test("repeated compaction includes previous summaries and every removed message", async () => {
+  const turns = [
+    turnWithSteps("turn-1", "first", 4, 20_000),
+    turnWithSteps("turn-2", "second", 5, 20_000),
+  ];
+  for (const progressSummary of [undefined, "EARLIER PROGRESS TEXT"]) {
+    const previous = compactionEntry({
+      turns,
+      summary: "older history",
+      ...(progressSummary ? { progressSummary } : {}),
+    });
+    const model = new ScriptedModel(["updated history"]);
+    const { result } = await runCompaction({ turns, model, previous });
+    assert.equal(result.compacted, true);
+    const expectedPrefix = projectedContextMessages(
+      previous.summary,
+      [turns[0]!],
+      previous.timestamp,
+      progressSummary,
+    );
+    assert.deepEqual(model.contexts[0]!.messages.slice(0, -1), expectedPrefix);
+  }
 });
 
 test("a mid-turn cut copies the request and inserts a progress checkpoint", async () => {
@@ -321,19 +351,49 @@ test("the projected context orders history, request, checkpoint, then steps", as
 });
 
 test("the progress summary rolls forward from its own previous output", async () => {
-  const turns = [turnWithSteps("turn-long", "ORIGINAL REQUEST", 9, 20_000)];
+  const turns = [
+    turnWithSteps("turn-long", "ORIGINAL REQUEST", 5, 20_000),
+    turnWithSteps("turn-next", "later request", 2, 20_000),
+  ];
+  // The checkpoint belongs to turn-long, even though its entry was recorded
+  // after turn-next began. Only turn-next has gained steps since that entry.
   const previous = compactionEntry({
-    turns,
+    turns: [turns[0]!, { turnId: "turn-next", messages: [turns[1]!.messages[0]!] }],
     summary: "## Current project state\n\nolder history",
     progressSummary: "EARLIER PROGRESS TEXT",
   });
   const model = new ScriptedModel(["## Current project state\n\nnewer history", "updated progress"]);
-  await runCompaction({ turns, model, previous });
+  const { result, tree } = await runCompaction({ turns, model, previous });
+  assert.equal(result.compacted, true);
+  assert.equal(tree.appended[0]!.retainedTurns[0]!.turnId, "turn-long");
 
   const progressContext = model.matching(isProgressSummaryInstruction)[0]!;
+  assert.equal(text(progressContext.messages[1]!), "ORIGINAL REQUEST");
   const instruction = text(progressContext.messages.at(-1)!);
   assert.match(instruction, /EARLIER PROGRESS TEXT/);
   assert.match(instruction, /Update it with the newer current-turn content instead of copying it/);
+});
+
+test("a checkpoint from another turn is history, not the new turn's previous progress", async () => {
+  const turns = [
+    turnWithSteps("turn-1", "first", 5, 20_000),
+    turnWithSteps("turn-2", "second", 9, 20_000),
+  ];
+  const previous = compactionEntry({
+    turns: [turns[0]!, { turnId: "turn-2", messages: [turns[1]!.messages[0]!] }],
+    summary: "older history",
+    progressSummary: "TURN_1_CHECKPOINT",
+  });
+  const model = new ScriptedModel(["updated history", "turn-2 progress"]);
+  const { result, tree } = await runCompaction({ turns, model, previous });
+  assert.equal(result.compacted, true);
+  assert.equal(tree.appended[0]!.retainedTurns[0]!.turnId, "turn-2");
+
+  const historyContext = model.matching(isHistorySummaryInstruction)[0]!;
+  assert.match(rendered(historyContext.messages), /TURN_1_CHECKPOINT/);
+  const progressContext = model.matching(isProgressSummaryInstruction)[0]!;
+  assert.equal(text(progressContext.messages[1]!), "second");
+  assert.doesNotMatch(rendered(progressContext.messages), /TURN_1_CHECKPOINT|Previous progress checkpoint/);
 });
 
 test("a summary that fails validation is retried silently", async () => {
