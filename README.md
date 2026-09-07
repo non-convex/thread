@@ -16,6 +16,16 @@ Thread is a coding-agent runtime built around project memory. How a requirement 
 
 Thread follows two design principles: **add features with restraint; manage context with care.**
 
+## Interface
+
+![Thread welcome screen](docs/assets/thread-welcome.png)
+
+<p align="center"><em>Open a project directly into its persistent Session Tree.</em></p>
+
+![Thread working through a coding task](docs/assets/thread-session.png)
+
+<p align="center"><em>Thinking, tool activity, elapsed time, context usage, model, and thinking level in one view.</em></p>
+
 ## Interaction is project memory
 
 Each project has one persistent Session Tree. Each round of interaction between the user and agent forms a turn; successive turns form a path, and continuing after a rewind creates a branch. A project can have multiple Sessions, all within the same tree and all available to project-wide search and recall.
@@ -64,16 +74,6 @@ Thread exercises restraint when adding features and capabilities. An addition ea
 `/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and retains more recent content when the roughly 20K-token target budget allows.
 
 Live-path context, on-demand recall, tool-result pagination, and compaction are implemented. Tool result offloading, model awareness of the whole tree, and finer-grained control over what enters context remain planned.
-
-## Interface
-
-![Thread welcome screen](docs/assets/thread-welcome.png)
-
-<p align="center"><em>Open a project directly into its persistent Session Tree.</em></p>
-
-![Thread working through a coding task](docs/assets/thread-session.png)
-
-<p align="center"><em>Thinking, tool activity, elapsed time, context usage, model, and thinking level in one view.</em></p>
 
 ## Quick start
 

@@ -16,6 +16,16 @@ Thread 是一个围绕项目记忆设计的 coding-agent runtime。需求如何�
 
 Thread 的设计遵循两条理念：**如无必要，勿增实体；精心的上下文管理。**
 
+## 界面
+
+![Thread 欢迎界面](docs/assets/thread-welcome.png)
+
+<p align="center"><em>打开项目，直接进入它的持久化 Session Tree。</em></p>
+
+![Thread 执行编码任务](docs/assets/thread-session.png)
+
+<p align="center"><em>在一个界面中查看思考、工具活动、耗时、上下文用量、模型和 thinking level。</em></p>
+
 ## 交互本身就是项目记忆
 
 一个项目只有一棵持久化 Session Tree。每轮用户与 agent 的交互构成一个 turn；连续的 turn 形成路径，回溯后继续工作会产生分支。项目可以拥有多个 Session，它们都属于这棵树，共享项目历史的搜索与召回能力。
@@ -64,16 +74,6 @@ Thread 对功能和特性的增加尽可能保持克制。只有一项能力确�
 `/compact` 可手动请求压缩。上下文达到 78%，或 provider 报告 overflow 时会自动压缩。每次至少保留最新五个完整 step，并在约 20K token 的目标预算内尽量保留更多近期内容。
 
 目前已实现当前路径构建、按需召回、工具结果分页与压缩；tool result offloading、模型对整棵树的全局感知，以及更细粒度的信息准入机制，仍待开发。
-
-## 界面
-
-![Thread 欢迎界面](docs/assets/thread-welcome.png)
-
-<p align="center"><em>打开项目，直接进入它的持久化 Session Tree。</em></p>
-
-![Thread 执行编码任务](docs/assets/thread-session.png)
-
-<p align="center"><em>在一个界面中查看思考、工具活动、耗时、上下文用量、模型和 thinking level。</em></p>
 
 ## 快速开始
 
