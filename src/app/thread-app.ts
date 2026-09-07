@@ -622,14 +622,27 @@ export class ThreadApp {
     return viewResult(content, { type: "agent_picker", agents });
   }
 
-  private listModels(args: string[], usage: string): CommandResult {
+  private listModels(args: string[], usage: string, agentId = MAIN_AGENT_PROFILE_ID): CommandResult {
     if (!this.modelCatalog || args.length > 1) throw new Error(usage);
     const models = args[0]
       ? (this.modelCatalog.listAll?.(args[0]) ?? this.modelCatalog.list(args[0]))
       : this.modelPickerModels("configured");
-    return ephemeral(models.map((item) =>
+    const content = models.map((item) =>
       `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context${item.acceptsImages ? ", vision" : ""}`
-    ).join("\n") || "(no models)");
+    ).join("\n") || "(no models)";
+    const selected = agentId === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentModel
+      : agentId === DREAMER_PROFILE_ID ? this.dreamerModel
+      : this.model ? { provider: this.model.providerId, id: this.model.modelId } : undefined;
+    const scope = args[0] ? "all" : "configured";
+    return viewResult(content, {
+      type: "model_picker",
+      agentId,
+      models: this.modelPickerModels(scope),
+      currentProviderId: selected?.provider,
+      currentModelId: selected?.id,
+      scope,
+      filter: args[0] ? `${args[0]}/` : "",
+    });
   }
 
   private handleSecondaryModelCommand(
@@ -640,7 +653,7 @@ export class ThreadApp {
       id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.workerModelPicker(scope) : this.dreamerModelPicker(scope);
     if (args.length === 0) return picker();
     if (args.length === 1 && args[0] === "all") return picker("all");
-    if (args[0] === "list") return this.listModels(args.slice(1), `Usage: /agent ${id} model list [provider]`);
+    if (args[0] === "list") return this.listModels(args.slice(1), `Usage: /agent ${id} model list [provider]`, id);
     if (args.length === 1 && args[0]!.includes("/")) {
       const separator = args[0]!.indexOf("/");
       const providerId = args[0]!.slice(0, separator);
@@ -737,7 +750,20 @@ export class ThreadApp {
       agent: async (args) => ({ kind: "command", result: this.handleAgentCommand(args) }),
       model: async (args) => ({ kind: "command", result: this.handleModelCommand(args) }),
       skill: async (name, extra, options) => {
-        if (!name) return { kind: "command", result: ephemeral(this.describeSkills()) };
+        if (!name) return {
+          kind: "command",
+          result: viewResult(this.describeSkills(), {
+            type: "command_picker",
+            title: "Skills",
+            items: this.skills.map((skill) => ({
+              label: skill.name,
+              description: skill.description,
+              command: `/skill ${skill.name} `,
+              submit: false,
+            })),
+            emptyText: `No skills installed. Add skills under ${skillsDirectory()}`,
+          }),
+        };
         const skill = this.skills.find((item) => item.name === name);
         if (!skill) throw new Error(`Unknown skill: ${name}`);
         if (!this.runtime) throw new Error("/skill requires a configured model");

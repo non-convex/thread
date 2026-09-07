@@ -82,14 +82,24 @@ border / borderStrong       轻边框只给卡片和浮层
 
 ## 浮层
 
-`/agent`、模型列表、次级 Agent 开关、rewind、ask 和 `/` 补全都不是全屏接管。它们是输入框上方的同一类小面板：左右各留 1 列，圆角，`surface` 底，`borderStrong` 边。Ask 用 `spark` 边框，因为它在等用户回答。`/agent` 先列出 main、implementation-worker 和 dreamer；回车后进入该 Agent 的下一级浮层（主模型列表，或次级 Agent 的开关）。Esc 从下一级回到 Agent 列表。
+带有下级选项的命令，直接回车就打开输入框上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，圆角，`surface` 底，`borderStrong` 边；ask 使用 `spark` 边框，表示正在等待用户回答。
+
+`/thread` 从命令注册表生成子命令列表。选择 status、history 后进入可滚动文档；选择 search 后将 `/thread search ` 填入输入框，等用户输入查询再执行。`/session`、`/thread sessions` 和不带 ID 的 `/thread open` 共用 Session 列表，显示当前 Session、请求摘要、ID 和创建时间。回车切换会话，工作区文件保持不变。
+
+`/skill` 显示技能名称和描述。选择技能只把 `/skill <name> ` 填入输入框，用户可以追加指令，再按回车调用；浏览列表不会启动模型任务。
+
+`/agent` 先列出 main、implementation-worker 和 dreamer。Main 直接进入模型列表；次级 Agent 提供 Off、On 和 Choose model。On 沿用已有模型，没有模型时才进入选择；Choose model 始终打开模型列表，选定后启用该 Agent。
+
+模型面板支持直接输入 provider 或模型名称过滤，Backspace 删除过滤文字。列表末尾可切换 configured／all 范围；`/model list [provider]` 和各 Agent 的 model list 也复用这个面板。Esc 逐级返回，并保留上级的选中项。选择操作失败时留在原面板显示错误，允许重新选择或重试；成功切换模型、会话或完成 rewind 后关闭面板。
+
+完整命令仍可直接输入。plain 模式读取命令结果的文本内容，不依赖选择面板。
 
 共同语言：
 
 - 标题 `accent` + bold，带一个功能图标（`⚙` `⎌` `ⓘ`）。
 - 选中行 `surfaceHigh` 底、`sparkAlt` 字、`▸`。
 - 当前已生效项用 `●` 和 `accent`，与光标选中分开。
-- 列表窗口最多 8 行（ask 的选项由工具上限收在 4 个）。
+- 模型和 rewind 的窗口最多 8 项；命令、Session 和 Skill 的窗口最多 6 项，每项两行，分别显示名称和说明。Ask 的选项由工具上限收在 4 个。
 - 方向键只改 view 里的 selection signal，不经 controller `notify()`，避免整棵 session 树跟着闪。
 
 ## 状态与页脚

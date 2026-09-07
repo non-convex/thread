@@ -18,8 +18,19 @@ export interface AgentPickerItem {
   detail: string;
 }
 
+export interface CommandPickerItem {
+  label: string;
+  description: string;
+  command: string;
+  /** False fills the composer so the user can supply arguments before running. */
+  submit: boolean;
+  current?: boolean;
+}
+
 export type EphemeralView =
   | { type: "document"; title: string; content: string }
+  | { type: "command_picker"; title: string; items: CommandPickerItem[]; emptyText?: string }
+  | { type: "composer"; text: string; hint: string }
   | {
       type: "model_picker";
       agentId: string;
@@ -27,6 +38,7 @@ export type EphemeralView =
       currentProviderId: string | undefined;
       currentModelId: string | undefined;
       scope: "configured" | "all";
+      filter?: string;
     }
   | { type: "agent_settings"; agentId: string; label: string; enabled: boolean }
   | { type: "agent_picker"; agents: AgentPickerItem[] }

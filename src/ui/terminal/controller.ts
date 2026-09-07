@@ -8,9 +8,12 @@ import { UiEventBatcher, type UiEvent } from "../events.js";
 import { composerImageContent, type ComposerImage } from "../images.js";
 import {
   createUiState,
+  filteredModels,
+  isFloatingOverlay,
   openEphemeralView,
   reduceUiEvent,
   type AskScreen,
+  type UiScreen,
   type UiState,
 } from "../state.js";
 import { projectTranscript } from "./transcript-projection.js";
@@ -99,6 +102,7 @@ export class ThreadTuiController {
   readonly meta: TerminalMeta;
   readonly slashSuggestions: readonly SlashSuggestion[];
   private readonly listeners = new Set<Listener>();
+  private readonly viewHistory: UiScreen[] = [];
   private readonly batcher: UiEventBatcher;
   private active: AbortController | undefined;
   private stopped = false;
@@ -211,14 +215,9 @@ export class ThreadTuiController {
   closeView(): void {
     if (this.state.screen.type === "ask") {
       this.pendingAsk?.reject(new AskDismissedError());
-    } else if (
-      (this.state.screen.type === "model_picker" || this.state.screen.type === "agent_settings")
-      && this.state.screen.returnTo === "agent_picker"
-    ) {
-      void this.submit("/agent");
-      return;
     } else {
-      this.state.screen = { type: "session" };
+      this.state.screen = this.viewHistory.pop() ?? { type: "session" };
+      this.state.notice = undefined;
     }
     this.notify();
   }
@@ -231,39 +230,63 @@ export class ThreadTuiController {
       down: key.name === "down",
       enter,
     });
-    if (screen.type === "model_picker" && enter && !screen.busy) {
-      void this.advanceModelPicker();
-      return true;
+    if (!isFloatingOverlay(screen)) return false;
+    if (screen.busy || this.active) return true;
+    if (screen.type === "model_picker") {
+      const typed = printableKey(key);
+      if (typed || key.name === "backspace") {
+        screen.filter = typed ? screen.filter + typed : [...screen.filter].slice(0, -1).join("");
+        screen.selected = 0;
+        screen.error = undefined;
+        this.notify("live");
+        return true;
+      }
+      if (enter) {
+        void this.advanceModelPicker();
+        return true;
+      }
     }
-    if (screen.type === "agent_picker" && enter && !screen.busy) {
-      void this.advanceAgentPicker();
-      return true;
-    }
-    if (screen.type === "agent_settings" && enter && !screen.busy) {
-      void this.advanceAgentSettings();
-      return true;
-    }
-    if (screen.type === "rewind" && enter && !screen.busy) {
-      if (!screen.confirm) {
+    if (!enter) return false;
+    if (screen.type === "command_picker") {
+      const item = screen.items[screen.selected];
+      if (item?.submit) void this.runScreenCommand(item.command);
+      else if (item) {
+        this.openView({ type: "composer", text: item.command, hint: "Add any instructions, then press Enter to run." });
+        this.notify();
+      }
+    } else if (screen.type === "agent_picker") {
+      const agent = screen.agents[screen.selected];
+      if (agent) void this.runScreenCommand(`/agent ${agent.id}`);
+    } else if (screen.type === "agent_settings") {
+      const action = ["off", "on", "model"][screen.selected];
+      if (action) void this.runScreenCommand(`/agent ${screen.agentId} ${action}`);
+    } else if (screen.type === "rewind") {
+      const item = screen.items[screen.selected];
+      if (item && !screen.confirm) {
         screen.confirm = true;
         this.notify();
-      } else void this.advanceRewind();
-      return true;
+      } else if (item) void this.runScreenCommand(`/rewind ${item.turnId}`);
     }
-    return false;
+    return true;
   }
 
   async submit(raw: string, images: readonly ComposerImage[] = []): Promise<void> {
+    if (this.active || this.stopped || (!raw.trim() && images.length === 0)) return;
+    this.viewHistory.length = 0;
+    await this.executeInput(raw, images);
+  }
+
+  private async executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> {
     const input = raw.trim();
-    if ((!input && images.length === 0) || this.active || this.stopped) return;
+    if ((!input && images.length === 0) || this.active || this.stopped) return false;
     if (input === "/exit") {
       this.requestStop();
-      return;
+      return true;
     }
     const imageBlocks = images.map(composerImageContent);
     if (imageBlocks.length > 0 && this.app.model?.acceptsImages !== true) {
       this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
-      return;
+      return false;
     }
     const active = new AbortController();
     this.active = active;
@@ -279,11 +302,13 @@ export class ThreadTuiController {
       this.syncTranscript();
       this.state.liveTurn = undefined;
       this.refreshMeta();
+      return true;
     } catch (error) {
       this.batcher.flush();
       this.syncTranscript();
       this.state.liveTurn = undefined;
       this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
+      return false;
     } finally {
       if (this.active === active) this.active = undefined;
       if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
@@ -323,59 +348,51 @@ export class ThreadTuiController {
   }
 
   private openView(view: EphemeralView): void {
-    openEphemeralView(this.state, view);
+    if (view.type === "composer") {
+      this.state.composerInput = view.text;
+      this.state.screen = { type: "session" };
+      this.state.notice = { level: "info", text: view.hint };
+      this.viewHistory.length = 0;
+    } else openEphemeralView(this.state, view);
+  }
+
+  /** Menu navigation keeps the parent and its selection; successful actions close it. */
+  private async runScreenCommand(command: string, replace = false): Promise<void> {
+    const screen = this.state.screen;
+    if (!isFloatingOverlay(screen) || screen.busy || this.active || this.stopped) return;
+    screen.busy = true;
+    screen.error = undefined;
+    this.notify();
+    const succeeded = await this.executeInput(command);
+    screen.busy = false;
+    if (!succeeded) {
+      screen.error = this.state.notice?.text ?? "Command failed";
+      if (screen.type === "rewind") screen.confirm = false;
+    } else if (this.state.screen === screen || this.state.screen.type === "session") {
+      this.state.screen = { type: "session" };
+      this.viewHistory.length = 0;
+    } else if (!replace) {
+      this.viewHistory.push(screen);
+    }
+    this.notify();
   }
 
   private async advanceModelPicker(): Promise<void> {
     const screen = this.state.screen;
     if (screen.type !== "model_picker") return;
-    const model = screen.models[screen.selected];
-    if (!model) return;
-    screen.busy = true;
-    this.notify();
-    await this.submit(`/agent ${screen.agentId} model ${model.providerId}/${model.modelId}`);
-    if (this.state.screen.type === "model_picker") this.state.screen = { type: "session" };
-    this.notify();
-  }
-
-  private async advanceAgentPicker(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "agent_picker") return;
-    const agent = screen.agents[screen.selected];
-    if (!agent) return;
-    screen.busy = true;
-    this.notify();
-    await this.submit(`/agent ${agent.id}`);
-    if (this.state.screen.type === "model_picker" || this.state.screen.type === "agent_settings") {
-      this.state.screen.returnTo = "agent_picker";
-    } else if (this.state.screen.type === "agent_picker") {
-      this.state.screen = { type: "session" };
+    const models = filteredModels(screen);
+    const model = models[screen.selected];
+    const command = `/agent ${screen.agentId} model`;
+    if (model) {
+      await this.runScreenCommand(`${command} ${JSON.stringify(`${model.providerId}/${model.modelId}`)}`);
+    } else if (screen.selected === models.length) {
+      await this.runScreenCommand(`${command}${screen.scope === "configured" ? " all" : ""}`, true);
+      if (this.state.screen.type === "model_picker" && this.state.screen !== screen) {
+        this.state.screen.filter = screen.filter;
+        this.state.screen.selected = 0;
+        this.notify();
+      }
     }
-    this.notify();
-  }
-
-  private async advanceAgentSettings(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "agent_settings") return;
-    const returnTo = screen.returnTo;
-    screen.busy = true;
-    this.notify();
-    await this.submit(`/agent ${screen.agentId} ${screen.selected === 0 ? "off" : "on"}`);
-    if (this.state.screen.type === "agent_settings") this.state.screen = { type: "session" };
-    else if (this.state.screen.type === "model_picker" && returnTo) this.state.screen.returnTo = returnTo;
-    this.notify();
-  }
-
-  private async advanceRewind(): Promise<void> {
-    const screen = this.state.screen;
-    if (screen.type !== "rewind") return;
-    const item = screen.items[screen.selected];
-    if (!item) return;
-    screen.busy = true;
-    this.notify();
-    await this.submit(`/rewind ${item.turnId}`);
-    if (this.state.screen.type === "rewind") this.state.screen = { type: "session" };
-    this.notify();
   }
 
   private presentAsk(request: AskRequest, signal: AbortSignal): Promise<AskAnswers> {

@@ -13,7 +13,7 @@ const status: ThreadCommand = {
   async execute(_args, context) {
     context.signal.throwIfAborted();
     const tree = context.tree.tree;
-    return ephemeral([
+    const content = [
       `project: ${tree.projectId}`,
       `session tree: ${tree.id}`,
       `active session: ${context.tree.activeSession.id}`,
@@ -22,19 +22,43 @@ const status: ThreadCommand = {
       `turns: ${context.tree.projection.turns.size}`,
       ...(context.skills?.length ? [`skills: ${context.skills.map((skill) => skill.name).join(", ")}`] : []),
       ...(context.skillDiagnostics ?? []).map((item) => `skill ${item.kind}: ${item.message} (${item.path})`),
-    ].join("\n"));
+    ].join("\n");
+    return viewResult(content, { type: "document", title: "Session Tree status", content });
   },
 };
+
+function requestLabel(context: ThreadCommandContext, turnId: string): string {
+  const turn = context.tree.projection.turns.get(turnId);
+  const entry = turn && context.tree.projection.entries.get(turn.userEntryId);
+  const text = entry?.type === "message" && entry.message.role === "user"
+    ? (typeof entry.message.content === "string"
+      ? entry.message.content
+      : entry.message.content.filter((block) => block.type === "text")
+          .map((block) => block.type === "text" ? block.text : "").join(" "))
+    : "";
+  return text.replace(/\s+/g, " ").slice(0, 140) || "(no request text)";
+}
 
 const sessions: ThreadCommand = {
   name: "sessions",
   description: "List root Sessions and their saved live tips.",
   async execute(_args, context) {
     context.signal.throwIfAborted();
-    const lines = listSessionHistory(context.tree).map((session) =>
+    const summaries = listSessionHistory(context.tree);
+    const lines = summaries.map((session) =>
       `${session.active ? "*" : " "} ${session.sessionId} tip=${short(session.liveTipTurnId)} turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
     );
-    return ephemeral(lines.join("\n"));
+    return viewResult(lines.join("\n"), {
+      type: "command_picker",
+      title: "Sessions · opening leaves workspace files unchanged",
+      items: summaries.map((session) => ({
+        label: session.liveTipTurnId ? requestLabel(context, session.liveTipTurnId) : "Root (no active turns)",
+        description: `${session.sessionId} · ${new Date(session.createdAt).toLocaleString()} · ${session.turnCount} turns`,
+        command: `/session ${session.sessionId}`,
+        submit: true,
+        current: session.active,
+      })),
+    });
   },
 };
 
@@ -42,6 +66,7 @@ const open: ThreadCommand = {
   name: "open",
   description: "Resume a root Session without changing workspace files.",
   async execute(args, context) {
+    if (args.length === 0) return sessions.execute([], context);
     if (args.length !== 1) throw new Error("Usage: /thread open <session-id>");
     context.signal.throwIfAborted();
     const session = await context.tree.openSession(args[0]!);
@@ -55,17 +80,10 @@ function allHistoryItems(context: ThreadCommandContext): HistoryViewItem[] {
   return [...context.tree.projection.turns.values()]
     .sort((left, right) => right.startedAt - left.startedAt)
     .map((turn) => {
-      const entry = context.tree.projection.entries.get(turn.userEntryId);
-      const text = entry?.type === "message" && entry.message.role === "user"
-        ? (typeof entry.message.content === "string"
-          ? entry.message.content
-          : entry.message.content.filter((block) => block.type === "text")
-              .map((block) => block.type === "text" ? block.text : "").join(" "))
-        : "";
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
-        label: text.replace(/\s+/g, " ").slice(0, 140) || "(empty user message)",
+        label: requestLabel(context, turn.id),
         outcome: turn.status,
         startedAt: turn.startedAt,
         status: turn.sessionId !== activeSessionId
@@ -127,8 +145,12 @@ const search: ThreadCommand = {
   name: "search",
   description: "Search text across all Sessions and historical paths.",
   async execute(args, context) {
-    if (args.length === 0) throw new Error("Usage: /thread search <query> [<query> ...]");
     context.signal.throwIfAborted();
+    if (args.length === 0) return viewResult("Usage: /thread search <query> [<query> ...]", {
+      type: "composer",
+      text: "/thread search ",
+      hint: "Enter a search query, then press Enter.",
+    });
     const result = await context.recall.search(args, 20, context.signal);
     const content = result.hits.length
       ? result.hits.map((hit) =>

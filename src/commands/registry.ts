@@ -1,4 +1,4 @@
-import type { CommandRegistry, CommandResult, ThreadCommandContext } from "./types.js";
+import { viewResult, type CommandRegistry, type CommandResult, type ThreadCommandContext } from "./types.js";
 import { parseCommandLine } from "./parser.js";
 
 export const THREAD_COMMAND_PREFIX = "/thread";
@@ -13,11 +13,20 @@ export class ThreadCommandRouter {
     }
     const args = parseCommandLine(input.slice(prefixLength).trim());
     if (args.length === 0) {
-      return {
-        content: this.registry.list().map((command) => `${THREAD_COMMAND_PREFIX} ${command.name} — ${command.description}`).join("\n"),
-        presentation: "ephemeral",
-        changedState: false,
-      };
+      const commands = this.registry.list();
+      return viewResult(
+        commands.map((command) => `${THREAD_COMMAND_PREFIX} ${command.name} — ${command.description}`).join("\n"),
+        {
+          type: "command_picker",
+          title: "Session Tree",
+          items: commands.map((command) => ({
+            label: command.name,
+            description: command.description,
+            command: `${THREAD_COMMAND_PREFIX} ${command.name}`,
+            submit: true,
+          })),
+        },
+      );
     }
     const name = args.shift()!;
     const command = this.registry.get(name);

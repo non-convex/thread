@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spyOn } from "bun:test";
+import * as git from "../src/utils/git.js";
 import {
   fauxAssistantMessage,
   fauxText,
@@ -18,7 +20,8 @@ import type {
 import { ThreadApp } from "../src/app.js";
 import { loadThreadConfig } from "../src/config/thread-config.js";
 import { loadThreadState, saveThreadState, type ThreadState } from "../src/config/thread-state.js";
-import { primarySlashSuggestions } from "../src/ui/terminal/controller.js";
+import { primarySlashSuggestions, ThreadTuiController } from "../src/ui/terminal/controller.js";
+import { filteredModels, isFloatingOverlay, type UiScreen } from "../src/ui/state.js";
 
 class TestModel implements ModelClient {
   readonly providerId = "test";
@@ -191,6 +194,147 @@ test("/model selects the main model and /agent configures secondary agents", asy
     assert.equal(app.dreamerEnabled, false);
     assert.equal(states.at(-1)?.agents?.dreamer?.enabled, false);
   } finally {
+    await app.close();
+    if (previous === undefined) delete process.env.THREAD_HOME;
+    else process.env.THREAD_HOME = previous;
+  }
+});
+
+test("TUI command menus preserve navigation, prefill arguments, and allow failed choices to be retried", async (t) => {
+  const values = await directory("thread-command-menu-");
+  t.after(values.cleanup);
+  // Menu navigation does not need background Git processes holding the temporary cwd.
+  const gitProbe = spyOn(git, "gitBranchName").mockResolvedValue(undefined);
+  t.after(() => gitProbe.mockRestore());
+  const previous = process.env.THREAD_HOME;
+  process.env.THREAD_HOME = path.join(values.path, "home");
+  const catalog = new TestCatalog();
+  const app = await ThreadApp.open({
+    rootPath: values.path,
+    model: catalog.createClient("test", "main"),
+    modelCatalog: catalog,
+    skills: { skills: [{
+      name: "review", description: "Review the current changes", content: "Review only.",
+      filePath: path.join(values.path, "SKILL.md"), baseDir: values.path, disableModelInvocation: true,
+    }], diagnostics: [] },
+  });
+  const tui = new ThreadTuiController(app);
+  const screen = <T extends UiScreen["type"]>(type: T): Extract<UiScreen, { type: T }> => {
+    assert.equal(tui.state.screen.type, type);
+    return tui.state.screen as Extract<UiScreen, { type: T }>;
+  };
+  const enter = async () => {
+    tui.handleScreenKey({ name: "return", ctrl: false, shift: false, meta: false });
+    const deadline = Date.now() + 3_000;
+    while (tui.isActive || (isFloatingOverlay(tui.state.screen) && tui.state.screen.busy)) {
+      assert.ok(Date.now() < deadline, "menu command did not finish");
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+  };
+  try {
+    const unregister = app.commands.register({
+      name: "extension", description: "Extension command",
+      async execute() { return { content: "extension result", presentation: "ephemeral", changedState: false }; },
+    });
+    await tui.submit("/thread");
+    const menu = screen("command_picker");
+    assert.ok(menu.items.some((item) => item.label === "extension"));
+    menu.selected = menu.items.findIndex((item) => item.label === "status");
+    await enter();
+    assert.match(screen("document").content, /active session:/);
+    tui.closeView();
+    assert.equal(screen("command_picker"), menu);
+    assert.equal(menu.items[menu.selected]!.label, "status");
+    menu.selected = menu.items.findIndex((item) => item.label === "search");
+    await enter();
+    screen("session");
+    assert.equal(tui.state.composerInput, "/thread search ");
+    delete tui.state.composerInput; // The mounted composer consumes this request.
+    unregister();
+
+    await tui.submit("/skill");
+    assert.equal(screen("command_picker").items[0]!.label, "review");
+    await enter();
+    assert.equal(tui.state.composerInput, "/skill review ");
+    assert.equal(app.sessionTree.projection.turns.size, 0);
+    delete tui.state.composerInput;
+
+    await tui.submit("/agent");
+    const agents = screen("agent_picker");
+    agents.selected = 1;
+    await enter();
+    const settings = screen("agent_settings");
+    settings.selected = 2; // Explicit model selection, independent of On/Off.
+    await enter();
+    for (const character of "worker") {
+      tui.handleScreenKey({ name: character, sequence: character, ctrl: false, shift: false, meta: false });
+    }
+    const picker = screen("model_picker");
+    assert.deepEqual(filteredModels(picker).map((model) => model.modelId), ["worker"]);
+    picker.selected = filteredModels(picker).length; // Browse all models.
+    await enter();
+    assert.equal(screen("model_picker").scope, "all");
+    assert.equal(screen("model_picker").filter, "worker");
+    tui.closeView();
+    assert.equal(screen("agent_settings"), settings);
+    assert.equal(settings.selected, 2);
+    tui.closeView();
+    assert.equal(screen("agent_picker"), agents);
+    assert.equal(agents.selected, 1);
+    tui.closeView();
+    screen("session");
+
+    const listed = await app.handleInput("/agent implementation-worker model list test", { signal: new AbortController().signal });
+    assert.equal(listed.kind, "command");
+    if (listed.kind !== "command") throw new Error("Expected model list");
+    assert.match(listed.result.content, /test\/worker/); // Plain mode keeps its list.
+    assert.equal(listed.result.view?.type, "model_picker");
+    await tui.submit("/model list test");
+    const mainPicker = screen("model_picker");
+    assert.equal(mainPicker.filter, "test/");
+    mainPicker.models.push({ ...mainPicker.models[0]!, providerId: "other-test" });
+    assert.ok(filteredModels(mainPicker).every((model) => model.providerId === "test"));
+    mainPicker.models.unshift({ ...mainPicker.models[0]!, modelId: "missing" });
+    mainPicker.selected = 0;
+    await enter();
+    assert.equal(screen("model_picker"), mainPicker);
+    assert.match(mainPicker.error ?? "", /Unknown model/);
+    assert.equal(mainPicker.busy, false);
+    mainPicker.selected = 1;
+    await enter();
+    screen("session");
+
+    const firstSession = app.sessionTree.activeSession.id;
+    const turn = await app.sessionTree.startTurn("Find this request in the Session picker");
+    await app.sessionTree.finishTurn(turn.id, "completed");
+    await tui.submit("/new");
+    for (const command of ["/session", "/thread sessions", "/thread open"]) {
+      await tui.submit(command);
+      const sessions = screen("command_picker");
+      assert.equal(sessions.items.length, 2);
+      assert.ok(sessions.items.some((item) => item.current));
+      sessions.selected = sessions.items.findIndex((item) => item.command === `/session ${firstSession}`);
+      assert.match(sessions.items[sessions.selected]!.label, /Find this request/);
+    }
+    await enter();
+    assert.equal(app.sessionTree.activeSession.id, firstSession);
+    screen("session");
+
+    await tui.submit("/rewind");
+    const rewind = screen("rewind");
+    rewind.items[0]!.turnId = "missing";
+    await enter();
+    await enter();
+    assert.equal(screen("rewind"), rewind);
+    assert.ok(rewind.error);
+    assert.equal(rewind.confirm, false);
+    rewind.items[0]!.turnId = turn.id;
+    await enter();
+    await enter();
+    screen("session");
+    assert.equal(app.sessionTree.activeLiveTip, null);
+  } finally {
+    tui.dispose();
     await app.close();
     if (previous === undefined) delete process.env.THREAD_HOME;
     else process.env.THREAD_HOME = previous;

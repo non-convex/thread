@@ -2,7 +2,7 @@ import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opent
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { isSlashCommandInput } from "../../app/input-router.js";
 import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
-import { statusLineParts, type AgentPickerScreen, type AgentSettingsScreen, type AskScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type TranscriptItem, type UiState } from "../state.js";
+import { filteredModels, statusLineParts, type AgentPickerScreen, type AgentSettingsScreen, type AskScreen, type CommandPickerScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type TranscriptItem, type UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
 import { type TerminalMeta, type ThreadTuiViewModel } from "./controller.js";
@@ -219,6 +219,53 @@ function ComposerSuggestions(props: {
   );
 }
 
+const COMMAND_OVERLAY_MAX_ITEMS = 6;
+
+function CommandPickerOverlay(props: {
+  screen: Accessor<CommandPickerScreen>;
+  selected: Accessor<number>;
+  navigated: Accessor<boolean>;
+  resources: ThreadViewResources;
+  contentWidth: Accessor<number>;
+}) {
+  const theme = props.resources.theme;
+  const rowWidth = () => props.contentWidth() - 2;
+  const visible = createMemo(() => selectedWindow(props.screen().items, props.selected(), COMMAND_OVERLAY_MAX_ITEMS));
+  return (
+    <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
+      <box flexDirection="row" width={rowWidth()} height={1} marginBottom={1}>
+        <text flexGrow={1} flexShrink={1} height={1} wrapMode="none" truncate={true} fg={theme.accent} attributes={bold}>
+          {props.screen().title}
+        </text>
+        <text height={1} wrapMode="none" fg={theme.faint}>
+          {props.screen().items[props.selected()]?.submit === false ? "↑/↓ · ⏎ edit · esc" : "↑/↓ · ⏎ select · esc"}
+        </text>
+      </box>
+      <For each={visible()}>
+        {({ item, index }) => (
+          <box flexDirection="column" width={rowWidth()} height={2} backgroundColor={index === props.selected() ? theme.surfaceHigh : "transparent"}>
+            <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={index === props.selected() ? theme.sparkAlt : theme.text} attributes={index === props.selected() ? bold : 0}>
+              {index === props.selected() ? `${STATUS_ICONS.selected} ` : "  "}{item.current ? `${STATUS_ICONS.current} ` : ""}{item.label}
+            </text>
+            <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={theme.muted}>  {item.description}</text>
+          </box>
+        )}
+      </For>
+      <Show when={props.screen().items.length === 0}>
+        <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
+          {props.screen().emptyText ?? "No options available."}
+        </text>
+      </Show>
+      <Show when={props.screen().busy}>
+        <text width={rowWidth()} height={1} fg={theme.spark}>opening…</text>
+      </Show>
+      <Show when={props.screen().error !== undefined && !props.navigated()}>
+        <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={theme.error}>{props.screen().error}</text>
+      </Show>
+    </box>
+  );
+}
+
 /* The /agent model list rides on the session screen exactly like the "/" suggestion
  * popup: a small rounded panel floating above the composer instead of a
  * separate full-screen takeover. */
@@ -238,8 +285,9 @@ function ModelPickerOverlay(props: {
   contentWidth: Accessor<number>;
 }) {
   const theme = () => props.resources.theme;
+  const models = createMemo(() => filteredModels(props.screen()));
   const visible = createMemo(() =>
-    selectedWindow(props.screen().models, props.selected(), MODEL_OVERLAY_MAX_ROWS));
+    selectedWindow(models(), props.selected(), MODEL_OVERLAY_MAX_ROWS));
   const rowWidth = () => props.contentWidth() - 2;
   const identifierWidth = createMemo(() => {
     const longest = props.screen().models.reduce(
@@ -271,6 +319,9 @@ function ModelPickerOverlay(props: {
           {props.screen().agentId === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
         </text>
       </box>
+      <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={theme().muted}>
+        Filter: {props.screen().filter || "type a provider or model name"}
+      </text>
       <For each={visible()}>
         {({ item: model, index }) => {
           const selected = () => index === props.selected();
@@ -313,6 +364,14 @@ function ModelPickerOverlay(props: {
           );
         }}
       </For>
+      <Show when={models().length === 0}>
+        <text width={rowWidth()} height={1} fg={theme().muted}>No matching models. Edit the filter or change the model list.</text>
+      </Show>
+      <box width={rowWidth()} height={1} backgroundColor={props.selected() === models().length ? theme().surfaceHigh : "transparent"}>
+        <text width={rowWidth()} height={1} wrapMode="none" truncate={true} fg={props.selected() === models().length ? theme().sparkAlt : theme().accent}>
+          {props.selected() === models().length ? `${STATUS_ICONS.selected} ` : "  "}{props.screen().scope === "configured" ? "Browse all models" : "Show configured models"}
+        </text>
+      </box>
       <Show when={props.screen().busy}>
         <box flexDirection="row" width={props.contentWidth() - 2} height={1}>
           <SpinnerText fg={theme().spark} />
@@ -407,7 +466,8 @@ function AgentSettingsOverlay(props: {
   const theme = () => props.resources.theme;
   const options = [
     { label: "Off", description: `Disable ${props.screen().label}` },
-    { label: "On", description: `Choose a model, then enable ${props.screen().label}` },
+    { label: "On", description: "Use the last model, or choose one if none is set" },
+    { label: "Choose model", description: `Select a model and enable ${props.screen().label}` },
   ] as const;
   return (
     <box flexDirection="column" width={props.contentWidth()} paddingX={1}>
@@ -418,7 +478,7 @@ function AgentSettingsOverlay(props: {
       <For each={options}>
         {(option, index) => {
           const selected = () => index() === props.selected();
-          const current = () => props.screen().enabled === (index() === 1);
+          const current = () => index() < 2 && props.screen().enabled === (index() === 1);
           return (
             <box
               flexDirection="row"
@@ -430,7 +490,7 @@ function AgentSettingsOverlay(props: {
               <text width={2} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : current() ? theme().accent : theme().muted}>
                 {selected() ? `${STATUS_ICONS.selected} ` : current() ? `${STATUS_ICONS.current} ` : "  "}
               </text>
-              <text width={8} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().text} attributes={selected() || current() ? bold : 0}>
+              <text width={14} height={1} wrapMode="none" fg={selected() ? theme().sparkAlt : theme().text} attributes={selected() || current() ? bold : 0}>
                 {option.label}
               </text>
               <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={selected() ? theme().softText : theme().muted}>
@@ -684,6 +744,8 @@ export function SessionScreen(props: {
   // status line + composer (border + textarea row + optional attachment row) + footer
   const controlsHeight = () => props.composerHeight() + 4 + attachmentLine();
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
+  const commandPicker = (): CommandPickerScreen | undefined =>
+    state().screen.type === "command_picker" ? state().screen as CommandPickerScreen : undefined;
   const modelPicker = (): ModelPickerScreen | undefined =>
     state().screen.type === "model_picker" ? state().screen as ModelPickerScreen : undefined;
   const agentPicker = (): AgentPickerScreen | undefined =>
@@ -697,28 +759,34 @@ export function SessionScreen(props: {
    * interior width is the terminal width minus margins and the two border
    * columns. */
   const overlayContentWidth = () => Math.max(20, props.terminalWidth() - 4);
+  const commandOverlayHeight = () => {
+    const picker = commandPicker();
+    if (!picker) return 0;
+    return 2 + Math.max(1, Math.min(COMMAND_OVERLAY_MAX_ITEMS, picker.items.length) * 2)
+      + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
+  };
   const modelOverlayHeight = () => {
     const picker = modelPicker();
     if (!picker) return 0;
-    // Header, its one-row margin, windowed rows, optional status, and border.
-    return 2 + Math.min(MODEL_OVERLAY_MAX_ROWS, picker.models.length)
+    // Header + margin, filter, model rows, scope action, status, and border.
+    return 2 + 1 + Math.max(1, Math.min(MODEL_OVERLAY_MAX_ROWS, filteredModels(picker).length)) + 1
       + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
   };
   const agentPickerOverlayHeight = () => {
     const picker = agentPicker();
     if (!picker) return 0;
-    return 1 + picker.agents.length + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
+    return 2 + picker.agents.length + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
   };
   const subagentOverlayHeight = () => {
     const settings = agentSettings();
     if (!settings) return 0;
-    return 1 + 2 + (settings.busy ? 1 : 0) + (settings.error ? 1 : 0) + 2;
+    return 2 + 3 + (settings.busy ? 1 : 0) + (settings.error ? 1 : 0) + 2;
   };
   const rewindOverlayHeight = () => {
     const rewind = pathPicker();
     if (!rewind) return 0;
     // header + windowed rows + optional confirm/busy/error lines + border
-    return 1 + Math.min(REWIND_OVERLAY_MAX_ROWS, rewind.items.length)
+    return 2 + Math.min(REWIND_OVERLAY_MAX_ROWS, rewind.items.length)
       + (rewind.confirm ? 1 : 0)
       + (rewind.busy ? 1 : 0) + (rewind.error ? 1 : 0) + 2;
   };
@@ -766,7 +834,7 @@ export function SessionScreen(props: {
           </Show>
         </scrollbox>
       </Show>
-      <Show when={modelPicker() === undefined && agentPicker() === undefined && agentSettings() === undefined && pathPicker() === undefined && props.suggestions().length > 0}>
+      <Show when={state().screen.type === "session" && props.suggestions().length > 0}>
         <box
           position="absolute"
           right={1}
@@ -790,6 +858,28 @@ export function SessionScreen(props: {
       {/* Do NOT use Show's callback form here: the controller mutates the
           picker screen in place, so the object reference never changes and a
           Show-scoped accessor would freeze the selection highlight. */}
+      <Show when={commandPicker() !== undefined}>
+        <box
+          position="absolute"
+          right={1}
+          bottom={controlsHeight()}
+          left={1}
+          height={commandOverlayHeight()}
+          zIndex={20}
+          border={true}
+          borderStyle="rounded"
+          borderColor={theme.borderStrong}
+          backgroundColor={theme.surface}
+        >
+          <CommandPickerOverlay
+            screen={() => commandPicker() as CommandPickerScreen}
+            selected={props.overlaySelected}
+            navigated={props.overlayNavigated}
+            resources={props.resources}
+            contentWidth={overlayContentWidth}
+          />
+        </box>
+      </Show>
       <Show when={agentPicker() !== undefined}>
         <box
           position="absolute"

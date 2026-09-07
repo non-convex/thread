@@ -104,6 +104,15 @@ export function ThreadRoot(props: {
   createEffect(() => {
     const activeState = state();
     if (activeState.screen.type === "session" && composer) {
+      if (activeState.composerInput !== undefined) {
+        const input = activeState.composerInput;
+        delete activeState.composerInput;
+        composer.setText(input);
+        composer.cursorOffset = input.length;
+        setComposerText(input);
+        setComposerCursor(input.length);
+        setForcePathCompletion(false);
+      }
       if (!activeState.busy) composer.focus();
     }
   });

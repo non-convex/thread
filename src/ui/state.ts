@@ -1,5 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
-import type { AgentPickerItem, EphemeralView, HistoryViewItem } from "../commands/types.js";
+import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../commands/types.js";
 import type { AskRequest } from "./ask.js";
 import type { UiEvent } from "./events.js";
 import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/model.js";
@@ -61,11 +61,10 @@ export interface ModelPickerScreen {
   currentProviderId: string | undefined;
   currentModelId: string | undefined;
   scope: "configured" | "all";
+  filter: string;
   selected: number;
   busy: boolean;
   error: string | undefined;
-  /** When set, Esc reopens this overlay instead of returning to the session. */
-  returnTo?: "agent_picker";
 }
 
 export interface AgentSettingsScreen {
@@ -76,8 +75,16 @@ export interface AgentSettingsScreen {
   selected: number;
   busy: boolean;
   error: string | undefined;
-  /** When set, Esc reopens this overlay instead of returning to the session. */
-  returnTo?: "agent_picker";
+}
+
+export interface CommandPickerScreen {
+  type: "command_picker";
+  title: string;
+  items: CommandPickerItem[];
+  emptyText?: string;
+  selected: number;
+  busy: boolean;
+  error: string | undefined;
 }
 
 export interface AgentPickerScreen {
@@ -113,26 +120,43 @@ export type UiScreen =
   | AgentSettingsScreen
   | AgentPickerScreen
   | RewindScreen
+  | CommandPickerScreen
   | AskScreen;
 
-export type FloatingOverlayScreen = ModelPickerScreen | AgentSettingsScreen | AgentPickerScreen | RewindScreen;
+export type FloatingOverlayScreen = ModelPickerScreen | AgentSettingsScreen | AgentPickerScreen | RewindScreen | CommandPickerScreen;
 
 export function isFloatingOverlay(screen: UiScreen): screen is FloatingOverlayScreen {
   return screen.type === "model_picker"
     || screen.type === "agent_settings"
     || screen.type === "agent_picker"
+    || screen.type === "command_picker"
     || screen.type === "rewind";
 }
 
+export function filteredModels(screen: Pick<ModelPickerScreen, "models" | "filter">): ModelDescriptor[] {
+  const query = screen.filter.trim().toLowerCase();
+  if (!query) return screen.models;
+  return screen.models.filter((model) => {
+    const identifier = `${model.providerId}/${model.modelId}`.toLowerCase();
+    // `/model list <provider>` starts with an exact provider prefix, not a suffix match.
+    return query.endsWith("/")
+      ? identifier.startsWith(query)
+      : `${identifier} ${model.name.toLowerCase()}`.includes(query);
+  });
+}
+
 export function overlaySelectionCount(screen: FloatingOverlayScreen): number {
-  if (screen.type === "model_picker") return screen.models.length;
-  if (screen.type === "agent_settings") return 2;
+  // The last model-picker row switches between configured and all models.
+  if (screen.type === "model_picker") return filteredModels(screen).length + 1;
+  if (screen.type === "agent_settings") return 3;
   if (screen.type === "agent_picker") return screen.agents.length;
   return screen.items.length;
 }
 
 export interface UiState {
   screen: UiScreen;
+  /** One-shot request consumed by the terminal composer after a menu choice. */
+  composerInput?: string;
   transcript: TranscriptItem[];
   liveTurn: LiveTurn | undefined;
   busy: boolean;
@@ -192,8 +216,13 @@ export function statusLineParts(
 
 export function openEphemeralView(state: UiState, view: EphemeralView): void {
   if (view.type === "document") state.screen = { type: "document", title: view.title, content: view.content };
+  if (view.type === "command_picker") {
+    const current = view.items.findIndex((item) => item.current);
+    state.screen = { ...view, selected: current >= 0 ? current : 0, busy: false, error: undefined };
+  }
   if (view.type === "model_picker") {
-    const current = view.models.findIndex((model) =>
+    const filter = view.filter ?? "";
+    const current = filteredModels({ models: view.models, filter }).findIndex((model) =>
       model.providerId === view.currentProviderId && model.modelId === view.currentModelId
     );
     state.screen = {
@@ -203,6 +232,7 @@ export function openEphemeralView(state: UiState, view: EphemeralView): void {
       currentProviderId: view.currentProviderId,
       currentModelId: view.currentModelId,
       scope: view.scope,
+      filter,
       selected: current >= 0 ? current : 0,
       busy: false,
       error: undefined,
