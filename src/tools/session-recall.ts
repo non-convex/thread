@@ -82,7 +82,7 @@ export function createSessionSearchTool(recall: SessionRecallService): AgentTool
     name: "session_search",
     description:
       "Search the entire project Session Tree, including compacted-away turns, other root Sessions, and paths retained after rewind. " +
-      "Use this instead of guessing when a question depends on earlier project decisions that are not in the current context. " +
+      "Use this only when the user's current request depends on project history and the needed information or original evidence is missing from the current context. " +
       "Search combines Chinese-aware keywords and local semantic recall. Use descriptions of earlier decisions or attempts, or exact identifiers. " +
       "Only ended turns are searched; indexing coverage is reported with results.",
     parameters: Type.Object({
@@ -119,8 +119,9 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
   return {
     name: "session_read",
     description:
-      "Read a historical turn returned by session_search, in pages of at most 64KB. Narrative is returned by default; " +
-      "thinking, tool calls, and tool results are opt-in because they can be large. " +
+      "Read a relevant historical turn found by session_search or whose id is already known, in pages of at most 64KB. " +
+      "Use this only when the user's current request depends on project history and the needed information or original evidence is missing from the current context. " +
+      "Narrative is returned by default; thinking, tool calls, and tool results are opt-in because they can be large. " +
       "Use the continuation offset with the same turnId and read options to read the next page.",
     parameters: Type.Object({
       turnId: Type.String(),
