@@ -1,7 +1,6 @@
-import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { AgentRuntime, type TurnResult } from "../agent/runtime.js";
-import type { RunTurnOptions } from "../agent/turn-runner.js";
 import type { ModelCatalog, ModelClient } from "../agent/model-client.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
 import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
@@ -11,7 +10,7 @@ import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
 import { createAgentRuntime } from "./create-agent-runtime.js";
 import { bindModel, ModelSelection } from "./model-selection.js";
-import { getThreadHome, type ModelSelectionConfig } from "../config/thread-config.js";
+import { getThreadHome } from "../config/thread-config.js";
 import type { ThreadState } from "../config/thread-state.js";
 import { ContextBuilder } from "../context/builder.js";
 import { contextBudget } from "../context/budget.js";
@@ -22,71 +21,18 @@ import { FileHistoryService } from "../file-history/service.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
 import type { Project } from "../project/model.js";
 import { ProjectService } from "../project/service.js";
-import { SessionRecallService, type SessionRecallOptions } from "../session-recall/service.js";
+import { SessionRecallService } from "../session-recall/service.js";
 import { SessionTreeRepository } from "../session-tree/repository.js";
 import { SessionTreeService } from "../session-tree/service.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
-import { formatSkillsSection, loadSkills, type LoadedSkills, type SkillPaths } from "../skills/loader.js";
+import { formatSkillsSection, loadSkills, type LoadedSkills } from "../skills/loader.js";
 import { createAskTool } from "../tools/ask.js";
-import { builtinTool, type BuiltinToolName } from "../tools/builtins.js";
-import { snapshotRuntimeOptions, snapshotTool } from "./options.js";
+import { snapshotRuntimeOptions, snapshotTool, type ThreadRuntimeOptions, type RuntimeOptionsSnapshot, type PromptOptions, type RewindOptions } from "./options.js";
 import { createSessionReadTool, createSessionSearchTool } from "../tools/session-recall.js";
 import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
 import { ToolRegistry, type AgentTool } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
 import { safeRuntimeEvent, type RuntimeEvent, type RuntimeEventSink } from "./events.js";
-import type { HostToolPolicy } from "./policy.js";
-
-export interface ThreadRuntimeOptions {
-  rootPath: string;
-  /** Exact project data directory. Omitted: Thread's usual per-project directory. */
-  stateDirectory?: string;
-  model?: ModelClient;
-  modelCatalog?: ModelCatalog;
-  thinkingLevel?: ModelThinkingLevel;
-  /** Base instructions. A bare runtime adds no coding or global-memory defaults. */
-  systemPrompt?: string;
-  appendSystemPrompt?: string;
-  /** Host-provided instructions shared by the main agent and implementation workers. No file discovery. */
-  sharedInstructions?: string;
-  /** Selected basic tools and host tools. Omitted: no basic tools. */
-  tools?: readonly (BuiltinToolName | AgentTool)[];
-  cacheRetention?: CacheRetention;
-  /** Only declared paths are scanned; loaded skills can also be supplied directly. */
-  skills?: SkillPaths | LoadedSkills;
-  /** Capture supported file edits for rewind. Default: false; sessions still persist. */
-  fileCheckpoints?: boolean;
-  /** Explicitly enables the recall service and its two tools. */
-  search?: SessionRecallOptions;
-  /** Explicitly enables global memory, using this file only. */
-  globalMemoryPath?: string;
-  askPresenter?: AskPresenter;
-  toolPolicy?: HostToolPolicy;
-  writableExternalPaths?: readonly string[];
-  implementationWorker?: {
-    enabled: boolean;
-    model?: ModelClient;
-    defaultModel?: ModelSelectionConfig;
-    settings?: ImplementationWorkerProfileSettings;
-  };
-  dreamer?: {
-    enabled: boolean;
-    model?: ModelClient;
-    defaultModel?: ModelSelectionConfig;
-    thinkingLevel?: ModelThinkingLevel;
-  };
-  agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
-  state?: ThreadState;
-  onStateChange?: (state: ThreadState) => void;
-}
-
-export type PromptOptions = Omit<RunTurnOptions, "signal" | "sessionId"> & { signal?: AbortSignal };
-
-export interface RewindOptions {
-  signal?: AbortSignal;
-  /** Default: the runtime's fileCheckpoints setting. False only moves the session's live tip. */
-  restoreFiles?: boolean;
-}
 
 interface RuntimeResources {
   project: Project;
@@ -124,7 +70,7 @@ export class ThreadRuntime {
   private readonly modelSelection: ModelSelection;
   private readonly memory: GlobalMemorySnapshots | undefined;
   private readonly dreamer: DreamerScheduler | undefined;
-  private readonly options: ThreadRuntimeOptions;
+  private readonly options: RuntimeOptionsSnapshot;
   private readonly loadedSkills: LoadedSkills;
   private readonly workerSettings: ImplementationWorkerProfileSettings;
   private readonly listeners = new Set<RuntimeEventSink>();
@@ -135,7 +81,7 @@ export class ThreadRuntime {
   private active: ActiveOperation | undefined;
   private closing: Promise<void> | undefined;
 
-  private constructor(options: ThreadRuntimeOptions, values: RuntimeResources) {
+  private constructor(options: RuntimeOptionsSnapshot, values: RuntimeResources) {
     this.options = options;
     this.project = Object.freeze({ ...values.project });
     this.rootPath = values.project.rootPath;
@@ -165,13 +111,13 @@ export class ThreadRuntime {
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
     }) : undefined;
-    for (const tool of options.tools ?? []) this.toolRegistry.register(typeof tool === "string" ? builtinTool(tool) : tool);
+    for (const tool of options.tools) this.toolRegistry.register(tool);
     if (this.recallService) {
       this.toolRegistry.register(createSessionSearchTool(this.recallService));
       this.toolRegistry.register(createSessionReadTool(this.recallService));
       this.extensions.on("turn_end", () => this.recallService?.turnFinished());
     }
-    if (this.skills.some((skill) => !skill.disableModelInvocation)) {
+    if (this.loadedSkills.skills.some((skill) => !skill.disableModelInvocation)) {
       this.toolRegistry.register(createSkillTool(() => this.loadedSkills.skills));
     }
     this.syncTaskTools();
@@ -179,8 +125,8 @@ export class ThreadRuntime {
     this.modelSelection.select(options.model);
   }
 
-  static async open(options: ThreadRuntimeOptions): Promise<ThreadRuntime> {
-    options = snapshotRuntimeOptions(options);
+  static async open(input: ThreadRuntimeOptions): Promise<ThreadRuntime> {
+    const options = snapshotRuntimeOptions(input);
     const project = await ProjectService.open(options.rootPath, options.stateDirectory ? { stateDirectory: options.stateDirectory } : {});
     const skills = options.skills && "paths" in options.skills
       ? await loadSkills(options.skills.paths.map((directory) => path.resolve(project.rootPath, directory)))

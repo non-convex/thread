@@ -4,15 +4,7 @@ import { contentText, type Context, type ThinkingLevel } from "@earendil-works/p
 import type { ModelClient } from "../../agent/model-client.js";
 import { COMPACTION_SUMMARY_ATTEMPTS } from "./policy.js";
 
-/**
- * Run one summary request until it yields usable prose.
- *
- * Provider-level transient failures are already retried inside `stream`. This
- * loop covers the other failure mode: a response that arrives but is unusable
- * (empty, or an attempted tool call). Retries are silent — no UI event — and
- * exhausting them throws, because a compaction that cannot summarize must not
- * silently drop the region it was about to remove.
- */
+/** Retry unusable summaries silently; exhaustion fails compaction without discarding history. */
 export async function requestSummary(options: {
   model: ModelClient;
   context: Context;

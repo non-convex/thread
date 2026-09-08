@@ -1,10 +1,10 @@
-import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app/thread-app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../context/usage.js";
 import { gitBranchName } from "../../utils/git.js";
 import type { RuntimeEvent } from "../../runtime/events.js";
-import { AskDismissedError, type AskAnswers, type AskRequest } from "../../runtime/interaction.js";
+import { AskService } from "../../runtime/interaction.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import { composerImageContent, type ComposerImage } from "../images.js";
 import {
@@ -12,31 +12,13 @@ import {
   filteredModels,
   isFloatingOverlay,
   openEphemeralView,
-  reduceUiEvent,
   type AskScreen,
   type UiScreen,
   type UiState,
 } from "../state.js";
+import { reduceUiEvent } from "../reducer.js";
+import type { SlashSuggestion, TerminalKey, TerminalMeta, UiNotifyKind } from "./view-model.js";
 import { projectTranscript } from "./transcript-projection.js";
-
-export interface TerminalMeta {
-  rootPath: string;
-  modelLabel: string;
-  modelName: string;
-  thinkingLevel: ModelThinkingLevel;
-  supportsThinking: boolean;
-  contextPercent: number;
-  cacheHitPercent: number | null;
-  cacheMissedTokens: number;
-  cacheMissReason: "idle" | "model-changed" | "prefix-changed" | null;
-  gitBranch: string | undefined;
-  acceptsImages: boolean;
-}
-
-export interface SlashSuggestion {
-  name: string;
-  description: string;
-}
 
 export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = false): SlashSuggestion[] {
   return [
@@ -53,21 +35,12 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
   ];
 }
 
-export interface TerminalKey {
-  name: string;
-  ctrl: boolean;
-  shift: boolean;
-  meta: boolean;
-  sequence?: string;
-}
-
 function printableKey(key: TerminalKey): string | undefined {
   if (key.ctrl || key.meta || !key.sequence || key.sequence.length !== 1) return undefined;
   const code = key.sequence.codePointAt(0)!;
   return code >= 0x20 && code !== 0x7f ? key.sequence : undefined;
 }
 
-export type UiNotifyKind = "live" | "full";
 type Listener = (kind: UiNotifyKind) => void;
 
 function notifyKind(event: UiEvent): UiNotifyKind {
@@ -82,22 +55,6 @@ function notifyKind(event: UiEvent): UiNotifyKind {
   }
 }
 
-export interface ThreadTuiViewModel {
-  readonly state: UiState;
-  readonly meta: TerminalMeta;
-  readonly slashSuggestions: readonly SlashSuggestion[];
-  subscribe(listener: (kind: UiNotifyKind) => void): () => void;
-  interrupt(): boolean;
-  idleCtrlC(): boolean;
-  cancelIdleExitGesture(): void;
-  cycleThinkingLevel(): void;
-  closeView(): void;
-  handleScreenKey(key: TerminalKey): boolean;
-  submit(raw: string, images?: readonly ComposerImage[]): Promise<void>;
-  note(text: string, level?: "info" | "success" | "error"): void;
-  requestStop(): void;
-}
-
 export class ThreadTuiController {
   readonly state: UiState;
   readonly meta: TerminalMeta;
@@ -110,7 +67,7 @@ export class ThreadTuiController {
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
   private gitGeneration = 0;
-  private pendingAsk: { resolve: (answers: AskAnswers) => void; reject: (error: Error) => void } | undefined;
+  private readonly ask = new AskService();
   private askAnswers: string[][] = [];
   private readonly detachAsk: () => void;
   private readonly detachRuntime: () => void;
@@ -138,7 +95,19 @@ export class ThreadTuiController {
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
     this.detachRuntime = app.runtime.subscribe((event) => this.receiveRuntimeEvent(event));
-    this.detachAsk = app.runtime.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
+    this.ask.subscribe((request) => {
+      if (this.stopped || this.disposed) return;
+      this.askAnswers = [];
+      if (request) {
+        this.state.screen = { type: "ask", request, questionIndex: 0,
+          chosen: request.questions.map(() => []), selected: 0, customText: undefined };
+      } else if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
+      this.notify();
+    });
+    this.detachAsk = app.runtime.setAskPresenter({ present: (request, signal) => {
+      if (this.stopped || this.disposed) return Promise.reject(new DOMException("Aborted", "AbortError"));
+      return this.ask.present(request, signal);
+    } });
     this.syncTranscript();
     this.refreshMeta();
     this.refreshGit();
@@ -163,10 +132,11 @@ export class ThreadTuiController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.active?.abort(new DOMException("Aborted", "AbortError"));
     this.detachRuntime();
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
-    this.pendingAsk?.reject(new DOMException("Aborted", "AbortError"));
+    this.ask.dispose();
     this.detachAsk();
     this.listeners.clear();
   }
@@ -236,7 +206,7 @@ export class ThreadTuiController {
 
   closeView(): void {
     if (this.state.screen.type === "ask") {
-      this.pendingAsk?.reject(new AskDismissedError());
+      this.ask.dismiss(this.state.screen.request.id);
     } else {
       this.state.screen = this.viewHistory.pop() ?? { type: "session" };
       this.state.notice = undefined;
@@ -449,44 +419,10 @@ export class ThreadTuiController {
     }
   }
 
-  private presentAsk(request: AskRequest, signal: AbortSignal): Promise<AskAnswers> {
-    return new Promise<AskAnswers>((resolve, reject) => {
-      if (signal.aborted || this.stopped || this.disposed) {
-        reject(new DOMException("Aborted", "AbortError"));
-        return;
-      }
-      const settle = (outcome: () => void) => {
-        signal.removeEventListener("abort", onAbort);
-        this.pendingAsk = undefined;
-        if (!this.stopped && !this.disposed) {
-          if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
-          this.notify();
-        }
-        outcome();
-      };
-      const onAbort = () => settle(() => reject(new DOMException("Aborted", "AbortError")));
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingAsk = {
-        resolve: (answers) => settle(() => resolve(answers)),
-        reject: (error) => settle(() => reject(error)),
-      };
-      this.state.screen = {
-        type: "ask",
-        request,
-        questionIndex: 0,
-        chosen: request.questions.map(() => []),
-        selected: 0,
-        customText: undefined,
-      };
-      this.notify();
-    });
-  }
-
   private handleAskKey(screen: AskScreen, key: TerminalKey, keys: { up: boolean; down: boolean; enter: boolean }): boolean {
     const question = screen.request.questions[screen.questionIndex];
     if (!question) return true;
     const optionCount = question.options.length;
-    // Check for printable character first to enter or continue custom text mode
     const typed = printableKey(key);
     if (typed) {
       if (screen.customText === undefined) screen.customText = "";
@@ -494,7 +430,6 @@ export class ThreadTuiController {
       this.notify();
       return true;
     }
-    // Handle special keys in custom text mode
     if (screen.customText !== undefined) {
       if (key.name === "escape") screen.customText = undefined;
       else if (keys.enter) {
@@ -504,8 +439,7 @@ export class ThreadTuiController {
       this.notify();
       return true;
     }
-    // Handle keys in option selection mode
-    if (key.name === "escape") this.pendingAsk?.reject(new AskDismissedError());
+    if (key.name === "escape") this.ask.dismiss(screen.request.id);
     else if ((keys.up || keys.down) && optionCount > 0) {
       screen.selected = (screen.selected + (keys.up ? -1 : 1) + optionCount) % optionCount;
     } else if (key.name === "space" && question.multiple) {
@@ -533,11 +467,7 @@ export class ThreadTuiController {
     }
     const answers = screen.request.questions.map((_question, index) => this.askAnswers[index] ?? []);
     this.askAnswers = [];
-    this.pendingAsk?.resolve(answers);
-  }
-
-  private activeMessages(): Message[] {
-    return this.app.runtime.contextMessages(this.app.selectedSessionId);
+    this.ask.reply(screen.request.id, answers);
   }
 
   private syncTranscript(): void {
@@ -563,7 +493,7 @@ export class ThreadTuiController {
   }
 
   private refreshMeta(): void {
-    const messages = this.activeMessages();
+    const messages = this.app.runtime.contextMessages(this.app.selectedSessionId);
     const scan = scanCacheUsage(messages);
     this.meta.modelLabel = this.app.runtime.model ? `${this.app.runtime.model.providerId}/${this.app.runtime.model.modelId}` : "no model";
     this.meta.modelName = this.app.runtime.model?.modelId ?? "no model";
@@ -582,8 +512,4 @@ export class ThreadTuiController {
       try { listener(kind); } catch { /* renderer errors do not alter state */ }
     }
   }
-}
-
-export function short(value: string): string {
-  return value.length > 12 ? value.slice(0, 12) : value;
 }

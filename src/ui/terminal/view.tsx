@@ -26,7 +26,7 @@ import {
   pasteHostClipboardImage,
   type ComposerPasteHost,
 } from "./composer-paste.js";
-import type { ThreadTuiViewModel } from "./controller.js";
+import type { ThreadTuiViewModel } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { DocumentScreen } from "./screens.js";
 import { estimatedWrappedLines, COMPOSER_MAX_LINES, COMPOSER_MIN_LINES, SessionScreen } from "./session-screen.js";
@@ -44,14 +44,8 @@ export function ThreadRoot(props: {
   const [composerCursor, setComposerCursor] = createSignal(0);
   const [forcePathCompletion, setForcePathCompletion] = createSignal(false);
   const [suggestionIndex, setSuggestionIndex] = createSignal(0);
-  /* Selection for the floating overlays (model picker and path actions). Kept in a
-   * local signal instead of the mutable screen object so arrow keys repaint
-   * only the overlay rows — routing every keystroke through the controller's
-   * notify() re-evaluated every state()/meta() binding in the tree and the
-   * whole session visibly flickered. The view writes each move back onto the
-   * screen object so the controller's enter path still reads it.
-   * `overlayNavigated` marks "the user moved since the last notify" so the
-   * overlays can drop stale confirm/error lines immediately. */
+  // Local selection signals repaint only the overlay. Mirror them to the screen
+  // for Enter handling; overlayNavigated hides stale confirmations and errors.
   const [overlaySelected, setOverlaySelected] = createSignal(0);
   const [overlayNavigated, setOverlayNavigated] = createSignal(false);
   const [attachments, setAttachments] = createSignal<ComposerImage[]>([]);
@@ -117,9 +111,7 @@ export function ThreadRoot(props: {
     }
   });
 
-  /* Re-sync the view-side overlay selection whenever the controller (re)opens
-   * or updates one of the floating panels. Between notifies the same values
-   * are set, which Solid treats as no-ops. */
+  // Resync selection after the controller opens or updates a panel.
   createEffect(() => {
     const active = screen();
     if (isFloatingOverlay(active)) {
@@ -229,11 +221,7 @@ export function ThreadRoot(props: {
       return;
     }
     if (composerOpen() && key.name === "v" && !key.shift) {
-      /* Ctrl+V is the primary image key, but Windows Terminal binds it to its own
-       * text paste and never forwards the key: when the clipboard holds only an
-       * image the terminal sends nothing at all. Alt+V is not intercepted by any
-       * common terminal, so it is the reliable image key there (Claude Code and
-       * OpenCode ship the same pair). */
+      // Windows Terminal may intercept Ctrl+V; Alt+V provides an image-paste fallback.
       const ctrlV = key.ctrl && !key.meta && !key.option;
       const altV = !key.ctrl && (key.meta || key.option);
       if (ctrlV || altV) {
@@ -389,7 +377,6 @@ export function ThreadRoot(props: {
             resources={props.resources}
             composer={() => composer}
             setComposer={(value) => { composer = value; }}
-            composerText={composerText}
             setComposerText={setComposerText}
             setComposerCursor={setComposerCursor}
             setForcePathCompletion={setForcePathCompletion}

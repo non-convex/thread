@@ -2,10 +2,9 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { Accessor } from "solid-js";
 import type { ModelDescriptor } from "../../agent/model-client.js";
 import type { UiScreen, UiState } from "../state.js";
-import { short } from "./controller.js";
 import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
-import { normalizeMarkdownForTerminal } from "./transcript.js";
+import { normalizeMarkdownForTerminal } from "./transcript-content.js";
 import { bold } from "./theme.js";
 
 export function selectedWindow<T>(items: readonly T[], selected: number, visible: number): Array<{ item: T; index: number }> {
@@ -75,4 +74,8 @@ export function DocumentScreen(props: {
       <ScreenFooter hint="↑/↓ scroll · esc back" state={props.state} resources={props.resources} />
     </>
   );
+}
+
+function short(value: string): string {
+  return value.length > 12 ? value.slice(0, 12) : value;
 }

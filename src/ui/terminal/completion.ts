@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import type { SlashSuggestion } from "./controller.js";
+import type { SlashSuggestion } from "./view-model.js";
 
 export interface ComposerSuggestion {
   kind: "command" | "path";

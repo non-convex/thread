@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { GREP_SCAN_BYTES, GREP_SCAN_CAP, grepTool, type GrepDetails } from "../src/tools/grep.js";
+import { grepTool } from "../src/tools/grep.js";
+import { GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepDetails } from "../src/tools/grep-results.js";
 import type { ToolContext } from "../src/tools/types.js";
 import { runProcess } from "../src/utils/process.js";
 

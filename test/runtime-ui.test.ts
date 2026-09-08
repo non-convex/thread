@@ -8,6 +8,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall, type ThinkingLevel } from
 import type { ModelClient } from "../src/agent/model-client.js";
 import { ThreadApp, type ThreadAppOptions } from "../src/app/thread-app.js";
 import { ThreadTuiController } from "../src/ui/terminal/controller.js";
+import type { TerminalKey } from "../src/ui/terminal/view-model.js";
 import * as git from "../src/utils/git.js";
 
 function gate() {
@@ -35,6 +36,56 @@ async function waitFor(check: () => boolean) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("TUI questions settle through answers, dismissal, interruption and disposal", async (t) => {
+  const gitProbe = spyOn(git, "gitBranchName").mockResolvedValue(undefined);
+  t.after(() => gitProbe.mockRestore());
+  const results: string[] = [];
+  const questions = ["Format", "Destination"].map((header) => ({
+    header, question: `Choose ${header}`, options: [
+      { label: "Text", description: "Plain text" }, { label: "JSON", description: "Structured data" },
+    ],
+  }));
+  const values = await fixture(async (context) => {
+    const last = context.messages.at(-1);
+    if (last?.role === "toolResult") {
+      results.push(JSON.stringify(last));
+      return fauxAssistantMessage(fauxText("done"));
+    }
+    return fauxAssistantMessage(fauxToolCall("ask", { questions }), { stopReason: "toolUse" });
+  });
+  const tui = new ThreadTuiController(values.app);
+  t.after(async () => { tui.dispose(); await values.cleanup(); });
+  const key = (name: string, sequence?: string): TerminalKey => ({ name, ctrl: false, shift: false, meta: false, ...(sequence ? { sequence } : {}) });
+  const answering = tui.submit("ask");
+  await waitFor(() => tui.state.screen.type === "ask");
+  tui.handleScreenKey(key("return"));
+  assert.equal(tui.state.screen.type === "ask" && tui.state.screen.questionIndex, 1);
+  for (const char of "custom") tui.handleScreenKey(key(char, char));
+  tui.handleScreenKey(key("return"));
+  await answering;
+  assert.match(results[0]!, /Text/);
+  assert.match(results[0]!, /custom/);
+
+  const dismissed = tui.submit("ask again");
+  await waitFor(() => tui.state.screen.type === "ask");
+  tui.closeView();
+  await dismissed;
+  assert.match(results[1]!, /dismissed/);
+  assert.equal(tui.state.screen.type, "session");
+
+  const interrupted = tui.submit("interrupt this question");
+  await waitFor(() => tui.state.screen.type === "ask");
+  assert.equal(tui.interrupt(), true);
+  await interrupted;
+  assert.equal(tui.state.screen.type, "session");
+
+  const disposed = tui.submit("dispose this question");
+  await waitFor(() => tui.state.screen.type === "ask");
+  tui.dispose();
+  await disposed;
+  assert.equal(values.app.runtime.readSession(values.app.selectedSessionId).turns.at(-1)?.status, "interrupted");
+});
 
 test("Skill menus show declared path snapshots and neutral guidance when no paths are configured", async () => {
   for (const configured of [undefined, { skills: [], diagnostics: [] }, { paths: ["./application-skills", "../shared-skills"] }]) {

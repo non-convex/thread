@@ -134,3 +134,57 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
   }
   return output;
 }
+
+export interface TranscriptTurnGroup {
+  id: string;
+  user: TranscriptItem | undefined;
+  items: TranscriptItem[];
+}
+
+export function groupTranscriptTurns(items: readonly TranscriptItem[]): TranscriptTurnGroup[] {
+  const groups: TranscriptTurnGroup[] = [];
+  for (const item of items) {
+    if (item.kind === "user") {
+      groups.push({ id: item.id, user: item, items: [] });
+      continue;
+    }
+    const last = groups.at(-1);
+    if (last) last.items.push(item);
+    else groups.push({ id: item.id, user: undefined, items: [item] });
+  }
+  return groups;
+}
+
+function sameTranscriptItem(left: TranscriptItem, right: TranscriptItem): boolean {
+  return left.id === right.id
+    && left.kind === right.kind
+    && left.content === right.content
+    && left.isError === right.isError
+    && left.name === right.name
+    && left.args === right.args
+    && left.elapsed === right.elapsed
+    && left.label === right.label
+    && left.detail === right.detail
+    && JSON.stringify(left.agentTask) === JSON.stringify(right.agentTask);
+}
+
+function sameTurnGroup(left: TranscriptTurnGroup, right: TranscriptTurnGroup): boolean {
+  if (left.id !== right.id) return false;
+  if ((left.user === undefined) !== (right.user === undefined)) return false;
+  if (left.user && right.user && !sameTranscriptItem(left.user, right.user)) return false;
+  if (left.items.length !== right.items.length) return false;
+  return left.items.every((item, index) => sameTranscriptItem(item, right.items[index]!));
+}
+
+// Preserve unchanged group identities so Solid keeps completed markdown rows mounted.
+export function reconcileTurnGroups(
+  next: readonly TranscriptTurnGroup[],
+  previous: readonly TranscriptTurnGroup[],
+): TranscriptTurnGroup[] {
+  if (previous.length === 0) return [...next];
+  const byId = new Map(previous.map((group) => [group.id, group] as const));
+  return next.map((group) => {
+    const earlier = byId.get(group.id);
+    return earlier && sameTurnGroup(group, earlier) ? earlier : group;
+  });
+}

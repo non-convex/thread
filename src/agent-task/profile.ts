@@ -5,10 +5,6 @@ import { registerImplementationWorkerTools } from "../tools/builtins.js";
 import { ToolRegistry } from "../tools/types.js";
 import { implementationWorkerSystemPrompt } from "./prompt.js";
 
-// Kept as a source-level compatibility export while the shared profile moves
-// out of the implementation-task subsystem.
-export { AgentProfileRegistry } from "../agent/profile.js";
-
 export const IMPLEMENTATION_WORKER_PROFILE_ID = "implementation-worker";
 
 export interface ImplementationWorkerProfileSettings {

@@ -1,6 +1,5 @@
 import { createId } from "../utils/id.js";
 
-/** Spec caps: enough for a batched decision, few enough that a person still reads them. */
 export const ASK_MAX_QUESTIONS = 4;
 export const ASK_MIN_OPTIONS = 2;
 export const ASK_MAX_OPTIONS = 4;
@@ -40,12 +39,7 @@ export class AskDismissedError extends Error {
     this.name = "AskDismissedError";
   }
 }
-/**
- * Presents a question to whoever is driving the session and resolves with the
- * chosen labels. Only an interactive front end supplies one; without it the tool
- * is not registered at all, so the model falls back to ending its turn with the
- * options written out — which is the right behaviour when nobody can click.
- */
+/** Host interaction adapter; providing one enables the runtime ask tool. */
 export interface AskPresenter {
   present(request: AskRequest, signal: AbortSignal): Promise<AskAnswers>;
 }
@@ -56,11 +50,7 @@ interface Pending {
   reject: (error: Error) => void;
 }
 
-/**
- * Parks an in-flight question until the UI answers it. Every pending question is
- * rejected on dispose: a suspended promise would otherwise keep the turn — and
- * the process — alive after the session is gone.
- */
+/** Keeps pending questions until answered, dismissed or cancelled; dispose rejects them all. */
 export class AskService implements AskPresenter {
   private readonly pending = new Map<string, Pending>();
   private readonly listeners = new Set<(request: AskRequest | undefined) => void>();
@@ -84,8 +74,7 @@ export class AskService implements AskPresenter {
       const onAbort = () => {
         this.pending.delete(request.id);
         this.notify();
-        /* An aborted turn is not an unanswered question: the loop's own abort
-         * path must see an AbortError so the whole turn settles as aborted. */
+        // Cancellation must reach the loop as AbortError, not as a dismissed question.
         reject(new DOMException("Aborted", "AbortError"));
       };
       signal.addEventListener("abort", onAbort, { once: true });

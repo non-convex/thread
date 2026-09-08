@@ -1,50 +1,11 @@
 import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, For, Index, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
 import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
-import { bold, dim, dimItalic, italic, STATUS_ICONS, detectContentType, formatJson, type ContentType } from "./theme.js";
-import { projectLiveUser } from "./transcript-projection.js";
+import { bold, dim, italic, STATUS_ICONS } from "./theme.js";
+import { groupTranscriptTurns, projectLiveUser, reconcileTurnGroups, type TranscriptTurnGroup } from "./transcript-projection.js";
+import { normalizeMarkdownForTerminal, ThinkingView, ToolOutputView } from "./transcript-content.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
-
-const FENCE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
-  c: "c",
-  cc: "cpp",
-  cpp: "cpp",
-  cts: "typescript",
-  cxx: "cpp",
-  h: "c",
-  hpp: "cpp",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  mts: "typescript",
-  ps1: "powershell",
-  py: "python",
-  rb: "ruby",
-  rs: "rust",
-  sh: "bash",
-  ts: "typescript",
-  tsx: "typescript",
-  txt: "text",
-  yml: "yaml",
-};
-
-/** Normalize source-range fence annotations into languages understood by OpenTUI. */
-export function normalizeMarkdownForTerminal(content: string): string {
-  return content.replace(
-    /^(\s{0,3})(`{3,}|~{3,})([^\r\n]*)$/gm,
-    (line, indent: string, fence: string, rawInfo: string) => {
-      const info = rawInfo.trim();
-      if (!info) return line;
-      const first = info.split(/\s+/, 1)[0] ?? "";
-      if (/^[a-z0-9_+.-]+$/i.test(first)) return `${indent}${fence}${first}`;
-      const extension = info.match(/\.([a-z0-9]+)(?:$|[\s,:}\]])/i)?.[1]?.toLowerCase();
-      const language = extension ? FENCE_LANGUAGE_BY_EXTENSION[extension] : undefined;
-      return `${indent}${fence}${language ?? ""}`;
-    },
-  );
-}
 
 function toolArgs(args: Record<string, unknown>): string {
   for (const key of ["path", "command", "pattern", "query"]) {
@@ -59,76 +20,6 @@ function elapsedLabel(startedAt: number | undefined, finishedAt: number | undefi
   if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return undefined;
   return `${((finishedAt - startedAt) / 1000).toFixed(1)}s`;
 }
-
-/* ── Turn grouping ────────────────────────────────────────────────────────
- * The design strings one agent turn (thinking → tools → reply) on a single
- * vertical rail. History arrives as a flat item list, so group each user
- * message with the agent items that follow it.
- */
-export interface TranscriptTurnGroup {
-  id: string;
-  user: TranscriptItem | undefined;
-  items: TranscriptItem[];
-}
-
-export function groupTranscriptTurns(items: readonly TranscriptItem[]): TranscriptTurnGroup[] {
-  const groups: TranscriptTurnGroup[] = [];
-  for (const item of items) {
-    if (item.kind === "user") {
-      groups.push({ id: item.id, user: item, items: [] });
-      continue;
-    }
-    const last = groups.at(-1);
-    if (last) last.items.push(item);
-    else groups.push({ id: item.id, user: undefined, items: [item] });
-  }
-  return groups;
-}
-
-/* ── Group identity ───────────────────────────────────────────────────────
- * `projectTranscript` rebuilds every TranscriptItem from the session log on
- * each sync, and grouping then allocates fresh group objects. Solid's <For>
- * keys rows by reference, so handing it new objects tears down and rebuilds
- * every completed turn — including their markdown renderables — whenever the
- * controller notifies. During a turn that happens per flushed delta batch, so
- * earlier replies visibly re-wrap and the sticky-bottom scrollbox re-anchors.
- * Reuse the previous object for any group whose values did not change so <For>
- * leaves those rows mounted.
- */
-
-function sameTranscriptItem(left: TranscriptItem, right: TranscriptItem): boolean {
-  return left.id === right.id
-    && left.kind === right.kind
-    && left.content === right.content
-    && left.isError === right.isError
-    && left.name === right.name
-    && left.args === right.args
-    && left.label === right.label
-    && left.detail === right.detail
-    && JSON.stringify(left.agentTask) === JSON.stringify(right.agentTask);
-}
-
-function sameTurnGroup(left: TranscriptTurnGroup, right: TranscriptTurnGroup): boolean {
-  if (left.id !== right.id) return false;
-  if ((left.user === undefined) !== (right.user === undefined)) return false;
-  if (left.user && right.user && !sameTranscriptItem(left.user, right.user)) return false;
-  if (left.items.length !== right.items.length) return false;
-  return left.items.every((item, index) => sameTranscriptItem(item, right.items[index]!));
-}
-
-export function reconcileTurnGroups(
-  next: readonly TranscriptTurnGroup[],
-  previous: readonly TranscriptTurnGroup[],
-): TranscriptTurnGroup[] {
-  if (previous.length === 0) return [...next];
-  const byId = new Map(previous.map((group) => [group.id, group] as const));
-  return next.map((group) => {
-    const earlier = byId.get(group.id);
-    return earlier && sameTurnGroup(group, earlier) ? earlier : group;
-  });
-}
-
-/* ── Shared bits ────────────────────────────────────────────────────────── */
 
 function MarkdownReply(props: {
   id?: string;
@@ -150,16 +41,13 @@ function MarkdownReply(props: {
   );
 }
 
-/**
- * Turn block without background - cleaner appearance
- */
 function TurnBlock(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
   const theme = props.resources.theme;
   return (
     <box flexDirection="column" width="100%">
-      <box 
-        flexDirection="column" 
-        width="100%" 
+      <box
+        flexDirection="column"
+        width="100%"
         paddingX={2}
         paddingTop={1}
         paddingBottom={1}
@@ -173,9 +61,6 @@ function TurnBlock(props: { label: string; resources: ThreadViewResources; child
   );
 }
 
-/**
- * User message card with refined border
- */
 function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   return (
@@ -192,206 +77,6 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
         <text height={1} wrapMode="none" fg={theme.muted} attributes={dim}>you</text>
         <text fg={theme.text} wrapMode="word">{props.item.content}</text>
       </box>
-    </box>
-  );
-}
-
-/* ── Thinking preview ─────────────────────────────────────────────────────
- * Completed thinking is no longer fully hidden: a collapsed block keeps up
- * to five terminal rows visible, and clicking anywhere in the block toggles
- * the full wrapped text.
- */
-const COLLAPSED_THINKING_LINES = 5;
-const THINKING_ESTIMATE_COLUMNS = 40;
-
-type StringSource = string | Accessor<string>;
-
-function sourceValue(source: StringSource | undefined, fallback: string): string {
-  return (typeof source === "function" ? source() : source ?? fallback).trim();
-}
-
-function estimatedThinkingLines(content: string): number {
-  if (!content) return 0;
-  return content.split("\n").reduce(
-    (total, line) => total + Math.max(1, Math.ceil([...line].length / THINKING_ESTIMATE_COLUMNS)),
-    0,
-  );
-}
-
-function ThinkingView(props: {
-  content: StringSource;
-  heading?: StringSource;
-  resources: ThreadViewResources;
-}) {
-  const theme = props.resources.theme;
-  const [expanded, setExpanded] = createSignal(false);
-  const content = createMemo(() => sourceValue(props.content, ""));
-  const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
-  const collapsible = () => estimatedLines() > COLLAPSED_THINKING_LINES;
-  const heading = () => `◇ ${sourceValue(props.heading, "thinking")}`;
-  return (
-    <box
-      flexDirection="column"
-      width="100%"
-      marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && collapsible()) {
-          setExpanded((value) => !value);
-        }
-      }}
-    >
-      <box flexDirection="row" width="100%" height={1}>
-        <text
-          height={1}
-          wrapMode="none"
-          truncate={true}
-          fg={theme.thinkingDim}
-          attributes={dimItalic}
-          selectable={false}
-        >
-          {collapsible()
-            ? `${heading()} ${expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed} ${estimatedLines()} lines`
-            : heading()}
-        </text>
-      </box>
-      <Show when={content()}>
-        <Show
-          when={expanded()}
-          fallback={
-            <box
-              flexDirection="column"
-              width="100%"
-              maxHeight={COLLAPSED_THINKING_LINES}
-              overflow="hidden"
-            >
-              <text
-                fg={theme.thinkingDim}
-                attributes={italic}
-                wrapMode="word"
-                marginLeft={2}
-                selectable={false}
-              >
-                {content()}
-              </text>
-            </box>
-          }
-        >
-          <box flexDirection="column" width="100%">
-            <text
-              fg={theme.thinkingDim}
-              attributes={italic}
-              wrapMode="word"
-              marginLeft={2}
-              selectable={false}
-            >
-              {content()}
-            </text>
-          </box>
-        </Show>
-      </Show>
-    </box>
-  );
-}
-
-/**
- * Enhanced history tool item - cleaner without borders
- * Major improvements:
- * 1. Default display of full output (not just preview)
- * 2. Intelligent content type detection (JSON/code/text)
- * 3. Automatic JSON formatting
- * 4. Use color to distinguish tool output (no background)
- * 5. Click to expand/collapse for long outputs
- */
-
-const TOOL_OUTPUT_PREVIEW_LINES = 5;
-
-function HistoryToolItem(props: { item: TranscriptItem; resources: ThreadViewResources }) {
-  const theme = props.resources.theme;
-  const failed = () => props.item.isError === true;
-  const [expanded, setExpanded] = createSignal(false); // Default collapsed
-  
-  const contentType = createMemo((): ContentType => {
-    const content = props.item.content?.trim() ?? "";
-    if (!content || content === props.item.args) return "text";
-    return detectContentType(content);
-  });
-  
-  const displayContent = createMemo(() => {
-    const content = props.item.content?.trim() ?? "";
-    if (!content || content === props.item.args) return "";
-    
-    // Format JSON for better readability
-    if (contentType() === "json") {
-      return formatJson(content);
-    }
-    
-    return content;
-  });
-  
-  const contentLines = createMemo(() => {
-    const content = displayContent();
-    return content ? content.split("\n").length : 0;
-  });
-  
-  const hasContent = () => displayContent().length > 0;
-  const isLongOutput = () => contentLines() > TOOL_OUTPUT_PREVIEW_LINES;
-  
-  const previewContent = createMemo(() => {
-    const content = displayContent();
-    if (!isLongOutput() || expanded()) return content;
-    return content.split("\n").slice(0, TOOL_OUTPUT_PREVIEW_LINES).join("\n");
-  });
-  
-  return (
-    <box 
-      flexDirection="column" 
-      width="100%" 
-      marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && isLongOutput()) {
-          setExpanded((value) => !value);
-        }
-      }}
-    >
-      {/* Tool header with enhanced layout */}
-      <box flexDirection="row" width="100%" height={1}>
-        <text width={2} height={1} wrapMode="none" fg={failed() ? theme.error : theme.success}>
-          {failed() ? STATUS_ICONS.error : STATUS_ICONS.success}
-        </text>
-        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold}>
-          {props.item.name ?? props.item.label ?? "tool"}
-        </text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.text}>
-          {props.item.args ? `  ${props.item.args}` : ""}
-        </text>
-        <Show when={props.item.elapsed}>
-          <text width={6} flexShrink={0} height={1} wrapMode="none" truncate={true} fg={theme.faint}>
-            {props.item.elapsed}
-          </text>
-        </Show>
-        <Show when={isLongOutput()}>
-          <text width={2} height={1} wrapMode="none" fg={theme.muted}>
-            {expanded() ? ` ${STATUS_ICONS.expanded}` : ` ${STATUS_ICONS.collapsed}`}
-          </text>
-        </Show>
-      </box>
-      
-      {/* Tool output without background - use color to distinguish */}
-      <Show when={hasContent()}>
-        <box 
-          flexDirection="column" 
-          width="100%" 
-          marginLeft={2}
-          paddingLeft={1}
-        >
-          <text 
-            fg={failed() ? theme.error : theme.muted} 
-            wrapMode="word"
-          >
-            {previewContent()}
-          </text>
-        </box>
-      </Show>
     </box>
   );
 }
@@ -485,10 +170,17 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
       </box>
     }>
       <Match when={item().kind === "tool"}>
-        <HistoryToolItem item={item()} resources={props.resources} />
+        <ToolOutputView
+          name={item().name ?? item().label ?? "tool"}
+          args={item().args ?? ""}
+          content={item().content === item().args ? "" : item().content}
+          elapsed={item().elapsed}
+          status={item().isError ? "failed" : "completed"}
+          resources={props.resources}
+        />
       </Match>
       <Match when={item().kind === "thinking"}>
-        <ThinkingView content={() => item().content} resources={props.resources} />
+        <ThinkingView content={item().content} resources={props.resources} />
       </Match>
       <Match when={item().kind === "compaction"}>
         <CompactionInfo content={item().content} detail={item().detail} resources={props.resources} />
@@ -503,7 +195,6 @@ function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewRes
   );
 }
 
-/* ── Live turn blocks ───────────────────────────────────────────────────── */
 
 function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
   const block = props.block;
@@ -514,8 +205,8 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
       when={block().streaming}
       fallback={
         <ThinkingView
-          content={() => block().content}
-          heading={() => (duration() ? `thought ${duration()}` : "thinking")}
+          content={block().content}
+          heading={duration() ? `thought ${duration()}` : "thinking"}
           resources={props.resources}
         />
       }
@@ -530,129 +221,6 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
         </Show>
       </box>
     </Show>
-  );
-}
-
-/**
- * Enhanced live tool view - real-time output display with collapsible content
- * Matches HistoryToolItem behavior but for live tools
- */
-function LiveToolView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
-  const block = props.block;
-  const theme = props.resources.theme;
-  const tool = () => block().tool;
-  const running = () => tool()?.status === "queued" || tool()?.status === "running";
-  const failed = () => tool()?.status === "failed";
-  const completed = () => tool()?.status === "completed";
-  const elapsed = () => elapsedLabel(tool()?.startedAt, tool()?.finishedAt);
-  
-  // Get content from block.content (for success) or tool.error (for failure)
-  const outputContent = () => {
-    if (failed()) return tool()?.error?.trim() ?? "";
-    return block().content?.trim() ?? "";
-  };
-  
-  const hasOutput = () => outputContent().length > 0;
-  
-  // Content type detection
-  const contentType = createMemo((): ContentType => {
-    const content = outputContent();
-    if (!content) return "text";
-    return detectContentType(content);
-  });
-  
-  const displayContent = createMemo(() => {
-    const content = outputContent();
-    if (!content) return "";
-    
-    // Format JSON for better readability
-    if (contentType() === "json") {
-      return formatJson(content);
-    }
-    
-    return content;
-  });
-  
-  const contentLines = createMemo(() => {
-    const content = displayContent();
-    return content ? content.split("\n").length : 0;
-  });
-  
-  const isLongOutput = () => contentLines() > TOOL_OUTPUT_PREVIEW_LINES;
-  
-  // Default collapsed to show only 5 lines
-  const [expanded, setExpanded] = createSignal(false);
-  
-  const previewContent = createMemo(() => {
-    const content = displayContent();
-    if (!isLongOutput() || expanded()) return content;
-    return content.split("\n").slice(0, TOOL_OUTPUT_PREVIEW_LINES).join("\n");
-  });
-  
-  return (
-    <box 
-      flexDirection="column" 
-      width="100%" 
-      marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && isLongOutput() && completed()) {
-          setExpanded((value) => !value);
-        }
-      }}
-    >
-      {/* Tool header */}
-      <box flexDirection="row" width="100%" height={1}>
-        <Show when={running()} fallback={
-          <text width={2} height={1} wrapMode="none" fg={failed() ? theme.error : theme.success}>
-            {failed() ? STATUS_ICONS.error : STATUS_ICONS.success}
-          </text>
-        }>
-          <SpinnerText fg={theme.spark} />
-          <text width={1} height={1}> </text>
-        </Show>
-        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold}>{tool()?.name ?? "tool"}</text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.text}>
-          {tool() ? `  ${toolArgs(tool()!.args)}` : ""}
-        </text>
-        <Show when={elapsed()}>
-          <text width={6} flexShrink={0} height={1} wrapMode="none" truncate={true} fg={theme.faint}>{elapsed()}</text>
-        </Show>
-        <Show when={isLongOutput() && completed()}>
-          <text width={2} height={1} wrapMode="none" fg={theme.muted}>
-            {expanded() ? ` ${STATUS_ICONS.expanded}` : ` ${STATUS_ICONS.collapsed}`}
-          </text>
-        </Show>
-      </box>
-      
-      {/* Output display - no background, use color to distinguish */}
-      <Show when={completed() && hasOutput()}>
-        <box 
-          flexDirection="column" 
-          width="100%" 
-          marginLeft={2}
-          paddingLeft={1}
-        >
-          <text 
-            fg={failed() ? theme.error : theme.muted} 
-            wrapMode="word"
-          >
-            {previewContent()}
-          </text>
-        </box>
-      </Show>
-      
-      {/* Running state - show error immediately if failed during execution */}
-      <Show when={running() && failed() && hasOutput()}>
-        <box 
-          flexDirection="column" 
-          width="100%" 
-          marginLeft={2}
-          paddingLeft={1}
-        >
-          <text fg={theme.error} wrapMode="word">{displayContent()}</text>
-        </box>
-      </Show>
-    </box>
   );
 }
 
@@ -678,7 +246,14 @@ function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadVie
         <LiveThinkingView block={block} resources={props.resources} />
       </Match>
       <Match when={block().kind === "tool"}>
-        <LiveToolView block={block} resources={props.resources} />
+        <ToolOutputView
+          name={block().tool?.name ?? "tool"}
+          args={block().tool ? toolArgs(block().tool!.args) : ""}
+          content={block().tool?.status === "failed" ? block().tool?.error ?? "" : block().content}
+          elapsed={elapsedLabel(block().tool?.startedAt, block().tool?.finishedAt)}
+          status={block().tool?.status ?? "completed"}
+          resources={props.resources}
+        />
       </Match>
       <Match when={block().kind === "compaction"}>
         <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} />
@@ -714,7 +289,6 @@ export function LiveTurnView(props: {
   );
 }
 
-/* ── Committed transcript ───────────────────────────────────────────────── */
 
 function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources: ThreadViewResources }) {
   return (
@@ -734,8 +308,6 @@ function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources:
 }
 
 export function TranscriptTurnsView(props: { items: readonly TranscriptItem[]; resources: ThreadViewResources }) {
-  // Carry the previous grouping forward so unchanged turns keep their object
-  // identity and <For> keeps their rows (and markdown renderables) mounted.
   let previous: TranscriptTurnGroup[] = [];
   const groups = createMemo(() => {
     previous = reconcileTurnGroups(groupTranscriptTurns(props.items), previous);
@@ -748,7 +320,6 @@ export function TranscriptTurnsView(props: { items: readonly TranscriptItem[]; r
   );
 }
 
-/* ── Welcome ────────────────────────────────────────────────────────────── */
 
 export function WelcomeView(props: { resources: ThreadViewResources }) {
   const theme = props.resources.theme;

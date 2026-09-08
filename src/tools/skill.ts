@@ -5,11 +5,7 @@ import type { Skill } from "../skills/loader.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
-/**
- * Skill bodies are instructions, so truncation keeps the head: the opening of a
- * skill states its purpose and preconditions, while a lost tail costs detail.
- * This is the opposite of `bash`, where the tail carries the outcome.
- */
+/** Truncate from the tail to retain the skill purpose and preconditions. */
 export const SKILL_CONTENT_LIMIT = 32 * 1024;
 
 /** Sampled companion files, enough to reveal a skill's scripts and references. */
@@ -21,11 +17,7 @@ function truncateHead(content: string): { text: string; truncated: boolean } {
   return { text: cut.toString("utf8"), truncated: true };
 }
 
-/**
- * Companion files inside the skill directory, so relative references in the body
- * resolve to something the model can see without a separate listing round.
- * Directories are reported with a trailing separator and never descended into.
- */
+/** List immediate companion files; mark directories without descending into them. */
 async function sampleSkillFiles(baseDir: string): Promise<{ entries: string[]; remainder: number }> {
   let names: string[];
   try {
@@ -47,12 +39,7 @@ function fail(message: string): ToolResult {
   return { content: message, isError: true };
 }
 
-/**
- * Loads one skill body on demand. Kept separate from `read` because a skill must
- * arrive whole and self-describing: `read` pages by line count and would silently
- * cut instructions, and it cannot report the base directory that the skill's own
- * relative paths depend on.
- */
+/** Load instructions with the base directory needed to resolve relative references. */
 export function createSkillTool(skills: () => readonly Skill[]): AgentTool<{ name: string }> {
   return {
     name: "skill",

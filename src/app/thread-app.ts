@@ -8,8 +8,8 @@ import { ThreadCommandRouter } from "../commands/registry.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "../commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
 import { safeUiEvent } from "../ui/events.js";
-import { ThreadRuntime, type ThreadRuntimeOptions } from "../runtime/thread-runtime.js";
-import { snapshotRuntimeOptions } from "../runtime/options.js";
+import { ThreadRuntime } from "../runtime/thread-runtime.js";
+import { snapshotRuntimeOptions, type ThreadRuntimeOptions } from "../runtime/options.js";
 import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
 import { loadProjectInstructions } from "./project-instructions.js";
 

@@ -6,7 +6,7 @@ import test from "node:test";
 import { writeTool } from "../src/tools/builtins.js";
 import { editTool } from "../src/tools/edit.js";
 import { workspacePathClaim } from "../src/tools/execution.js";
-import { grepFilePath, grepTool, parseRgMatches } from "../src/tools/grep.js";
+import { grepFilePath, grepTool } from "../src/tools/grep.js";
 import { listTool } from "../src/tools/list.js";
 import { resolveWorkspacePath } from "../src/tools/path-safety.js";
 import { readTool } from "../src/tools/read.js";
@@ -164,13 +164,6 @@ test("the external write exception cannot be reached through a symlink", async (
 test("grep keeps matches from files outside the project", () => {
   const root = path.join(path.parse(process.cwd()).root, "workspace");
   const outside = path.join(path.parse(process.cwd()).root, "tmp", "notes.txt");
-  const parsed = parseRgMatches(
-    `${JSON.stringify({
-      type: "match",
-      data: { path: { text: outside }, line_number: 2, lines: { text: "outside-token" } },
-    })}\n`,
-    root,
-  );
-  assert.deepEqual(parsed.matches, [{ file: outside, line: 2, text: "outside-token" }]);
+  assert.equal(grepFilePath(root, outside), outside);
   assert.equal(grepFilePath(root, path.join(root, "src", "read.ts")), "src/read.ts");
 });

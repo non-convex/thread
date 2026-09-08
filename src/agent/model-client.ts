@@ -39,21 +39,9 @@ export interface ModelRequestOptions {
   signal: AbortSignal;
   maxTokens?: number;
   reasoning?: ThinkingLevel;
-  /**
-   * Prompt-cache partition key. Every request that shares a prefix must send the
-   * same value: providers that key their cache on it (OpenAI `prompt_cache_key`,
-   * session-affinity headers) route a different key to a different shard, so a
-   * mismatch silently discards an otherwise reusable prefix. Defaults to
-   * {@link PiModelClient.cacheKey}; callers normally leave it unset.
-   */
+  /** Cache partition shared by matching request prefixes. Defaults to the client cacheKey. */
   sessionId?: string;
-  /**
-   * Prompt-cache lifetime. `short` is the provider default (Anthropic 5-minute
-   * ephemeral, no OpenAI retention hint); `long` asks for 1h/24h and `none`
-   * disables caching. Long retention bills Anthropic cache writes at 2x the base
-   * input rate instead of 1.25x, so it only pays off when idle gaps between turns
-   * routinely exceed five minutes. Defaults to {@link ModelClient.cacheRetention}.
-   */
+  /** Per-request cache lifetime; defaults to the client cacheRetention. */
   cacheRetention?: CacheRetention;
   /** Assistant-level transient retries; defaults to {@link DEFAULT_MODEL_MAX_RETRIES}. */
   maxRetries?: number;
@@ -75,10 +63,7 @@ export interface ModelClient {
   readonly maxOutputTokens: number;
   readonly reasoning?: boolean;
   readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
-  /**
-   * Prompt-cache partition key shared by ordinary requests made by this client.
-   * Set through {@link PiModelClient.withCacheKey}.
-   */
+  /** Default cache partition, set by withCacheKey(). */
   readonly cacheKey?: string;
   /** Default prompt-cache lifetime for this client's requests. */
   readonly cacheRetention?: CacheRetention | undefined;
@@ -147,10 +132,7 @@ export class PiModelClient implements ModelClient {
     this.acceptsImages = this.model.input.includes("image");
   }
 
-  /**
-   * Same model, different prompt-cache partition. Used to keep one Session
-   * Tree's ordinary requests from colliding with another tree on the same model.
-   */
+  /** Copy this client with a separate cache partition. */
   withCacheKey(cacheKey: string): PiModelClient {
     return new PiModelClient(this.models, this.model, cacheKey, this.cacheRetention);
   }
@@ -160,18 +142,10 @@ export class PiModelClient implements ModelClient {
     return new PiModelClient(this.models, this.model, this.cacheKey, cacheRetention);
   }
 
-  /**
-   * Per-request retention wins over the client default; leaving both unset lets
-   * pi-ai apply its own resolution (which also honours `PI_CACHE_RETENTION`).
-   */
-  private resolveRetention(options: ModelRequestOptions): CacheRetention | undefined {
-    return options.cacheRetention ?? this.cacheRetention;
-  }
-
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
     const maxRetries = options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES;
     const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
-    const cacheRetention = this.resolveRetention(options);
+    const cacheRetention = options.cacheRetention ?? this.cacheRetention;
     let scheduledAttempt = 0;
     return retryAssistantCall(
       async () => {

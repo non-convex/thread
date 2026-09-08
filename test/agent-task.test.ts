@@ -12,7 +12,8 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
 import { AgentTaskOrchestrator } from "../src/agent-task/orchestrator.js";
-import { AgentProfileRegistry, createImplementationWorkerProfile } from "../src/agent-task/profile.js";
+import { AgentProfileRegistry } from "../src/agent/profile.js";
+import { createImplementationWorkerProfile } from "../src/agent-task/profile.js";
 import { AgentTaskRepository } from "../src/agent-task/repository.js";
 import type { Project } from "../src/project/model.js";
 

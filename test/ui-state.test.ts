@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentTaskSummary } from "../src/agent-task/model.js";
-import { createUiState, formatDurationMs, reduceUiEvent, statusLineParts } from "../src/ui/state.js";
+import { createUiState, formatDurationMs, statusLineParts } from "../src/ui/state.js";
+import { reduceUiEvent } from "../src/ui/reducer.js";
 import { projectTranscript } from "../src/ui/terminal/transcript-projection.js";
 
 test("status activity tracks in-flight tools instead of the last started name", () => {

@@ -31,12 +31,7 @@ export interface CacheHitTotals {
   missed: number;
 }
 
-/**
- * Cache hit rate covers the prompt side only: output tokens are generated fresh
- * every call, so `totalTokens` must never be the denominator. `cacheWrite` counts
- * as a miss because writing a prefix means it was not reused this call; providers
- * that do not report writes leave it at zero and the ratio still holds.
- */
+/** Only prompt tokens count; a cache write is a miss, not a cache hit. */
 export function cacheHitTotals(usage: Usage): CacheHitTotals {
   return { cacheRead: usage.cacheRead, missed: usage.input + usage.cacheWrite };
 }
@@ -47,10 +42,7 @@ export function cacheHitPercent(totals: CacheHitTotals): number | null {
   return Math.round((totals.cacheRead / prompt) * 100);
 }
 
-/**
- * Prompt-cache TTL: an idle gap longer than this is the likely cause of a miss.
- * Anthropic's default ephemeral cache expires after five minutes.
- */
+/** Idle-miss heuristic based on the default five-minute cache lifetime. */
 export const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Per-turn misses at or below this are cache-breakpoint granularity noise. */
@@ -80,11 +72,7 @@ interface PreviousRequest {
   promptTokens: number;
   modelKey: string;
   timestamp: number;
-  /**
-   * Sticky: some earlier request in this segment reported cache activity. Tells a
-   * total miss on a read-only reporting provider (OpenAI-style, writes unreported)
-   * apart from a provider that never reports caching at all.
-   */
+  /** An earlier request reported cache activity, so a zero read can indicate a total miss. */
   reportedCache: boolean;
 }
 
@@ -94,12 +82,7 @@ function assistantModelKey(message: AssistantMessage): string {
   return `${provider}/${model}`;
 }
 
-/**
- * Count what one request re-paid for relative to the previous one. Returns
- * undefined when nothing is counted: the first request, right after a prefix
- * rewrite, a provider that never reports caching, or a miss small enough to be
- * breakpoint granularity.
- */
+/** Count previously cached tokens paid for again, excluding rewrites and breakpoint noise. */
 function detectMiss(previous: PreviousRequest | undefined, message: AssistantMessage): CacheMiss | undefined {
   const usage = message.usage;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
@@ -109,9 +92,7 @@ function detectMiss(previous: PreviousRequest | undefined, message: AssistantMes
   const missedTokens = Math.min(previous.promptTokens, promptTokens) - usage.cacheRead;
   if (missedTokens <= CACHE_MISS_NOISE_FLOOR_TOKENS) return undefined;
 
-  /* Missed tokens can only land in the input or cacheWrite buckets, so this
-   * request's own cost breakdown gives the rate actually paid; the counterfactual
-   * is the same tokens billed at its cache-read rate. */
+  // Compare the actual input/write rate against the cache-read rate.
   const paidTokens = usage.input + usage.cacheWrite;
   const paidPerToken = paidTokens > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paidTokens : 0;
   const readPerToken = usage.cacheRead > 0 ? usage.cost.cacheRead / usage.cacheRead : 0;
@@ -143,13 +124,7 @@ export interface CacheScan {
   hitTotals: CacheHitTotals;
 }
 
-/**
- * Walk a built context and attribute prompt-cache waste turn by turn. A compaction
- * message legitimately rewrites the prefix, so the comparison resets there
- * instead of blaming the next request; a model switch does not reset, because it
- * really does re-bill the whole prompt. Aborted and failed responses still count:
- * their prompt was paid for.
- */
+/** Prefix rewrites reset cache comparisons. Model switches and failed requests still incur cost. */
 export function scanCacheUsage(messages: readonly Message[]): CacheScan {
   let previous: PreviousRequest | undefined;
   const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
@@ -180,10 +155,7 @@ export function scanCacheUsage(messages: readonly Message[]): CacheScan {
   return { totals, misses, hitTotals };
 }
 
-/**
- * A compaction summary is injected as a user message ahead of the retained turn suffix, so
- * the prefix it replaces is gone and the next request cannot reuse it.
- */
+/** A prepended compaction summary replaces the reusable request prefix. */
 function isPrefixRewrite(message: Message): boolean {
   const content = message.content;
   const text = typeof content === "string"
@@ -192,11 +164,7 @@ function isPrefixRewrite(message: Message): boolean {
   return text.startsWith(COMPACTION_SUMMARY_PREFIX);
 }
 
-/**
- * Why the newest counted miss happened, for a one-glance footer hint. Idle
- * expiry is checked first: when a turn is both late and on a new model, the TTL
- * had already dropped the prefix before the switch could matter.
- */
+/** Prefer idle expiry when both an idle gap and a model switch could explain the miss. */
 export function latestCacheMissReason(
   messages: readonly Message[],
   scan: CacheScan = scanCacheUsage(messages),

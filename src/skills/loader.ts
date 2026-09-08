@@ -50,12 +50,7 @@ interface Frontmatter {
   disableModelInvocation?: boolean;
 }
 
-/**
- * Minimal scalar frontmatter reader. A skill header only carries `name`,
- * `description` and `disable-model-invocation`, so a dependency-free parser is
- * enough; anything structured (nested maps, block scalars, flow sequences) is
- * reported rather than half-understood.
- */
+/** Read scalar frontmatter; reject nested maps, block scalars and flow sequences. */
 export function parseSkillFrontmatter(
   source: string,
 ): { frontmatter: Frontmatter; body: string; error?: string } {
@@ -150,10 +145,7 @@ async function loadSkillFile(filePath: string): Promise<{ skill?: Skill; diagnos
   const name = parsed.frontmatter.name?.trim() || expectedName;
   const errors = validate(name, description, expectedName, declared ? "directory" : "file");
   for (const message of errors) diagnostics.push({ kind: "invalid", message, path: filePath });
-  /* Rejected rather than loaded-with-warnings: the name is how the model and the
-   * slash command address a skill, so an invalid one is not reliably callable, and
-   * admitting it would let a skill sidestep the naming rules that keep names
-   * unambiguous. */
+  // Invalid names cannot be addressed reliably by the model or slash command.
   if (errors.length > 0) return { diagnostics };
   const trimmedDescription = description?.trim();
   if (!trimmedDescription) return { diagnostics };
@@ -186,11 +178,7 @@ async function entryKind(
   }
 }
 
-/**
- * A directory holding SKILL.md is a skill root and is not descended into, so a
- * skill may keep scripts and reference material in subdirectories without those
- * being mistaken for further skills.
- */
+/** Stop at SKILL.md roots so companion scripts and references are not scanned as skills. */
 async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<LoadedSkills> {
   const skills: Skill[] = [];
   const diagnostics: SkillDiagnostic[] = [];
@@ -235,11 +223,7 @@ async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<L
   return { skills, diagnostics };
 }
 
-/**
- * Discovers skills once, keeping the first definition across the supplied roots.
- * Runtime callers always supply their declared paths; the standalone loader's
- * omitted argument retains its user-level default for existing callers.
- */
+/** First definition wins. Omitted paths use the user-level root; runtimes pass explicit paths. */
 export async function loadSkills(paths: string | readonly string[] = skillsDirectory()): Promise<LoadedSkills> {
   const directories = (typeof paths === "string" ? [paths] : [...paths]).map((directory) => path.resolve(directory));
   const byName = new Map<string, Skill>();
@@ -285,11 +269,7 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-/**
- * System-prompt section advertising what can be loaded. Only name, description
- * and location are listed: the bodies stay out of the prefix until the model asks
- * for one, which is the whole point of progressive disclosure.
- */
+/** Advertise callable skills without loading their bodies into the prompt. */
 export function formatSkillsSection(skills: readonly Skill[]): string {
   const visible = skills.filter((skill) => !skill.disableModelInvocation);
   if (visible.length === 0) return "";
