@@ -1,9 +1,66 @@
 // Context slicing for the two summary calls.
 
 import type { Context, Message } from "@earendil-works/pi-ai";
+import type { BuiltContext } from "../builder.js";
+import type { RetainedTurn } from "../../session-tree/model.js";
 import { historySummaryInstruction } from "./history-summary.js";
+import { COMPACTION_PROGRESS_PRIOR_TURNS } from "./policy.js";
 import { PROGRESS_SUMMARY_SYSTEM_PROMPT } from "./progress-summary.js";
 import type { CompactableUnit } from "./units.js";
+
+export interface ProgressBackground {
+  /** Previous cumulative project-state document, included when the walk hits it. */
+  historySummary?: string;
+  /** Earlier user turns, oldest first, each with only its final text reply. */
+  priorTurns: Array<{ user: Message; lastReply?: Message }>;
+}
+
+function hasToolCall(message: Message): boolean {
+  return message.role === "assistant" && message.content.some((block) => block.type === "toolCall");
+}
+
+/** The last model reply of a finished turn: text only, no thinking or tool calls. */
+function lastTextReply(turn: RetainedTurn): Message | undefined {
+  for (let index = turn.messages.length - 1; index >= 0; index--) {
+    const message = turn.messages[index]!;
+    if (message.role !== "assistant" || hasToolCall(message)) continue;
+    const textBlocks = message.content.filter((block) => block.type === "text");
+    if (textBlocks.length === 0) return undefined;
+    const reply = structuredClone(message);
+    reply.content = structuredClone(textBlocks);
+    return reply;
+  }
+  return undefined;
+}
+
+/**
+ * Background for a mid-turn progress summary. Walk backward from the partial
+ * turn and keep at most three earlier user turns. If those three slots are not
+ * filled, take the previous history document and stop rather than reconstructing
+ * pre-compaction raw history.
+ */
+export function collectProgressBackground(built: BuiltContext, partialTurnId: string): ProgressBackground {
+  const partialIndex = built.compactableTurns.findIndex((turn) => turn.turnId === partialTurnId);
+  const prior = partialIndex < 0 ? built.compactableTurns : built.compactableTurns.slice(0, partialIndex);
+  const picked = prior.slice(-COMPACTION_PROGRESS_PRIOR_TURNS);
+  const priorTurns: ProgressBackground["priorTurns"] = [];
+  for (const turn of picked) {
+    const userMessage = turn.messages.find((message) => message.role === "user");
+    if (!userMessage) continue;
+    const lastReply = lastTextReply(turn);
+    priorTurns.push({
+      user: structuredClone(userMessage),
+      ...(lastReply ? { lastReply } : {}),
+    });
+  }
+  const historySummary = picked.length < COMPACTION_PROGRESS_PRIOR_TURNS
+    ? built.latestCompaction?.summary?.trim()
+    : undefined;
+  return {
+    ...(historySummary ? { historySummary } : {}),
+    priorTurns,
+  };
+}
 
 function fingerprint(message: Message): string {
   try {
@@ -64,26 +121,38 @@ export function historySummaryContext(
 
 /**
  * Progress summary request. It has a dedicated compaction prompt instead of the
- * main agent prompt. The new history summary is background; only the abandoned
- * trajectory from the current turn is the summarization target.
+ * main agent prompt. Background is the previous history document (when the walk
+ * reaches it) plus up to three earlier user turns; only the abandoned trajectory
+ * from the current turn is the summarization target.
  */
 export function progressSummaryContext(
-  historySummary: string,
+  background: ProgressBackground,
   trajectory: readonly Message[],
 ): Context {
-  const history = [
-    "[Project-state background — background only]",
-    historySummary,
-    "[End project-state background]",
-    "",
-    "[Current-turn content to summarize follows]",
-  ].join("\n");
+  const timestamp = Date.now();
+  const messages: Message[] = [];
+  if (background.historySummary) {
+    messages.push({
+      role: "user",
+      content: [
+        "[Project-state background — background only]",
+        background.historySummary,
+        "[End project-state background]",
+      ].join("\n"),
+      timestamp,
+    });
+  }
+  for (const turn of background.priorTurns) {
+    messages.push(structuredClone(turn.user));
+    if (turn.lastReply) messages.push(structuredClone(turn.lastReply));
+  }
+  if (background.historySummary || background.priorTurns.length > 0) {
+    messages.push({ role: "user", content: "[Current-turn content to summarize follows]", timestamp });
+  }
+  messages.push(...trajectory.map((message) => structuredClone(message)));
   return {
     systemPrompt: PROGRESS_SUMMARY_SYSTEM_PROMPT,
-    messages: [
-      { role: "user", content: history, timestamp: Date.now() },
-      ...trajectory.map((message) => structuredClone(message)),
-    ],
+    messages,
     tools: [],
   };
 }

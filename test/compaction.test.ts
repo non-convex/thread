@@ -22,6 +22,7 @@ import {
   rendered,
   compactionEntry,
   runCompaction,
+  withFinalReply,
 } from "./fixtures/compaction.js";
 
 test("steps are the only cut points and an in-flight batch stays whole", () => {
@@ -134,8 +135,8 @@ test("a mid-turn cut copies the request and inserts a progress checkpoint", asyn
   assert.equal(stored.length, 1);
   assert.equal(text(stored[0]!.messages[0]!), "ORIGINAL REQUEST");
 
-  // Both calls happened. The progress call uses its own prompt, receives the
-  // freshly generated history as background, then carries this turn's trajectory.
+  // Both calls happened. The progress call uses its own prompt and this turn's
+  // trajectory; with no earlier turns it does not wait for the new history document.
   assert.equal(model.matching(isHistorySummaryInstruction).length, 1);
   const progressContexts = model.matching(isProgressSummaryInstruction);
   assert.equal(progressContexts.length, 1);
@@ -143,9 +144,10 @@ test("a mid-turn cut copies the request and inserts a progress checkpoint", asyn
   assert.equal(progressContext.tools?.length, 0);
   assert.match(progressContext.systemPrompt, /context-compaction summarizer/);
   assert.doesNotMatch(progressContext.systemPrompt, /MAIN_AGENT_SYSTEM_PROMPT_SENTINEL/);
-  assert.match(text(progressContext.messages[0]!), /Project-state background/);
-  assert.match(text(progressContext.messages[0]!), /Current project state\n\nhistory/);
-  assert.equal(text(progressContext.messages[1]!), "ORIGINAL REQUEST");
+  const progressBody = rendered(progressContext.messages);
+  assert.doesNotMatch(progressBody, /Project-state background/);
+  assert.doesNotMatch(progressBody, /Current project state\n\nhistory/);
+  assert.equal(text(progressContext.messages[0]!), "ORIGINAL REQUEST");
 });
 
 test("the projected context orders history, request, checkpoint, then steps", async () => {
@@ -181,7 +183,11 @@ test("the progress summary rolls forward from its own previous output", async ()
   assert.equal(tree.appended[0]!.retainedTurns[0]!.turnId, "turn-long");
 
   const progressContext = model.matching(isProgressSummaryInstruction)[0]!;
-  assert.equal(text(progressContext.messages[1]!), "ORIGINAL REQUEST");
+  const progressBody = rendered(progressContext.messages);
+  assert.match(progressBody, /Project-state background/);
+  assert.match(progressBody, /older history/);
+  assert.doesNotMatch(progressBody, /newer history/);
+  assert.match(progressBody, /ORIGINAL REQUEST/);
   const instruction = text(progressContext.messages.at(-1)!);
   assert.match(instruction, /EARLIER PROGRESS TEXT/);
   assert.match(instruction, /Update it with the newer current-turn content instead of copying it/);
@@ -189,7 +195,7 @@ test("the progress summary rolls forward from its own previous output", async ()
 
 test("a checkpoint from another turn is history, not the new turn's previous progress", async () => {
   const turns = [
-    turnWithSteps("turn-1", "first", 5, 20_000),
+    withFinalReply(turnWithSteps("turn-1", "first", 5, 20_000), "turn-1 done"),
     turnWithSteps("turn-2", "second", 9, 20_000),
   ];
   const previous = compactionEntry({
@@ -205,8 +211,89 @@ test("a checkpoint from another turn is history, not the new turn's previous pro
   const historyContext = model.matching(isHistorySummaryInstruction)[0]!;
   assert.match(rendered(historyContext.messages), /TURN_1_CHECKPOINT/);
   const progressContext = model.matching(isProgressSummaryInstruction)[0]!;
-  assert.equal(text(progressContext.messages[1]!), "second");
-  assert.doesNotMatch(rendered(progressContext.messages), /TURN_1_CHECKPOINT|Previous progress checkpoint/);
+  const progressBody = rendered(progressContext.messages);
+  assert.match(progressBody, /older history/);
+  assert.match(progressBody, /\bfirst\b/);
+  assert.match(progressBody, /turn-1 done/);
+  assert.doesNotMatch(progressBody, /turn-1-4/);
+  assert.doesNotMatch(progressBody, /turn-1-0\b/);
+  assert.match(progressBody, /\bsecond\b/);
+  assert.doesNotMatch(progressBody, /TURN_1_CHECKPOINT|Previous progress checkpoint/);
+});
+
+test("progress background keeps at most three earlier user turns and only their final text reply", async () => {
+  const second = withFinalReply(turnWithSteps("turn-2", "request-2", 2, 50), "reply-2");
+  const last = second.messages.at(-1);
+  if (last?.role === "assistant") last.content.unshift({ type: "thinking", thinking: "hidden thought" });
+  const turns = [
+    withFinalReply(turnWithSteps("turn-1", "request-1", 2, 50), "reply-1"),
+    second,
+    withFinalReply(turnWithSteps("turn-3", "request-3", 2, 50), "reply-3"),
+    withFinalReply(turnWithSteps("turn-4", "request-4", 2, 50), "reply-4"),
+    turnWithSteps("turn-long", "ORIGINAL REQUEST", 9, 20_000),
+  ];
+  const model = new ScriptedModel(["history", "progress"]);
+  const { result } = await runCompaction({ turns, model });
+  assert.equal(result.compacted, true);
+
+  const progressBody = rendered(model.matching(isProgressSummaryInstruction)[0]!.messages);
+  assert.doesNotMatch(progressBody, /request-1|reply-1/);
+  assert.doesNotMatch(progressBody, /turn-1-/);
+  assert.match(progressBody, /request-2/);
+  assert.match(progressBody, /request-3/);
+  assert.match(progressBody, /request-4/);
+  assert.match(progressBody, /reply-2/);
+  assert.match(progressBody, /reply-3/);
+  assert.match(progressBody, /reply-4/);
+  assert.doesNotMatch(progressBody, /hidden thought/);
+  assert.doesNotMatch(progressBody, /turn-2-1|turn-3-1|turn-4-1/);
+  assert.doesNotMatch(progressBody, /turn-2-0\b|turn-3-0\b|turn-4-0\b/);
+  assert.match(progressBody, /ORIGINAL REQUEST/);
+  assert.doesNotMatch(progressBody, /Project-state background/);
+});
+
+test("progress background takes the previous history document when fewer than three earlier turns remain", async () => {
+  const turns = [
+    withFinalReply(turnWithSteps("turn-1", "request-1", 2, 50), "reply-1"),
+    turnWithSteps("turn-long", "ORIGINAL REQUEST", 9, 20_000),
+  ];
+  const previous = compactionEntry({
+    turns,
+    summary: "PREVIOUS_HISTORY_DOC",
+  });
+  const model = new ScriptedModel(["updated history", "progress"]);
+  const { result } = await runCompaction({ turns, model, previous });
+  assert.equal(result.compacted, true);
+
+  const progressBody = rendered(model.matching(isProgressSummaryInstruction)[0]!.messages);
+  assert.match(progressBody, /Project-state background/);
+  assert.match(progressBody, /PREVIOUS_HISTORY_DOC/);
+  assert.doesNotMatch(progressBody, /updated history/);
+  assert.match(progressBody, /request-1/);
+  assert.match(progressBody, /reply-1/);
+  assert.doesNotMatch(progressBody, /turn-1-1|turn-1-0\b/);
+});
+
+test("progress background does not include history once three earlier user turns fill the window", async () => {
+  const turns = [
+    turnWithSteps("turn-1", "request-1", 2, 50),
+    turnWithSteps("turn-2", "request-2", 2, 50),
+    turnWithSteps("turn-3", "request-3", 2, 50),
+    turnWithSteps("turn-long", "ORIGINAL REQUEST", 9, 20_000),
+  ];
+  const previous = compactionEntry({
+    turns,
+    summary: "SHOULD_NOT_APPEAR_IN_PROGRESS",
+  });
+  const model = new ScriptedModel(["updated history", "progress"]);
+  const { result } = await runCompaction({ turns, model, previous });
+  assert.equal(result.compacted, true);
+
+  const progressBody = rendered(model.matching(isProgressSummaryInstruction)[0]!.messages);
+  assert.doesNotMatch(progressBody, /SHOULD_NOT_APPEAR_IN_PROGRESS|Project-state background/);
+  assert.match(progressBody, /request-1/);
+  assert.match(progressBody, /request-2/);
+  assert.match(progressBody, /request-3/);
 });
 
 test("a summary that fails validation is retried silently", async () => {

@@ -10,7 +10,7 @@ import { generateHistorySummary } from "./history-summary.js";
 import { minimumUsefulSavings } from "./policy.js";
 import { prepareCompaction } from "./prepare.js";
 import { generateProgressSummary } from "./progress-summary.js";
-import { historySummaryContext, progressSummaryContext, replacementContext } from "./slice.js";
+import { collectProgressBackground, historySummaryContext, progressSummaryContext, replacementContext } from "./slice.js";
 
 export type CompactionResult =
   | { compacted: false }
@@ -65,23 +65,25 @@ export class ContextCompactionService {
         ? previousCompaction?.progressSummary
         : undefined;
 
-    const historySummary = await generateHistorySummary({
+    const historyTask = generateHistorySummary({
       model: this.model,
       context: historySummaryContext(options.context, options.built.messages, plan.retainedUnits),
       signal: options.signal,
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
-    // A partial-turn checkpoint needs the freshly generated history document as
-    // background, so unlike the old implementation this request runs second.
-    const progressSummary = plan.partialTurnTrajectory
-      ? await generateProgressSummary({
+    const progressTask = plan.partialTurnTrajectory && plan.partialTurnId
+      ? generateProgressSummary({
           model: this.model,
-          context: progressSummaryContext(historySummary, plan.partialTurnTrajectory),
+          context: progressSummaryContext(
+            collectProgressBackground(options.built, plan.partialTurnId),
+            plan.partialTurnTrajectory,
+          ),
           signal: options.signal,
           ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
           ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         })
-      : undefined;
+      : Promise.resolve(undefined);
+    const [historySummary, progressSummary] = await Promise.all([historyTask, progressTask]);
 
     // Measured through the same projection the builder replays on every later
     // request, so the verified saving cannot drift from the real prompt.

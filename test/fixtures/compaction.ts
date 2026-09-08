@@ -99,6 +99,18 @@ export function turnWithSteps(turnId: string, request: string, count: number, pa
   return { turnId, messages };
 }
 
+/** Append the final no-tool assistant reply that closes a finished turn. */
+export function withFinalReply(turn: RetainedTurn, reply: string): RetainedTurn {
+  const last = turn.messages.at(-1);
+  return {
+    turnId: turn.turnId,
+    messages: [
+      ...turn.messages,
+      fauxAssistantMessage(fauxText(reply), { timestamp: (last?.timestamp ?? 0) + 1 }),
+    ],
+  };
+}
+
 export function text(message: Message): string {
   if (message.role === "user") {
     return typeof message.content === "string"

@@ -18,6 +18,11 @@ export interface CompactionPlan {
   /** Units kept verbatim. */
   retainedUnits: CompactableUnit[];
   /**
+   * Turn id whose request must be copied into the retained window because the cut
+   * landed inside it. Undefined when the cut is already on a turn boundary.
+   */
+  partialTurnId?: string;
+  /**
    * The partially retained turn's abandoned trajectory, summarized separately so
    * the copied request is not left without context. Absent for a clean cut.
    */
@@ -48,7 +53,9 @@ export function prepareCompaction(built: BuiltContext, systemTokens: number): Co
   return {
     summarizedUnits: selection.summarized,
     retainedUnits: selection.retained,
-    ...(partial ? { partialTurnTrajectory: partial.trajectory } : {}),
+    ...(partial && selection.partialTurnId !== undefined
+      ? { partialTurnId: selection.partialTurnId, partialTurnTrajectory: partial.trajectory }
+      : {}),
     retainedTurns: unitsToTurns(selection.retained, partial?.request),
     estimatedSavings,
   };
