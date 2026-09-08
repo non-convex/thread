@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { stderr as errorOutput, stdout as output } from "node:process";
-import { ThreadApp } from "../app.js";
+import { ThreadApp } from "../app/thread-app.js";
 import { createConfiguredModelCatalog } from "../agent/model-client.js";
 import type { AgentProfileDiagnostic } from "../agent/profile.js";
 import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
@@ -230,6 +230,7 @@ async function main(): Promise<void> {
   const app = await ThreadApp.open({
     rootPath: options.rootPath,
     ...(loadedConfig?.config.search ? { search: loadedConfig.config.search } : {}),
+    ...(loadedConfig?.config.attribution ? { commitAttribution: loadedConfig.config.attribution.commit } : {}),
     ...(model ? { model } : {}),
     modelCatalog,
     implementationWorker: {
@@ -257,9 +258,6 @@ async function main(): Promise<void> {
     agentProfileDiagnostics,
     ...(state ? { state } : {}),
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
-    ...(loadedConfig?.config.attribution
-      ? { commitAttribution: loadedConfig.config.attribution.commit }
-      : {}),
     ...(loadedConfig?.config.cacheRetention
       ? { cacheRetention: loadedConfig.config.cacheRetention }
       : {}),

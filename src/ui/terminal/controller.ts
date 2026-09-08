@@ -1,9 +1,10 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { ThreadApp } from "../../app.js";
+import type { ThreadApp } from "../../app/thread-app.js";
 import type { CommandResult, EphemeralView } from "../../commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../context/usage.js";
 import { gitBranchName } from "../../utils/git.js";
-import { AskDismissedError, type AskAnswers, type AskRequest } from "../ask.js";
+import type { RuntimeEvent } from "../../runtime/events.js";
+import { AskDismissedError, type AskAnswers, type AskRequest } from "../../runtime/interaction.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import { composerImageContent, type ComposerImage } from "../images.js";
 import {
@@ -37,7 +38,7 @@ export interface SlashSuggestion {
   description: string;
 }
 
-export function primarySlashSuggestions(hasSkills: boolean): SlashSuggestion[] {
+export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = false): SlashSuggestion[] {
   return [
     { name: "clear", description: "Clear the visible transcript" },
     { name: "compact", description: "Compact the current path's live context" },
@@ -47,7 +48,7 @@ export function primarySlashSuggestions(hasSkills: boolean): SlashSuggestion[] {
     { name: "session", description: "List or resume root Sessions" },
     ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
     { name: "thread", description: "Session Tree status, history, Sessions, and search" },
-    { name: "rewind", description: "Undo built-in file edits and rewind the conversation" },
+    { name: "rewind", description: fileCheckpoints ? "Undo built-in file edits and rewind the conversation" : "Rewind the conversation; keep workspace files" },
     { name: "exit", description: "Exit thread" },
   ];
 }
@@ -112,35 +113,39 @@ export class ThreadTuiController {
   private pendingAsk: { resolve: (answers: AskAnswers) => void; reject: (error: Error) => void } | undefined;
   private askAnswers: string[][] = [];
   private readonly detachAsk: () => void;
+  private readonly detachRuntime: () => void;
+  private disposed = false;
   private resolveDone: (() => void) | undefined;
   private readonly donePromise: Promise<void>;
 
   constructor(private readonly app: ThreadApp) {
-    this.slashSuggestions = primarySlashSuggestions(app.skills.length > 0);
-    this.state = createUiState(app.sessionTree.activeSession.id, app.sessionTree.activeLiveTip, []);
+    this.slashSuggestions = primarySlashSuggestions(app.runtime.skills.length > 0, app.runtime.fileCheckpoints);
+    const session = app.runtime.readSession(app.selectedSessionId);
+    this.state = createUiState(session.session.id, session.liveTipTurnId, []);
     this.meta = {
-      rootPath: app.rootPath,
-      modelLabel: app.model ? `${app.model.providerId}/${app.model.modelId}` : "no model",
-      modelName: app.model?.modelId ?? "no model",
-      thinkingLevel: app.thinkingLevel,
-      supportsThinking: app.supportsThinking,
+      rootPath: app.runtime.rootPath,
+      modelLabel: app.runtime.model ? `${app.runtime.model.providerId}/${app.runtime.model.modelId}` : "no model",
+      modelName: app.runtime.model?.modelId ?? "no model",
+      thinkingLevel: app.runtime.thinkingLevel,
+      supportsThinking: app.runtime.supportsThinking,
       contextPercent: 0,
       cacheHitPercent: null,
       cacheMissedTokens: 0,
       cacheMissReason: null,
       gitBranch: undefined,
-      acceptsImages: app.model?.acceptsImages === true,
+      acceptsImages: app.runtime.model?.acceptsImages === true,
     };
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
-    this.detachAsk = app.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
+    this.detachRuntime = app.runtime.subscribe((event) => this.receiveRuntimeEvent(event));
+    this.detachAsk = app.runtime.setAskPresenter({ present: (request, signal) => this.presentAsk(request, signal) });
     this.syncTranscript();
     this.refreshMeta();
     this.refreshGit();
-    if (app.agentProfileDiagnostics.length) {
+    if (app.runtime.agentProfileDiagnostics.length) {
       this.state.notice = {
-        level: app.agentProfileDiagnostics.some((item) => item.level === "error") ? "error" : "info",
-        text: app.agentProfileDiagnostics.map((item) => `${item.profileId}: ${item.message}`).join(" · "),
+        level: app.runtime.agentProfileDiagnostics.some((item) => item.level === "error") ? "error" : "info",
+        text: app.runtime.agentProfileDiagnostics.map((item) => `${item.profileId}: ${item.message}`).join(" · "),
       };
     }
   }
@@ -156,6 +161,9 @@ export class ThreadTuiController {
   waitUntilStopped(): Promise<void> { return this.donePromise; }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.detachRuntime();
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
     this.pendingAsk?.reject(new DOMException("Aborted", "AbortError"));
@@ -166,14 +174,21 @@ export class ThreadTuiController {
   requestStop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.cancelIdleExitGesture();
+    this.detachRuntime();
     this.active?.abort(new DOMException("Aborted", "AbortError"));
     this.resolveDone?.();
     this.notify();
   }
 
   interrupt(): boolean {
-    if (!this.active) return false;
-    this.active.abort(new DOMException("Aborted", "AbortError"));
+    if (this.stopped || this.disposed) return false;
+    if (this.active) {
+      this.active.abort(new DOMException("Aborted", "AbortError"));
+      return true;
+    }
+    if (!this.state.busy) return false;
+    void this.app.runtime.interrupt(this.app.selectedSessionId).catch(() => undefined);
     return true;
   }
 
@@ -205,7 +220,14 @@ export class ThreadTuiController {
   }
 
   cycleThinkingLevel(): void {
-    const level = this.app.cycleThinkingLevel();
+    if (this.stopped || this.disposed) return;
+    let level: ModelThinkingLevel | undefined;
+    try {
+      // Preferences apply to the next turn, even while this turn is running.
+      level = this.app.runtime.cycleThinkingLevel();
+    } catch {
+      return;
+    }
     if (!level) return;
     this.refreshMeta();
     this.state.notice = { level: "info", text: `Thinking: ${level}` };
@@ -271,20 +293,20 @@ export class ThreadTuiController {
   }
 
   async submit(raw: string, images: readonly ComposerImage[] = []): Promise<void> {
-    if (this.active || this.stopped || (!raw.trim() && images.length === 0)) return;
+    if (this.active || this.stopped || this.disposed || (!raw.trim() && images.length === 0)) return;
     this.viewHistory.length = 0;
     await this.executeInput(raw, images);
   }
 
   private async executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> {
     const input = raw.trim();
-    if ((!input && images.length === 0) || this.active || this.stopped) return false;
+    if ((!input && images.length === 0) || this.active || this.stopped || this.disposed) return false;
     if (input === "/exit") {
       this.requestStop();
       return true;
     }
     const imageBlocks = images.map(composerImageContent);
-    if (imageBlocks.length > 0 && this.app.model?.acceptsImages !== true) {
+    if (imageBlocks.length > 0 && this.app.runtime.model?.acceptsImages !== true) {
       this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
       return false;
     }
@@ -294,9 +316,14 @@ export class ThreadTuiController {
     try {
       const result = await this.app.handleInput(input, {
         signal: active.signal,
-        onUiEvent: (event) => this.batcher.push(event),
+        onUiEvent: (event) => {
+          if (!this.stopped && !this.disposed && (event.type === "command_started" || event.type === "command_finished")) {
+            this.batcher.push(event);
+          }
+        },
         ...(imageBlocks.length > 0 ? { images: imageBlocks } : {}),
       });
+      if (this.stopped || this.disposed) return true;
       this.batcher.flush();
       if (result.kind === "command") this.presentCommand(result.result);
       this.syncTranscript();
@@ -304,6 +331,7 @@ export class ThreadTuiController {
       this.refreshMeta();
       return true;
     } catch (error) {
+      if (this.stopped || this.disposed) return false;
       this.batcher.flush();
       this.syncTranscript();
       this.state.liveTurn = undefined;
@@ -311,28 +339,52 @@ export class ThreadTuiController {
       return false;
     } finally {
       if (this.active === active) this.active = undefined;
-      if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
-        this.state.turnFinishedAt = Date.now();
+      if (!this.stopped && !this.disposed) {
+        if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
+          this.state.turnFinishedAt = Date.now();
+        }
+        this.state.busy = false;
+        this.state.activity = undefined;
+        this.refreshGit();
+        this.notify();
       }
-      this.state.busy = false;
-      this.state.activity = undefined;
-      this.refreshGit();
-      this.notify();
     }
   }
 
+  private receiveRuntimeEvent(event: RuntimeEvent): void {
+    if (this.stopped || this.disposed || event.sessionId !== this.app.selectedSessionId) return;
+    this.batcher.push(event.type === "context_updated"
+      ? { type: "context_updated", percent: Math.min(999, Math.round(event.estimatedTokens / event.contextWindow * 100)) }
+      : event);
+  }
+
   private applyUiEvents(events: readonly UiEvent[]): void {
+    if (this.stopped || this.disposed) return;
     let kind: UiNotifyKind = "live";
     let applied = false;
+    let historyChanged = false;
+    let settled = false;
     for (const event of events) {
       try {
         reduceUiEvent(this.state, event);
         if (event.type === "context_updated") this.meta.contextPercent = event.percent;
         if (notifyKind(event) === "full") kind = "full";
+        if (event.type === "turn_finished") { historyChanged = true; settled = true; }
+        else if (event.type === "turn_preparing" || event.type === "turn_started") settled = false;
         applied = true;
       } catch {
         // One malformed presentation event must not discard the rest of its frame.
       }
+    }
+    if (historyChanged) {
+      this.syncTranscript();
+      if (settled) {
+        this.state.liveTurn = undefined;
+        this.state.busy = false;
+        this.state.activity = undefined;
+      }
+      this.refreshMeta();
+      kind = "full";
     }
     if (applied) this.notify(kind);
   }
@@ -364,6 +416,7 @@ export class ThreadTuiController {
     screen.error = undefined;
     this.notify();
     const succeeded = await this.executeInput(command);
+    if (this.stopped || this.disposed) return;
     screen.busy = false;
     if (!succeeded) {
       screen.error = this.state.notice?.text ?? "Command failed";
@@ -387,6 +440,7 @@ export class ThreadTuiController {
       await this.runScreenCommand(`${command} ${JSON.stringify(`${model.providerId}/${model.modelId}`)}`);
     } else if (screen.selected === models.length) {
       await this.runScreenCommand(`${command}${screen.scope === "configured" ? " all" : ""}`, true);
+      if (this.stopped || this.disposed) return;
       if (this.state.screen.type === "model_picker" && this.state.screen !== screen) {
         this.state.screen.filter = screen.filter;
         this.state.screen.selected = 0;
@@ -397,15 +451,17 @@ export class ThreadTuiController {
 
   private presentAsk(request: AskRequest, signal: AbortSignal): Promise<AskAnswers> {
     return new Promise<AskAnswers>((resolve, reject) => {
-      if (signal.aborted) {
+      if (signal.aborted || this.stopped || this.disposed) {
         reject(new DOMException("Aborted", "AbortError"));
         return;
       }
       const settle = (outcome: () => void) => {
         signal.removeEventListener("abort", onAbort);
         this.pendingAsk = undefined;
-        if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
-        this.notify();
+        if (!this.stopped && !this.disposed) {
+          if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
+          this.notify();
+        }
         outcome();
       };
       const onAbort = () => settle(() => reject(new DOMException("Aborted", "AbortError")));
@@ -481,27 +537,25 @@ export class ThreadTuiController {
   }
 
   private activeMessages(): Message[] {
-    return this.app.liveContextMessages();
+    return this.app.runtime.contextMessages(this.app.selectedSessionId);
   }
 
   private syncTranscript(): void {
-    const turns = this.app.sessionTree.livePath();
-    const entries = turns.flatMap((turn) => this.app.sessionTree.entriesForTurn(turn.id));
-    const tasks = turns.flatMap((turn) => this.app.agentTaskDetailsForTurn(turn.id));
+    const { session, liveTipTurnId, turns, entries, tasks } = this.app.runtime.readSession(this.app.selectedSessionId);
     const transcript = projectTranscript(entries, tasks);
     const last = turns.at(-1);
     if (last?.status === "interrupted") {
       transcript.push({ id: `${last.id}:interrupted`, kind: "interrupted", content: "interrupted" });
     }
     this.state.transcript = transcript;
-    this.state.sessionId = this.app.sessionTree.activeSession.id;
-    this.state.liveTipTurnId = this.app.sessionTree.activeLiveTip;
+    this.state.sessionId = session.id;
+    this.state.liveTipTurnId = liveTipTurnId;
   }
 
   private refreshGit(): void {
     const generation = ++this.gitGeneration;
-    void gitBranchName(this.app.rootPath).then((branch) => {
-      if (this.stopped || generation !== this.gitGeneration) return;
+    void gitBranchName(this.app.runtime.rootPath).then((branch) => {
+      if (this.stopped || this.disposed || generation !== this.gitGeneration) return;
       if (this.meta.gitBranch === branch) return;
       this.meta.gitBranch = branch;
       this.notify("live");
@@ -511,12 +565,13 @@ export class ThreadTuiController {
   private refreshMeta(): void {
     const messages = this.activeMessages();
     const scan = scanCacheUsage(messages);
-    this.meta.modelLabel = this.app.model ? `${this.app.model.providerId}/${this.app.model.modelId}` : "no model";
-    this.meta.modelName = this.app.model?.modelId ?? "no model";
-    this.meta.thinkingLevel = this.app.thinkingLevel;
-    this.meta.supportsThinking = this.app.supportsThinking;
-    this.meta.acceptsImages = this.app.model?.acceptsImages === true;
-    this.meta.contextPercent = this.app.contextOccupancy()?.percent ?? 0;
+    this.meta.modelLabel = this.app.runtime.model ? `${this.app.runtime.model.providerId}/${this.app.runtime.model.modelId}` : "no model";
+    this.meta.modelName = this.app.runtime.model?.modelId ?? "no model";
+    this.meta.thinkingLevel = this.app.runtime.thinkingLevel;
+    this.meta.supportsThinking = this.app.runtime.supportsThinking;
+    this.meta.acceptsImages = this.app.runtime.model?.acceptsImages === true;
+    const usage = this.app.runtime.contextUsage(this.app.selectedSessionId);
+    this.meta.contextPercent = usage ? Math.min(999, Math.round(usage.requestTokens / usage.contextWindow * 100)) : 0;
     this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
     this.meta.cacheMissedTokens = scan.totals.missedTokens;
     this.meta.cacheMissReason = latestCacheMissReason(messages, scan);

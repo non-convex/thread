@@ -12,7 +12,7 @@ import {
   type Context,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { INTERRUPTED_TOOL_RESULT, needsPlaceholderAssistant, unmatchedToolCalls } from "../src/session-tree/conversation-seal.js";
 import { singletonResource } from "../src/tools/execution.js";
 import type { AgentTool } from "../src/tools/types.js";
@@ -153,9 +153,9 @@ test("interrupting a turn keeps it on the live path so the next prompt can conti
       if (result.kind !== "turn") return;
       assert.equal(result.result.outcome, "interrupted");
       const interruptedId = result.result.turn.id;
-      assert.equal(app.sessionTree.activeLiveTip, interruptedId);
+      assert.equal(app.runtime["tree"].activeLiveTip, interruptedId);
 
-      const messages = app.sessionTree.messagesForTurn(interruptedId);
+      const messages = app.runtime["tree"].messagesForTurn(interruptedId);
       const roles = messages.map((message) => message.role);
       assert.deepEqual(roles, ["user", "assistant", "toolResult"]);
       const toolResult = messages.at(-1);
@@ -170,7 +170,7 @@ test("interrupting a turn keeps it on the live path so the next prompt can conti
       assert.equal(continued.kind, "turn");
       if (continued.kind !== "turn") return;
       assert.equal(continued.result.outcome, "completed");
-      assert.equal(app.sessionTree.projection.turns.get(continued.result.turn.id)?.parentTurnId, interruptedId);
+      assert.equal(app.runtime["tree"].projection.turns.get(continued.result.turn.id)?.parentTurnId, interruptedId);
 
       const followUp = model.contexts[1]!;
       const followRoles = followUp.messages.map((message) => message.role);

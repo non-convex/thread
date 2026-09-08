@@ -1,6 +1,6 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
 import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../commands/types.js";
-import type { AskRequest } from "./ask.js";
+import type { AskRequest } from "../runtime/interaction.js";
 import type { UiEvent } from "./events.js";
 import { AGENT_TASK_TOOL_NAMES, type AgentTaskSummary } from "../agent-task/model.js";
 

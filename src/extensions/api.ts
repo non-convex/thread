@@ -1,6 +1,6 @@
 import type { CommandRegistry, ThreadCommand } from "../commands/types.js";
-import type { AgentTool, ToolRegistry } from "../tools/types.js";
-import type { ExtensionEventMap, ExtensionEventType, ExtensionHandler, ExtensionEvents } from "./events.js";
+import type { AgentTool } from "../tools/types.js";
+import type { ExtensionEventMap, ExtensionEventType, ExtensionHandler } from "./events.js";
 
 export interface ExtensionAPI {
   registerTool(tool: AgentTool): () => void;
@@ -9,14 +9,13 @@ export interface ExtensionAPI {
 }
 
 export function createExtensionAPI(
-  tools: ToolRegistry,
+  runtime: Pick<ExtensionAPI, "registerTool" | "on">,
   commands: CommandRegistry,
-  events: ExtensionEvents,
 ): ExtensionAPI {
   return {
-    registerTool: (tool) => tools.register(tool),
+    registerTool: (tool) => runtime.registerTool(tool),
     registerCommand: (command) => commands.register(command),
-    on: <K extends ExtensionEventType>(type: K, handler: ExtensionHandler<K>) => events.on(type, handler),
+    on: <K extends ExtensionEventType>(type: K, handler: ExtensionHandler<K>) => runtime.on(type, handler),
   };
 }
 

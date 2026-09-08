@@ -183,9 +183,3 @@ export async function runProcess(
   if (allowed !== "any" && !allowed.includes(result.code)) throw new ProcessError(result);
   return result;
 }
-
-export function splitNull(buffer: Buffer): string[] {
-  const parts = buffer.toString("utf8").split("\0");
-  if (parts.at(-1) === "") parts.pop();
-  return parts;
-}

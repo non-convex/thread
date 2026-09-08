@@ -17,7 +17,9 @@ import type {
   ModelDescriptor,
   ModelRequestOptions,
 } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
+import { DEFAULT_COMMIT_ATTRIBUTION, formatCommitAttributionPrompt } from "../src/agent/system-prompt.js";
+import { GLOBAL_MEMORY_FILE } from "../src/global-memory.js";
 import { loadThreadConfig } from "../src/config/thread-config.js";
 import { loadThreadState, saveThreadState, type ThreadState } from "../src/config/thread-state.js";
 import { primarySlashSuggestions, ThreadTuiController } from "../src/ui/terminal/controller.js";
@@ -28,10 +30,12 @@ class TestModel implements ModelClient {
   readonly contextWindow = 32_000;
   readonly maxOutputTokens = 4_096;
   readonly reasoning = false;
+  readonly contexts: Context[] = [];
 
   constructor(readonly modelId: string) {}
 
   async stream(_context: Context, _options: ModelRequestOptions): Promise<AssistantMessage> {
+    this.contexts.push(structuredClone(_context));
     return fauxAssistantMessage(fauxText("ok"));
   }
 }
@@ -137,6 +141,8 @@ test("/model selects the main model and /agent configures secondary agents", asy
     rootPath: root,
     model: catalog.createClient("test", "main"),
     modelCatalog: catalog,
+    systemPrompt: formatCommitAttributionPrompt(DEFAULT_COMMIT_ATTRIBUTION),
+    globalMemoryPath: path.join(home, GLOBAL_MEMORY_FILE),
     skills: { skills: [], diagnostics: [] },
     onStateChange: (state) => states.push(state),
   });
@@ -146,11 +152,8 @@ test("/model selects the main model and /agent configures secondary agents", asy
     assert.ok(suggestions.some((item) => item.name === "model"));
     assert.ok(!suggestions.some((item) => item.name === "subagent"));
 
-    assert.deepEqual(app.agentProfiles.list().map((profile) => profile.id), ["main"]);
-    assert.match(
-      app.agentProfiles.get("main")?.systemPrompt ?? "",
-      /Co-authored-by: Thread <324980244\+thread-agent@users\.noreply\.github\.com>/,
-    );
+    await app.handleInput("Check product instructions", { signal: new AbortController().signal });
+    assert.match((app.runtime.model as TestModel).contexts[0]!.systemPrompt!, /Co-authored-by: Thread/);
     const overview = await app.handleInput("/agent", { signal: new AbortController().signal });
     assert.equal(overview.kind, "command");
     assert.match(overview.result.content, /main: on/);
@@ -167,17 +170,12 @@ test("/model selects the main model and /agent configures secondary agents", asy
 
     await app.handleInput("/agent implementation-worker model test/worker", { signal: new AbortController().signal });
     await app.handleInput("/agent dreamer model test/dreamer", { signal: new AbortController().signal });
-    assert.equal(app.subagentEnabled, true);
-    assert.equal(app.dreamerEnabled, true);
-    assert.deepEqual(app.agentProfiles.list().map((profile) => profile.id).sort(), [
-      "dreamer",
-      "implementation-worker",
-      "main",
-    ]);
+    assert.equal(app.runtime.subagentEnabled, true);
+    assert.equal(app.runtime.dreamerEnabled, true);
     assert.equal(states.at(-1)?.agents?.dreamer?.enabled, true);
 
     await app.handleInput("/agent implementation-worker off", { signal: new AbortController().signal });
-    assert.equal(app.subagentEnabled, false);
+    assert.equal(app.runtime.subagentEnabled, false);
     await assert.rejects(
       app.handleInput("/subagent off", { signal: new AbortController().signal }),
       /Unknown command: \/subagent/,
@@ -187,11 +185,12 @@ test("/model selects the main model and /agent configures secondary agents", asy
       /Unknown command: \/foo/,
     );
     await app.handleInput("/model test/main-2", { signal: new AbortController().signal });
-    assert.equal(app.model?.modelId, "main-2");
-    assert.equal(app.agentProfiles.get("main")?.model.modelId, "main-2");
+    assert.equal(app.runtime.model?.modelId, "main-2");
+    await app.handleInput("Use selected model", { signal: new AbortController().signal });
+    assert.equal((app.runtime.model as TestModel).contexts.length, 1);
 
     await app.handleInput("/agent dreamer off", { signal: new AbortController().signal });
-    assert.equal(app.dreamerEnabled, false);
+    assert.equal(app.runtime.dreamerEnabled, false);
     assert.equal(states.at(-1)?.agents?.dreamer?.enabled, false);
   } finally {
     await app.close();
@@ -211,6 +210,8 @@ test("TUI command menus preserve navigation, prefill arguments, and allow failed
   const catalog = new TestCatalog();
   const app = await ThreadApp.open({
     rootPath: values.path,
+    globalMemoryPath: path.join(values.path, "home", GLOBAL_MEMORY_FILE),
+    search: { semantic: false },
     model: catalog.createClient("test", "main"),
     modelCatalog: catalog,
     skills: { skills: [{
@@ -256,7 +257,7 @@ test("TUI command menus preserve navigation, prefill arguments, and allow failed
     assert.equal(screen("command_picker").items[0]!.label, "review");
     await enter();
     assert.equal(tui.state.composerInput, "/skill review ");
-    assert.equal(app.sessionTree.projection.turns.size, 0);
+    assert.equal(app.runtime["tree"].projection.turns.size, 0);
     delete tui.state.composerInput;
 
     await tui.submit("/agent");
@@ -304,9 +305,9 @@ test("TUI command menus preserve navigation, prefill arguments, and allow failed
     await enter();
     screen("session");
 
-    const firstSession = app.sessionTree.activeSession.id;
-    const turn = await app.sessionTree.startTurn("Find this request in the Session picker");
-    await app.sessionTree.finishTurn(turn.id, "completed");
+    const firstSession = app.selectedSessionId;
+    const turn = await app.runtime["tree"].startTurn("Find this request in the Session picker");
+    await app.runtime["tree"].finishTurn(turn.id, "completed");
     await tui.submit("/new");
     for (const command of ["/session", "/thread sessions", "/thread open"]) {
       await tui.submit(command);
@@ -317,7 +318,7 @@ test("TUI command menus preserve navigation, prefill arguments, and allow failed
       assert.match(sessions.items[sessions.selected]!.label, /Find this request/);
     }
     await enter();
-    assert.equal(app.sessionTree.activeSession.id, firstSession);
+    assert.equal(app.selectedSessionId, firstSession);
     screen("session");
 
     await tui.submit("/rewind");
@@ -332,7 +333,7 @@ test("TUI command menus preserve navigation, prefill arguments, and allow failed
     await enter();
     await enter();
     screen("session");
-    assert.equal(app.sessionTree.activeLiveTip, null);
+    assert.equal(app.runtime["tree"].activeLiveTip, null);
   } finally {
     tui.dispose();
     await app.close();

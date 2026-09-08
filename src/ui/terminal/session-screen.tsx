@@ -1,7 +1,6 @@
 import type { KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { isSlashCommandInput } from "../../app/input-router.js";
-import { COMPACTION_TRIGGER_RATIO } from "../../context/budget.js";
 import { filteredModels, statusLineParts, type AgentPickerScreen, type AgentSettingsScreen, type AskScreen, type CommandPickerScreen, type LiveTurn, type ModelPickerScreen, type RewindScreen, type TranscriptItem, type UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
@@ -45,12 +44,6 @@ export function estimatedWrappedLines(text: string, width: number, maximum = Num
   }
   return Math.min(lines, maximum);
 }
-
-/**
- * Warn below the compaction trigger, not above it: at 80% automatic compaction had
- * already fired at 78%, so the warning colour could never actually be observed.
- */
-export const CONTEXT_WARN_PERCENT = Math.round(COMPACTION_TRIGGER_RATIO * 100) - 10;
 
 /** An em dash reads as "not measured yet", which a bare 0% would misreport. */
 export function cacheHitLabel(percent: number | null): string {

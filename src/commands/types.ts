@@ -1,6 +1,5 @@
 import type { ModelDescriptor } from "../agent/model-client.js";
-import type { SessionRecallService } from "../session-recall/service.js";
-import type { SessionTreeService } from "../session-tree/service.js";
+import type { ThreadRuntime } from "../runtime/thread-runtime.js";
 
 export interface HistoryViewItem {
   turnId: string;
@@ -53,11 +52,13 @@ export interface CommandResult {
 
 export interface ThreadCommandContext {
   rootPath: string;
-  tree: SessionTreeService;
-  recall: SessionRecallService;
+  runtime: Pick<ThreadRuntime, "readHistory" | "readSession" | "listSessions" | "rewindCandidates" | "recallEnabled" | "searchHistory">;
+  selectedSessionId: string;
   skillDiagnostics?: readonly import("../skills/loader.js").SkillDiagnostic[];
   skills?: readonly import("../skills/loader.js").Skill[];
   signal: AbortSignal;
+  /** CLI adapter operation for changing the selected session. */
+  openSession: (id: string) => Promise<import("../session-tree/model.js").ProjectSession>;
 }
 
 export interface ThreadCommand {

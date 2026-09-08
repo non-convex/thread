@@ -24,10 +24,12 @@ function parseManifest(value: unknown, manifestPath: string): ProjectManifest {
 }
 
 export class ProjectService {
-  static async open(rootInput: string): Promise<Project> {
+  static async open(rootInput: string, options: { stateDirectory?: string } = {}): Promise<Project> {
     const rootPath = await discoverProjectRoot(rootInput);
     const id = stableId("project", normalizedIdentity(rootPath));
-    const statePath = path.join(getThreadHome(), "projects", id);
+    const statePath = options.stateDirectory
+      ? path.resolve(options.stateDirectory)
+      : path.join(getThreadHome(), "projects", id);
     const manifestPath = path.join(statePath, "project.json");
     await mkdir(statePath, { recursive: true });
     let existing: ProjectManifest | undefined;

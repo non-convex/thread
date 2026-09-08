@@ -13,7 +13,7 @@ import {
   type Message,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import {
   isHistorySummaryInstruction,
   isProgressSummaryInstruction,
@@ -148,7 +148,7 @@ test("a long turn compacts mid-turn and keeps working from the checkpoint", asyn
       skills: { skills: [], diagnostics: [] },
     });
     try {
-      app.tools.register(bulkTool("z") as AgentTool);
+      app.runtime.registerTool(bulkTool("z") as AgentTool);
 
       const outcome = await app.handleInput("please churn through the workspace", {
         signal: new AbortController().signal,
@@ -157,9 +157,9 @@ test("a long turn compacts mid-turn and keeps working from the checkpoint", asyn
       if (outcome.kind !== "turn") return;
       assert.equal(outcome.result.outcome, "completed");
 
-      const compactions = app.sessionTree
+      const compactions = app.runtime["tree"]
         .livePath()
-        .flatMap((turn) => app.sessionTree.entriesForTurn(turn.id))
+        .flatMap((turn) => app.runtime["tree"].entriesForTurn(turn.id))
         .filter((entry) => entry.type === "compaction");
       assert.ok(compactions.length >= 1, "expected at least one compaction entry");
 
@@ -191,7 +191,7 @@ test("a long turn compacts mid-turn and keeps working from the checkpoint", asyn
       assert.ok(body.includes("please churn through the workspace"), "copied request is missing");
       assert.ok(!body.includes("chunk 1 "), "earliest raw tool output should be gone");
 
-      assert.deepEqual(await app.fsck(), []);
+      assert.deepEqual(await app.runtime.fsck(), []);
     } finally {
       await app.close();
     }
@@ -210,7 +210,7 @@ test("every context stays protocol-valid across compaction", async (t) => {
       skills: { skills: [], diagnostics: [] },
     });
     try {
-      app.tools.register(bulkTool("q") as AgentTool);
+      app.runtime.registerTool(bulkTool("q") as AgentTool);
       await app.handleInput("churn again", { signal: new AbortController().signal });
 
       // A cut that split a tool batch would leave a result with no matching call.

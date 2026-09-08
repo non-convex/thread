@@ -50,9 +50,6 @@ export interface ImplementationWorkerConfig {
   maxRevisions: number;
 }
 
-/** @deprecated Use ImplementationWorkerConfig. */
-export type AgentProfileConfig = ImplementationWorkerConfig;
-
 export interface DreamerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;

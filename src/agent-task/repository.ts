@@ -12,6 +12,8 @@ export class AgentTaskRepository {
   private handle: FileHandle | undefined;
   private queue: Promise<void> = Promise.resolve();
   private writeFailure: Error | undefined;
+  private closePromise: Promise<void> | undefined;
+  private readonly pendingAppends = new Set<Promise<void>>();
 
   private constructor(readonly project: Project) {
     this.rootPath = path.join(project.statePath, "agent-tasks");
@@ -28,7 +30,17 @@ export class AgentTaskRepository {
 
   async append(event: AgentTaskEvent, flush = false): Promise<void> {
     this.assertWritable();
-    if (flush) await this.flushQueue();
+    const pending = this.appendAccepted(event, flush);
+    this.pendingAppends.add(pending);
+    try {
+      await pending;
+    } finally {
+      this.pendingAppends.delete(pending);
+    }
+  }
+
+  private async appendAccepted(event: AgentTaskEvent, flush: boolean): Promise<void> {
+    if (flush) await this.queue;
     const record: AgentTaskRecord = {
       format: AGENT_TASK_FORMAT,
       formatVersion: 2,
@@ -37,28 +49,39 @@ export class AgentTaskRepository {
       ...structuredClone(event),
     };
     this.projection.apply(record);
-    const persisted = this.queue.then(async () => {
+    const persisted = this.enqueueWrite(async () => {
       if (!this.handle) throw new Error("Agent Task repository is closed");
       await this.handle.write(`${JSON.stringify(record)}\n`, undefined, "utf8");
       if (flush) await this.handle.sync();
     });
+    if (flush) await persisted;
+  }
+
+  private enqueueWrite(write: () => Promise<void>): Promise<void> {
+    const persisted = this.queue.then(write);
     this.queue = persisted.catch((cause) => {
       this.writeFailure ??= cause instanceof Error ? cause : new Error(String(cause));
       throw this.writeFailure;
     });
     void this.queue.catch(() => undefined);
-    if (flush) await persisted;
+    return persisted;
   }
 
   async flush(): Promise<void> {
-    await this.flushQueue();
-    await this.handle?.sync();
+    this.assertWritable();
+    await this.enqueueWrite(async () => { await this.handle?.sync(); });
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closePromise ??= this.closeResources();
+  }
+
+  private async closeResources(): Promise<void> {
     let failure: unknown;
     try {
-      await this.flush();
+      await Promise.allSettled(this.pendingAppends);
+      await this.queue;
+      await this.handle?.sync();
     } catch (error) {
       failure = error;
     } finally {
@@ -92,12 +115,8 @@ export class AgentTaskRepository {
     }
   }
 
-  private async flushQueue(): Promise<void> {
-    await this.queue;
-    this.assertWritable();
-  }
-
   private assertWritable(): void {
+    if (this.closePromise) throw new Error("Agent Task repository is closed");
     if (this.writeFailure) throw new Error("Agent Task persistence failed", { cause: this.writeFailure });
   }
 }

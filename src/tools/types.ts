@@ -11,20 +11,25 @@ export interface ToolContext {
   rootPath: string;
   /** Exact files outside rootPath that this agent may write. */
   writableExternalPaths?: readonly string[];
+  /** Omitted: ordinary workspace policy. Empty: no built-in file writes are allowed. */
+  writeScope?: readonly import("./path-safety.js").FileWriteScope[];
   signal: AbortSignal;
   fileHistory?: import("../file-history/service.js").FileEditTracker;
   invocation: {
     executionId: string;
     assistantEntryId: string;
     toolCallId: string;
+    sessionId?: string | null;
+    turnId?: string | null;
+    taskId?: string;
+    agentId?: string;
   };
-  onUiEvent?: import("../ui/events.js").UiEventSink;
+  onUiEvent?: import("../runtime/events.js").ExecutionEventSink;
   /**
-   * Present when an interactive front end can put a question in front of the
-   * user. Tools that need a decision stay unregistered without it, so a plain or
-   * embedded session never parks a turn waiting for input nobody can give.
+   * Present when the host can display a question and return an answer. Without
+   * a presenter, the coding app's ask tool returns an unavailable result.
    */
-  ask?: import("../ui/ask.js").AskPresenter;
+  ask?: import("../runtime/interaction.js").AskPresenter;
 }
 
 export interface AgentTool<TArgs extends Record<string, unknown> = Record<string, unknown>> {

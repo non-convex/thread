@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Message, ToolCall } from "@earendil-works/pi-ai";
 import { abortedToolResult, INTERRUPTED_TOOL_RESULT } from "../session-tree/conversation-seal.js";
-import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
 import { ToolScheduler } from "./tool-scheduler.js";
@@ -33,7 +33,7 @@ export class ToolExecutionBatch {
       assistantEntryId: string;
       signal: AbortSignal;
       runner: ToolCallExecutor;
-      ui?: UiEventSink;
+      ui?: ExecutionEventSink;
     },
   ) {
     this.scheduler = new ToolScheduler<Message>(input.signal);
@@ -42,7 +42,7 @@ export class ToolExecutionBatch {
   observe(call: ToolCall, contentIndex: number): Promise<void> {
     const stableCall = structuredClone(call);
     if (!this.prepared.has(stableCall.id)) {
-      safeUiEvent(this.input.ui, {
+      safeExecutionEvent(this.input.ui, {
         type: "tool_started",
         id: stableCall.id,
         name: stableCall.name,
@@ -51,7 +51,6 @@ export class ToolExecutionBatch {
       });
     }
     const operation = this.prepareTail.then(async () => {
-      await this.input.journal.ready;
       this.input.signal.throwIfAborted();
       const existing = this.prepared.get(stableCall.id);
       if (existing) {
@@ -161,7 +160,7 @@ export class ToolExecutionBatch {
           // The call was cancelled or failed after it started; synthesize below.
         }
       }
-      safeUiEvent(this.input.ui, {
+      safeExecutionEvent(this.input.ui, {
         type: "tool_finished",
         id: prepared.call.id,
         name: prepared.call.name,

@@ -4,18 +4,18 @@ import type { AgentProfile } from "../agent/profile.js";
 import { AgentStepRunner } from "../agent/step-runner.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
-import { settlesWithin } from "../utils/async.js";
+import type { HostToolPolicy } from "../runtime/policy.js";
 import { DREAMER_MAX_RUNTIME_MS } from "./profile.js";
 import { createDreamerReviewBatches } from "./review.js";
 
 export const DREAMER_IDLE_TURNS = 10;
 export const DREAMER_IDLE_MS = 10 * 60_000;
-export const DREAMER_SHUTDOWN_GRACE_MS = 2_000;
 
 export interface DreamerSchedulerOptions {
   idleTurns?: number;
   idleMs?: number;
   maxRuntimeMs?: number;
+  toolPolicy?: HostToolPolicy;
 }
 
 /** Reviews accumulated turns after the Main agent has remained idle long enough. */
@@ -36,6 +36,7 @@ export class DreamerScheduler {
   private readonly idleTurns: number;
   private readonly idleMs: number;
   private readonly maxRuntimeMs: number;
+  private readonly toolPolicy: HostToolPolicy | undefined;
 
   constructor(
     private readonly rootPath: string,
@@ -47,6 +48,7 @@ export class DreamerScheduler {
     this.idleTurns = options.idleTurns ?? DREAMER_IDLE_TURNS;
     this.idleMs = options.idleMs ?? DREAMER_IDLE_MS;
     this.maxRuntimeMs = options.maxRuntimeMs ?? DREAMER_MAX_RUNTIME_MS;
+    this.toolPolicy = options.toolPolicy;
   }
 
   get enabled(): boolean { return this.profile !== undefined && !this.closing; }
@@ -87,7 +89,7 @@ export class DreamerScheduler {
     this.clearTimer();
     this.controller?.abort(new DOMException("Thread application closed", "AbortError"));
     const running = this.running;
-    if (running) await settlesWithin(running, DREAMER_SHUTDOWN_GRACE_MS);
+    if (running) await running;
     this.clearPending();
   }
 
@@ -152,13 +154,11 @@ export class DreamerScheduler {
     const timeout = AbortSignal.timeout(this.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const batches = createDreamerReviewBatches(this.memoryPath, turns, profile.model.contextWindow);
-    const toolRunner = new ToolCallExecutor(
-      this.rootPath,
-      profile.tools,
-      new ExtensionEvents(),
-      undefined,
-      [this.memoryPath],
-    );
+    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+      writableExternalPaths: [this.memoryPath],
+      ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),
+      agentId: profile.id,
+    });
     const maxOutputTokens = Math.min(
       profile.model.maxOutputTokens,
       16_384,

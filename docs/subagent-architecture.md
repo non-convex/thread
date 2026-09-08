@@ -35,14 +35,22 @@ Subagent 开启后，Thread 只注册四个任务工具：
 
 Worker 的 `ToolCallExecutor` 以项目根目录为执行根，因此 `read`、`write`、`edit` 和 `bash` 看到的就是主 agent 当前看到的目录。
 
-每项任务仍必须声明 `writeScope`。它是任务协调约束，不是文件系统沙箱：
+每项任务必须声明 `writeScope`，用于任务协调和内置文件工具的写入检查：
 
 - 同一次 `delegate_tasks` 中的任务不能重叠。
 - 新任务或返工不能与任何运行中任务重叠。
+- 内置 `write`、`edit` 在共享文件写入入口检查实际目标路径。文件范围只允许该文件，目录范围允许其后代；范围外调用在备份、创建目录和修改文件前返回工具错误。符号链接不能扩大声明范围。
+- 返工保留原任务范围。宿主工具策略即使允许调用，也不会跳过范围检查。
 - 主 agent 的提示要求它在 worker 运行时不要修改对应范围。
 - Worker 的提示要求它遵守范围、保留他人修改，并在最终回复列出修改文件和验证结果。
 
-Thread 不增加跨 runner 文件锁，也不尝试分析任意 bash 命令实际会写哪些路径。任务边界不清楚、修改高度耦合，或必须同时改共享核心文件的工作，不适合并行委派。
+主 agent 和 worker 复用文件服务的同路径写入队列，获得执行机会后会重新检查目标；关闭文件 checkpoint 仍保留协调和范围检查。`writeScope` 不是文件系统沙箱，Thread 不分析或限制任意 bash 命令、自定义工具实际会写哪些路径。任务边界不清楚、修改高度耦合，或必须同时改共享核心文件的工作，不适合并行委派。
+
+## 共享项目指令
+
+coding 应用启动时加载项目根目录的 `AGENTS.md`，与宿主传入的 `sharedInstructions` 一起提供给主 agent 和 worker。worker 保留独立的角色提示词，任务目标和范围仍来自委派参数。运行期间修改指令文件不会改变已打开实例的快照，包括后来启用的 worker；重新打开应用才重新读取。
+
+裸 `ThreadRuntime.open()` 不扫描项目指令文件，宿主可通过 `sharedInstructions` 显式提供。coding 应用可用 `projectInstructions: false` 关闭自动读取。根目录之外的分层指令加载尚未实现，读取边界及文件大小限制见 [runtime 指南](./runtime.md)。
 
 ## 生命周期
 
@@ -80,7 +88,7 @@ agent-tasks/
 
 旧 v1 记录、ChangeSet 清单和私有工作区数据不会迁移或读取。若现有 `events.jsonl` 不是 v2 格式，启动会快速失败，避免把旧语义误解成共享工作区任务。
 
-Worker 和主 agent 共用文件历史入口。内置 `edit`、`write` 写入前的记录保存在父 turn 的 Session Tree 中，每个 turn 对同一路径只保存首次编辑前的状态；worker 的 bash 改动不被跟踪。返工、失败和取消均保留已保存的编辑记录。
+Worker 和主 agent 共用文件历史入口。开启文件 checkpoint 时，内置 `edit`、`write` 写入前的记录保存在父 turn 的 Session Tree 中，每个 turn 对同一路径只保存首次编辑前的状态；worker 的 bash 改动不被跟踪。返工、失败和取消均保留已保存的编辑记录。
 
 ## 一次典型流程
 

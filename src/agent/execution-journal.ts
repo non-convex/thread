@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { AgentTool } from "../tools/types.js";
+import type { ExecutionIdentity } from "../runtime/policy.js";
 
 export interface ToolExecutionFact {
   assistantEntryId: string;
@@ -11,10 +12,10 @@ export interface ToolExecutionFact {
   replay: AgentTool["replay"];
 }
 
-/** The smallest durable surface shared by parent turns and child tasks. */
+/** Shared journal operations. The owning execution is admitted before the step runner starts. */
 export interface ExecutionJournal {
   readonly executionId: string;
-  readonly ready: Promise<unknown>;
+  readonly identity?: ExecutionIdentity;
   conversationMessages(): Message[];
   planAssistantEntryId(): string;
   appendAssistant(message: Message, entryId: string): Promise<void>;
@@ -26,8 +27,17 @@ export class SessionTurnJournal implements ExecutionJournal {
   constructor(
     private readonly tree: SessionTreeService,
     readonly executionId: string,
-    readonly ready: Promise<unknown>,
+    private readonly sessionId?: string,
   ) {}
+
+  get identity(): ExecutionIdentity {
+    return {
+      executionId: this.executionId,
+      sessionId: this.sessionId ?? this.tree.projection.turns.get(this.executionId)?.sessionId ?? null,
+      turnId: this.executionId,
+      agentId: "main",
+    };
+  }
 
   planAssistantEntryId(): string {
     return this.tree.planMessageEntry(this.executionId).id;

@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { FileHistoryService } from "../file-history/service.js";
 import type { AgentProfile, AgentProfileRegistry } from "../agent/profile.js";
-import type { UiEventSink } from "../ui/events.js";
-import { safeUiEvent } from "../ui/events.js";
+import type { ExecutionEventSink } from "../runtime/events.js";
+import { safeExecutionEvent } from "../runtime/events.js";
 import { createId } from "../utils/id.js";
 import { AgentTaskJournal } from "./journal.js";
 import type { AgentTask, AgentTaskSummary, AgentTaskWriteScope, ImplementationTaskSpec } from "./model.js";
@@ -13,12 +13,13 @@ import {
 } from "./profile.js";
 import type { AgentTaskRepository } from "./repository.js";
 import { ImplementationTaskRunner } from "./task-runner.js";
+import type { HostExecutionOptions } from "../runtime/policy.js";
 
 export interface DelegateTaskContext {
   parentTurnId: string;
   toolCallId: string;
   signal: AbortSignal;
-  ui?: UiEventSink;
+  ui?: ExecutionEventSink;
 }
 
 export interface AgentTaskOutcome {
@@ -39,8 +40,9 @@ export class AgentTaskOrchestrator {
     rootPath: string,
     private readonly workerSettings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
     fileHistory?: FileHistoryService,
+    executionOptions: HostExecutionOptions = {},
   ) {
-    this.runner = new ImplementationTaskRunner(repository, rootPath, fileHistory);
+    this.runner = new ImplementationTaskRunner(repository, rootPath, fileHistory, executionOptions);
   }
 
   get enabled(): boolean {
@@ -105,7 +107,7 @@ export class AgentTaskOrchestrator {
       const ids = this.turnTasks.get(context.parentTurnId) ?? new Set<string>();
       ids.add(task.id);
       this.turnTasks.set(context.parentTurnId, ids);
-      safeUiEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
+      safeExecutionEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
       this.launch(task.id, profile, context.signal, context.ui);
     }
     return tasks.map((task) => this.repository.projection.summary(task.id));
@@ -124,7 +126,7 @@ export class AgentTaskOrchestrator {
     return unique.map((id) => this.outcome(id));
   }
 
-  async requestRevision(taskId: string, feedback: string, signal: AbortSignal, ui?: UiEventSink): Promise<AgentTaskSummary> {
+  async requestRevision(taskId: string, feedback: string, signal: AbortSignal, ui?: ExecutionEventSink): Promise<AgentTaskSummary> {
     const task = this.repository.projection.require(taskId);
     const profile = this.profiles.require(task.profileId);
     if (task.status !== "completed") throw new Error(`Task ${taskId} is not completed`);
@@ -143,7 +145,7 @@ export class AgentTaskOrchestrator {
     return this.repository.projection.summary(taskId);
   }
 
-  async cancelTask(taskId: string, reason: string, ui?: UiEventSink): Promise<AgentTaskSummary> {
+  async cancelTask(taskId: string, reason: string, ui?: ExecutionEventSink): Promise<AgentTaskSummary> {
     const task = this.repository.projection.require(taskId);
     if (task.status !== "running") {
       throw new Error(`Task ${taskId} is not running; cancellation does not revert workspace changes`);
@@ -151,7 +153,7 @@ export class AgentTaskOrchestrator {
     this.controllers.get(taskId)?.abort(new DOMException(reason, "AbortError"));
     await this.runs.get(taskId);
     const summary = this.repository.projection.summary(taskId);
-    safeUiEvent(ui, { type: "agent_task_updated", summary });
+    safeExecutionEvent(ui, { type: "agent_task_updated", summary });
     return summary;
   }
 
@@ -162,7 +164,7 @@ export class AgentTaskOrchestrator {
       .map((task) => this.repository.projection.summary(task.id));
   }
 
-  async finishParentTurn(turnId: string, reason: string, ui?: UiEventSink): Promise<void> {
+  async finishParentTurn(turnId: string, reason: string, ui?: ExecutionEventSink): Promise<void> {
     const taskIds = [...(this.turnTasks.get(turnId) ?? [])];
     for (const taskId of taskIds) {
       if (this.repository.projection.require(taskId).status === "running") {
@@ -181,7 +183,7 @@ export class AgentTaskOrchestrator {
     await this.repository.close();
   }
 
-  private launch(taskId: string, profile: AgentProfile, signal: AbortSignal, ui?: UiEventSink): void {
+  private launch(taskId: string, profile: AgentProfile, signal: AbortSignal, ui?: ExecutionEventSink): void {
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
     this.controllers.set(taskId, controller);
@@ -203,7 +205,7 @@ export class AgentTaskOrchestrator {
         }
       } finally {
         this.controllers.delete(taskId);
-        safeUiEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
+        safeExecutionEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
       }
     })();
     this.runs.set(taskId, run);

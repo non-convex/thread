@@ -3,13 +3,14 @@ import { AgentStepRunner } from "../agent/step-runner.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
-import { safeUiEvent, type AgentTaskLiveEvent, type UiEvent, type UiEventSink } from "../ui/events.js";
+import { safeExecutionEvent, type AgentTaskLiveEvent, type ExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import { AgentTaskJournal } from "./journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import type { AgentTaskRun } from "./model.js";
 import type { ImplementationWorkerLimits } from "./profile.js";
 import { taskSpecMessage } from "./prompt.js";
 import type { AgentTaskRepository } from "./repository.js";
+import type { HostExecutionOptions } from "../runtime/policy.js";
 
 function emptyUsage(): Usage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -34,7 +35,7 @@ function responseText(response: AssistantMessage): string {
   return response.content.filter((content) => content.type === "text").map((content) => content.text).join("\n").trim();
 }
 
-function childEvent(event: UiEvent): AgentTaskLiveEvent | undefined {
+function childEvent(event: ExecutionEvent): AgentTaskLiveEvent | undefined {
   if (event.type === "assistant_started" || event.type === "assistant_text_delta" || event.type === "assistant_thinking_delta" ||
       event.type === "tool_started" || event.type === "tool_finished") return event;
   return undefined;
@@ -45,6 +46,7 @@ export class ImplementationTaskRunner {
     private readonly repository: AgentTaskRepository,
     private readonly rootPath: string,
     private readonly fileHistory?: FileHistoryService,
+    private readonly executionOptions: HostExecutionOptions = {},
   ) {}
 
   async run(
@@ -52,7 +54,7 @@ export class ImplementationTaskRunner {
     profile: AgentProfile,
     limits: ImplementationWorkerLimits,
     parentSignal: AbortSignal,
-    ui?: UiEventSink,
+    ui?: ExecutionEventSink,
   ): Promise<void> {
     const task = this.repository.projection.require(taskId);
     const revision = task.runs.length;
@@ -63,12 +65,14 @@ export class ImplementationTaskRunner {
 
     const timeout = AbortSignal.timeout(limits.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
-    const journal = new AgentTaskJournal(this.repository, taskId);
+    const journal = new AgentTaskJournal(this.repository, taskId, this.executionOptions.sessionIdForTurn?.(task.parentTurnId));
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
-    const toolRunner = new ToolCallExecutor(
-      this.rootPath, profile.tools, new ExtensionEvents(), undefined, [],
-      this.fileHistory ? () => this.fileHistory!.forTurn(task.parentTurnId) : undefined,
-    );
+    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+      ...(this.fileHistory ? { fileHistory: () => this.fileHistory!.forTurn(task.parentTurnId) } : {}),
+      ...(this.executionOptions.toolPolicy ? { toolPolicy: this.executionOptions.toolPolicy } : {}),
+      agentId: profile.id,
+      writeScope: task.spec.writeScope,
+    });
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     const maxOutputTokens = Math.min(profile.model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)));
     const stepRunner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
@@ -82,10 +86,10 @@ export class ImplementationTaskRunner {
           messages: journal.messages,
           tools: profile.tools.modelDefinitions(),
         };
-        const taskUi: UiEventSink | undefined = ui
+        const taskUi: ExecutionEventSink | undefined = ui
           ? (event) => {
               const child = childEvent(event);
-              if (child) safeUiEvent(ui, { type: "agent_task_trace", taskId, event: child });
+              if (child) safeExecutionEvent(ui, { type: "agent_task_trace", taskId, event: child });
             }
           : undefined;
         const result = await stepRunner.run(context, journal, {
@@ -140,7 +144,7 @@ export class ImplementationTaskRunner {
     }
   }
 
-  private updated(taskId: string, ui?: UiEventSink): void {
-    safeUiEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
+  private updated(taskId: string, ui?: ExecutionEventSink): void {
+    safeExecutionEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
   }
 }

@@ -133,7 +133,6 @@ export const bold = createTextAttributes({ bold: true });
 export const dim = createTextAttributes({ dim: true });
 export const italic = createTextAttributes({ italic: true });
 export const dimItalic = createTextAttributes({ dim: true, italic: true });
-export const boldDim = createTextAttributes({ bold: true, dim: true });
 
 export function terminalTheme(mode: ThemeMode | null | undefined): ThreadTerminalTheme {
   return mode === "light" ? lightTheme : darkTheme;
@@ -236,18 +235,6 @@ export function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
   return String(tokens);
-}
-
-/**
- * Format duration
- */
-export function formatDuration(ms: number): string {
-  const seconds = ms / 1000;
-  if (seconds < 1) return `${ms}ms`;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  return `${minutes}m${remainingSeconds}s`;
 }
 
 /**

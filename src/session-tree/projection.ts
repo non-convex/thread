@@ -79,8 +79,10 @@ export class SessionTreeProjection {
         const turn = event.turn;
         assertUnused(this.turns, turn.id, "turn");
         if (!this.sessions.has(turn.sessionId)) throw new SessionTreeCorruptionError(`Turn ${turn.id} has no session`);
-        if (this.activeSessionId !== turn.sessionId) throw new SessionTreeCorruptionError(`Turn ${turn.id} started outside the active Session`);
         if (turn.status !== "running") throw new SessionTreeCorruptionError(`Turn ${turn.id} did not start running`);
+        if (turn.fileCheckpoints !== undefined && typeof turn.fileCheckpoints !== "boolean") {
+          throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid file checkpoint setting`);
+        }
         if ([...this.turns.values()].some((item) => item.status === "running")) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
         }
@@ -120,6 +122,9 @@ export class SessionTreeProjection {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not begin with its user entry`);
         }
         if (entry.type === "file_edit") {
+          if (turn.fileCheckpoints === false) {
+            throw new SessionTreeCorruptionError(`Turn ${turn.id} has file edits with checkpoints disabled`);
+          }
           if (typeof entry.path !== "string" || !entry.path || entry.path.includes("\\") || entry.path.includes("\0") ||
               path.posix.isAbsolute(entry.path) || path.win32.isAbsolute(entry.path) || /^[A-Za-z]:/.test(entry.path) ||
               entry.path.split("/").some((part) => !part || part === "." || part === "..") ||

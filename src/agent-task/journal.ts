@@ -2,14 +2,25 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { ExecutionJournal, ToolExecutionFact } from "../agent/execution-journal.js";
 import { createId } from "../utils/id.js";
 import type { AgentTaskRepository } from "./repository.js";
+import type { ExecutionIdentity } from "../runtime/policy.js";
 
 export class AgentTaskJournal implements ExecutionJournal {
-  readonly ready = Promise.resolve();
-
   constructor(
     private readonly repository: AgentTaskRepository,
     readonly executionId: string,
+    private readonly sessionId?: string,
   ) {}
+
+  get identity(): ExecutionIdentity {
+    const task = this.repository.projection.require(this.executionId);
+    return {
+      executionId: this.executionId,
+      sessionId: this.sessionId ?? null,
+      turnId: task.parentTurnId,
+      taskId: task.id,
+      agentId: task.profileId,
+    };
+  }
 
   get messages(): Message[] {
     return this.repository.projection.require(this.executionId).trace

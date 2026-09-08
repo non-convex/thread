@@ -4,8 +4,18 @@ import type { ThreadState } from "../config/thread-state.js";
 
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** Apply cache identity and retention without changing a host-owned client. */
+export function bindModel(model: ModelClient, cacheKey: string, cacheRetention: CacheRetention | undefined): ModelClient {
+  let bound = model;
+  const cache = bound as ModelClient & { withCacheKey?: (key: string) => ModelClient };
+  if (cache.withCacheKey && bound.cacheKey !== cacheKey) bound = cache.withCacheKey(cacheKey);
+  const retention = bound as ModelClient & { withCacheRetention?: (value: CacheRetention | undefined) => ModelClient };
+  if (retention.withCacheRetention && bound.cacheRetention !== cacheRetention) bound = retention.withCacheRetention(cacheRetention);
+  return bound;
+}
+
 /** Owns only the primary agent's mutable model and thinking selection. */
-export class MainAgentController {
+export class ModelSelection {
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
   private currentThinkingLevel: ModelThinkingLevel = "off";
@@ -26,7 +36,7 @@ export class MainAgentController {
   get reasoning(): ThinkingLevel | undefined { return this.currentThinkingLevel === "off" ? undefined : this.currentThinkingLevel; }
 
   select(model: ModelClient | undefined): void {
-    this.currentModel = this.bind(model);
+    this.currentModel = model ? bindModel(model, this.treeId, this.cacheRetention) : undefined;
     this.currentThinkingLevel = this.clamp(this.currentModel, this.preferredThinkingLevel);
   }
 
@@ -40,23 +50,18 @@ export class MainAgentController {
     return this.currentThinkingLevel;
   }
 
+  setThinkingLevel(level: ModelThinkingLevel): void {
+    if (!THINKING_LEVELS.includes(level)) throw new Error(`Unknown thinking level: ${level}`);
+    this.preferredThinkingLevel = level;
+    this.currentThinkingLevel = this.clamp(this.currentModel, level);
+    this.remember();
+  }
+
   remember(): void {
     this.onStateChange?.({
       ...(this.currentModel ? { model: { provider: this.currentModel.providerId, id: this.currentModel.modelId } } : {}),
       thinkingLevel: this.preferredThinkingLevel,
     });
-  }
-
-  private bind(model: ModelClient | undefined): ModelClient | undefined {
-    if (!model) return undefined;
-    let bound = model;
-    const cacheBindable = bound as ModelClient & { withCacheKey?: (key: string) => ModelClient };
-    if (cacheBindable.withCacheKey && bound.cacheKey !== this.treeId) bound = cacheBindable.withCacheKey(this.treeId);
-    const retentionBindable = bound as ModelClient & { withCacheRetention?: (value: CacheRetention | undefined) => ModelClient };
-    if (retentionBindable.withCacheRetention && bound.cacheRetention !== this.cacheRetention) {
-      bound = retentionBindable.withCacheRetention(this.cacheRetention);
-    }
-    return bound;
   }
 
   private thinkingLevelsFor(model: ModelClient | undefined): readonly ModelThinkingLevel[] {

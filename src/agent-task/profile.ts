@@ -3,7 +3,7 @@ import type { ModelClient } from "../agent/model-client.js";
 import type { AgentProfile } from "../agent/profile.js";
 import { registerImplementationWorkerTools } from "../tools/builtins.js";
 import { ToolRegistry } from "../tools/types.js";
-import { IMPLEMENTATION_WORKER_SYSTEM_PROMPT } from "./prompt.js";
+import { implementationWorkerSystemPrompt } from "./prompt.js";
 
 // Kept as a source-level compatibility export while the shared profile moves
 // out of the implementation-task subsystem.
@@ -46,6 +46,7 @@ function resolveWorkerThinkingLevel(
 export function createImplementationWorkerProfile(
   model: ModelClient,
   settings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+  fileCheckpoints = true,
 ): AgentProfile {
   const tools = new ToolRegistry();
   registerImplementationWorkerTools(tools);
@@ -54,6 +55,6 @@ export function createImplementationWorkerProfile(
     model,
     thinkingLevel: resolveWorkerThinkingLevel(model, settings.thinkingLevel),
     tools,
-    systemPrompt: IMPLEMENTATION_WORKER_SYSTEM_PROMPT,
+    systemPrompt: implementationWorkerSystemPrompt(fileCheckpoints),
   };
 }

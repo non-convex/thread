@@ -48,20 +48,12 @@ export class AgentProfileRegistry {
     return profile;
   }
 
-  list(): AgentProfile[] {
-    return [...this.profiles.values()];
-  }
-
   set(profile: AgentProfile): void {
     this.profiles.set(profile.id, profile);
   }
 
   delete(id: string): boolean {
     return this.profiles.delete(id);
-  }
-
-  setDiagnostics(diagnostics: readonly AgentProfileDiagnostic[]): void {
-    this.currentDiagnostics = [...diagnostics];
   }
 
   clearDiagnostics(profileId: string): void {

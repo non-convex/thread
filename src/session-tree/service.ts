@@ -46,6 +46,8 @@ export interface PlannedTurn {
   content?: UserMessage["content"];
   status: "running";
   startedAt: number;
+  /** Missing on values created by older embedding code; defaults to true. */
+  fileCheckpoints?: boolean;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
@@ -138,18 +140,20 @@ export class SessionTreeService {
     return matches[0]!;
   }
 
-  planTurn(input: string, images: readonly ImageContent[] = []): PlannedTurn {
+  planTurn(input: string, images: readonly ImageContent[] = [], sessionId = this.activeSession.id, fileCheckpoints = true): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
+    const session = this.resolveSession(sessionId);
     return {
       id: createId("turn"),
-      sessionId: this.activeSession.id,
-      parentTurnId: this.activeLiveTip,
+      sessionId: session.id,
+      parentTurnId: this.projection.liveTips.get(session.id) ?? null,
       userEntryId: createId("entry"),
       input,
       content: userContentFrom(input, images),
       status: "running",
       startedAt: Date.now(),
+      fileCheckpoints,
     };
   }
 
@@ -163,8 +167,9 @@ export class SessionTreeService {
     const content = planned.content ?? planned.input;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
     this.requireIdle();
-    if (planned.sessionId !== this.activeSession.id || planned.parentTurnId !== this.activeLiveTip) {
-      throw new Error(`Planned turn ${planned.id} no longer extends the active Session`);
+    if (!this.projection.sessions.has(planned.sessionId) ||
+        planned.parentTurnId !== (this.projection.liveTips.get(planned.sessionId) ?? null)) {
+      throw new Error(`Planned turn ${planned.id} no longer extends its Session`);
     }
     const turn: Turn = {
       id: planned.id,
@@ -173,6 +178,7 @@ export class SessionTreeService {
       userEntryId: planned.userEntryId,
       status: "running",
       startedAt: planned.startedAt,
+      fileCheckpoints: planned.fileCheckpoints ?? true,
     };
     const userEntry: MessageEntry = {
       id: turn.userEntryId,
@@ -186,7 +192,7 @@ export class SessionTreeService {
     await this.repository.appendBatch(() => [
       { type: "turn_started", turn },
       { type: "entry_appended", entry: userEntry },
-    ]);
+    ], true);
     return structuredClone(turn);
   }
 
@@ -304,11 +310,11 @@ export class SessionTreeService {
     return structuredClone(this.projection.turns.get(turnId)!);
   }
 
-  async moveLiveTipForRewind(turnId: string | null): Promise<void> {
+  async moveLiveTipForRewind(turnId: string | null, sessionId = this.activeSession.id): Promise<void> {
     this.requireIdle();
     await this.repository.append(() => ({
       type: "live_tip_changed",
-      sessionId: this.activeSession.id,
+      sessionId,
       turnId,
       reason: "rewind",
     }), true);
@@ -332,8 +338,8 @@ export class SessionTreeService {
       .map((entry) => structuredClone(entry.message));
   }
 
-  rewindCandidates(): RewindCandidate[] {
-    return this.livePath().map((turn) => {
+  rewindCandidates(sessionId = this.activeSession.id): RewindCandidate[] {
+    return this.livePath(sessionId).map((turn) => {
       const entry = this.projection.entries.get(turn.userEntryId);
       if (!entry || entry.type !== "message" || entry.message.role !== "user") {
         throw new Error(`Turn ${turn.id} has no valid user entry`);
@@ -349,8 +355,8 @@ export class SessionTreeService {
     });
   }
 
-  resolveRewindCandidate(idOrPrefix: string): RewindCandidate {
-    const matches = this.rewindCandidates().filter((candidate) =>
+  resolveRewindCandidate(idOrPrefix: string, sessionId = this.activeSession.id): RewindCandidate {
+    const matches = this.rewindCandidates(sessionId).filter((candidate) =>
       candidate.turnId === idOrPrefix || candidate.userEntryId === idOrPrefix ||
       candidate.turnId.startsWith(idOrPrefix) || candidate.userEntryId.startsWith(idOrPrefix)
     );

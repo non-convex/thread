@@ -1,5 +1,5 @@
 import { isContextOverflow, type AssistantMessage, type Context, type Message } from "@earendil-works/pi-ai";
-import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import type { ModelClient } from "./model-client.js";
 import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch.js";
@@ -15,7 +15,7 @@ export interface AgentStepOptions {
   signal: AbortSignal;
   step: number;
   onTextDelta?: (delta: string) => void;
-  onUiEvent?: UiEventSink;
+  onUiEvent?: ExecutionEventSink;
   onAssistantPersisted?: (response: AssistantMessage) => void | Promise<void>;
 }
 
@@ -47,8 +47,8 @@ export class AgentStepRunner {
   ) {}
 
   async run(context: Context, journal: ExecutionJournal, options: AgentStepOptions): Promise<AgentStepResult> {
-    safeUiEvent(options.onUiEvent, { type: "assistant_started", step: options.step });
     let assistantEntryId = journal.planAssistantEntryId();
+    safeExecutionEvent(options.onUiEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });
     const toolBatch = new ToolExecutionBatch({
       journal,
       assistantEntryId,
@@ -62,20 +62,21 @@ export class AgentStepRunner {
         maxTokens: this.maxOutputTokens,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         onTextDelta: (delta) => {
-          options.onTextDelta?.(delta);
-          safeUiEvent(options.onUiEvent, { type: "assistant_text_delta", step: options.step, delta });
+          try { options.onTextDelta?.(delta); } catch { /* A legacy text observer cannot cancel the turn. */ }
+          safeExecutionEvent(options.onUiEvent, { type: "assistant_text_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onThinkingDelta: (delta) => {
-          safeUiEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: options.step, delta });
+          safeExecutionEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onToolCallComplete: (call, contentIndex) => toolBatch.observe(call, contentIndex),
         onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
           const nextEntryId = journal.planAssistantEntryId();
           await toolBatch.restartForModelRetry(new Error(`Model attempt failed before retry ${attempt}`), nextEntryId);
           assistantEntryId = nextEntryId;
-          safeUiEvent(options.onUiEvent, {
+          safeExecutionEvent(options.onUiEvent, {
             type: "model_retry_scheduled",
             step: options.step,
+            entryId: assistantEntryId,
             attempt,
             maxAttempts,
             delayMs,
@@ -83,14 +84,13 @@ export class AgentStepRunner {
           });
         },
         onRetryAttemptStart: (attempt, maxAttempts) => {
-          safeUiEvent(options.onUiEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts });
+          safeExecutionEvent(options.onUiEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts, entryId: assistantEntryId });
         },
       });
       const calls: IndexedToolCall[] = response.content.flatMap((content, contentIndex) =>
         content.type === "toolCall" ? [{ contentIndex, call: content }] : []
       );
       await toolBatch.reconcile(calls);
-      await journal.ready;
       await journal.appendAssistant(response, assistantEntryId);
       await options.onAssistantPersisted?.(response);
 

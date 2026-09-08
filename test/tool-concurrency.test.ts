@@ -13,7 +13,7 @@ import {
   type ToolCall,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { singletonResource, workspacePathClaim } from "../src/tools/execution.js";
 import type { AgentTool } from "../src/tools/types.js";
 import type { UiEvent } from "../src/ui/events.js";
@@ -125,7 +125,7 @@ test("read-effect tools start from the model stream, finish independently, and c
         resources: (args) => singletonResource("test-probe", args.value, "read"),
       },
       async execute(args) {
-        const eventsPath = path.join(app.project.statePath, "session-tree", "events.jsonl");
+        const eventsPath = path.join(app.runtime.project.statePath, "session-tree", "events.jsonl");
         const durableLog = await readFile(eventsPath, "utf8");
         assert.match(durableLog, new RegExp(args.value === "first" ? "call-first" : "call-second"));
         assert.equal(modelResponseOpen, true, "read effect should execute before the provider response closes");
@@ -169,7 +169,7 @@ test("read-effect tools start from the model stream, finish independently, and c
         .map((message) => message.role === "toolResult" ? message.toolCallId : "");
       assert.deepEqual(secondContextResults, ["call-first", "call-second"]);
 
-      const entries = app.sessionTree.entriesForTurn(app.sessionTree.activeLiveTip!);
+      const entries = app.runtime["tree"].entriesForTurn(app.runtime["tree"].activeLiveTip!);
       const durableResults = entries
         .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
         .map((entry) => entry.type === "message" && entry.message.role === "toolResult" ? entry.message.toolCallId : "");

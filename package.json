@@ -20,6 +20,14 @@
     ".": {
       "types": "./dist/types/src/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/types/src/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./tui": {
+      "types": "./dist/types/src/tui.d.ts",
+      "import": "./dist/tui.js"
     }
   },
   "scripts": {
@@ -29,6 +37,7 @@
     "test": "bun test test --timeout 30000",
     "test:recall": "bun scripts/verify-recall.ts",
     "test:standalone-recall": "bun scripts/smoke-recall-standalone.ts",
+    "test:runtime": "bun run build && bun scripts/verify-runtime.ts",
     "start": "bun dist/thread.js",
     "dev": "bun src/cli/main.ts"
   },

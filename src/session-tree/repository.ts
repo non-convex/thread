@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rm, truncate, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { Project } from "../project/model.js";
@@ -20,10 +21,13 @@ export class SessionTreeRepository {
   readonly treePath: string;
   readonly eventsPath: string;
   private readonly lockPath: string;
+  private readonly lockId = randomUUID();
   private eventsHandle: FileHandle | undefined;
   private lockHandle: FileHandle | undefined;
   private queue: Promise<void> = Promise.resolve();
   private writeFailure: Error | undefined;
+  private closePromise: Promise<void> | undefined;
+  private readonly pendingAppends = new Set<Promise<number>>();
 
   private constructor(readonly project: Project) {
     this.treePath = path.join(project.statePath, "session-tree");
@@ -34,8 +38,8 @@ export class SessionTreeRepository {
   static async open(project: Project): Promise<SessionTreeRepository> {
     const repository = new SessionTreeRepository(project);
     await mkdir(repository.treePath, { recursive: true });
-    await repository.acquireLock();
     try {
+      await repository.acquireLock();
       await repository.load();
       repository.eventsHandle = await open(
         repository.eventsPath,
@@ -53,7 +57,7 @@ export class SessionTreeRepository {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         this.lockHandle = await open(this.lockPath, "wx", 0o600);
-        await this.lockHandle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
+        await this.lockHandle.writeFile(`${process.pid}\n${new Date().toISOString()}\n${this.lockId}\n`);
         await this.lockHandle.sync();
         return;
       } catch (error) {
@@ -129,34 +133,47 @@ export class SessionTreeRepository {
     factory: (sequence: number, timestamp: number) => SessionTreeEvent,
     flush = false,
   ): Promise<number> {
-    this.assertWritable();
-    if (flush) {
-      await this.queue;
-      this.assertWritable();
-    }
-    const sequence = this.projection.nextSequence;
-    const timestamp = Date.now();
-    const record = { sequence, timestamp, ...factory(sequence, timestamp) } as SessionTreeRecord;
-    this.projection.applyRecord(record);
-    const persisted = this.enqueueWrite(record, flush);
-    if (flush) await persisted;
-    return sequence;
+    return this.appendRecord((sequence, timestamp) => (
+      { sequence, timestamp, ...factory(sequence, timestamp) }
+    ), flush);
   }
 
   async appendBatch(
     factory: (sequence: number, timestamp: number) => SessionTreeEvent[],
     flush = false,
   ): Promise<number> {
+    return this.appendRecord((sequence, timestamp) => (
+      { sequence, timestamp, type: "batch", events: factory(sequence, timestamp) }
+    ), flush);
+  }
+
+  private async appendRecord(
+    factory: (sequence: number, timestamp: number) => SessionTreeRecord,
+    flush: boolean,
+  ): Promise<number> {
     this.assertWritable();
+    const pending = this.appendAcceptedRecord(factory, flush);
+    this.pendingAppends.add(pending);
+    try {
+      return await pending;
+    } finally {
+      this.pendingAppends.delete(pending);
+    }
+  }
+
+  private async appendAcceptedRecord(
+    factory: (sequence: number, timestamp: number) => SessionTreeRecord,
+    flush: boolean,
+  ): Promise<number> {
     if (flush) {
       await this.queue;
-      this.assertWritable();
+      this.assertPersistenceHealthy();
     }
     const sequence = this.projection.nextSequence;
     const timestamp = Date.now();
-    const record: SessionTreeRecord = { sequence, timestamp, type: "batch", events: factory(sequence, timestamp) };
+    const record = factory(sequence, timestamp);
     this.projection.applyRecord(record);
-    const persisted = this.enqueueWrite(record, flush);
+    const persisted = this.enqueueWrite(() => this.write(record, flush));
     if (flush) await persisted;
     return sequence;
   }
@@ -167,8 +184,8 @@ export class SessionTreeRepository {
     if (flush) await this.eventsHandle.sync();
   }
 
-  private enqueueWrite(record: SessionTreeRecord, flush: boolean): Promise<void> {
-    const persisted = this.queue.then(() => this.write(record, flush));
+  private enqueueWrite(write: () => Promise<void>): Promise<void> {
+    const persisted = this.queue.then(write);
     this.queue = persisted.catch((cause) => {
       this.writeFailure ??= cause instanceof Error ? cause : new Error(String(cause));
       throw this.writeFailure;
@@ -180,24 +197,37 @@ export class SessionTreeRepository {
   }
 
   private assertWritable(): void {
+    if (this.closePromise) throw new Error("Session Tree repository is closed");
+    this.assertPersistenceHealthy();
+  }
+
+  private assertPersistenceHealthy(): void {
     if (this.writeFailure) throw new Error("Session Tree persistence failed", { cause: this.writeFailure });
   }
 
   async writeManifest(): Promise<void> {
+    this.assertWritable();
     const tree = this.projection.tree;
     if (!tree) throw new Error("Cannot write a manifest before creating the Session Tree");
-    await writeFile(path.join(this.treePath, "tree.json"), `${JSON.stringify(tree, null, 2)}\n`, "utf8");
+    const content = `${JSON.stringify(tree, null, 2)}\n`;
+    await this.enqueueWrite(() => writeFile(path.join(this.treePath, "tree.json"), content, "utf8"));
   }
 
   async flush(): Promise<void> {
-    await this.queue;
     this.assertWritable();
-    await this.eventsHandle?.sync();
+    await this.enqueueWrite(async () => { await this.eventsHandle?.sync(); });
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closePromise ??= this.closeResources();
+  }
+
+  private async closeResources(): Promise<void> {
     let failure: Error | undefined;
     try {
+      // Durable appends admitted before close may still be waiting for an
+      // earlier write before they can enqueue their own record.
+      await Promise.allSettled(this.pendingAppends);
       await this.queue;
       await this.eventsHandle?.sync();
     } catch (cause) {
@@ -205,9 +235,14 @@ export class SessionTreeRepository {
     } finally {
       await this.eventsHandle?.close().catch(() => undefined);
       this.eventsHandle = undefined;
-      await this.lockHandle?.close().catch(() => undefined);
-      this.lockHandle = undefined;
-      await rm(this.lockPath, { force: true }).catch(() => undefined);
+      if (this.lockHandle) {
+        await this.lockHandle.close().catch(() => undefined);
+        this.lockHandle = undefined;
+        const content = await readFile(this.lockPath, "utf8").catch(() => "");
+        if (content.split(/\r?\n/)[2] === this.lockId) {
+          await rm(this.lockPath, { force: true }).catch(() => undefined);
+        }
+      }
     }
     if (failure) throw failure;
   }

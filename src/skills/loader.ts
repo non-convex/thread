@@ -19,7 +19,7 @@ export interface Skill {
   baseDir: string;
   /** Skill body with frontmatter stripped. */
   content: string;
-  /** Excluded from the system prompt and the skill tool; only a slash command can load it. */
+  /** Excluded from the system prompt and skill tool; the host can still invoke it explicitly. */
   disableModelInvocation: boolean;
 }
 
@@ -32,6 +32,11 @@ export interface SkillDiagnostic {
 export interface LoadedSkills {
   skills: Skill[];
   diagnostics: SkillDiagnostic[];
+}
+
+export interface SkillPaths {
+  /** Directories to scan in order. Runtime paths are relative to its rootPath. */
+  paths: readonly string[];
 }
 
 /** User-level skill root. Project-level and third-party ecosystem roots are deliberately not scanned. */
@@ -231,34 +236,39 @@ async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<L
 }
 
 /**
- * Discovers user-level skills once. The result is folded into the system prompt,
- * which must stay byte-stable for a Session Tree's lifetime, so callers load at
- * startup and never rescan mid-session.
+ * Discovers skills once, keeping the first definition across the supplied roots.
+ * Runtime callers always supply their declared paths; the standalone loader's
+ * omitted argument retains its user-level default for existing callers.
  */
-export async function loadSkills(directory = skillsDirectory()): Promise<LoadedSkills> {
-  const found = await scanDirectory(directory, true);
+export async function loadSkills(paths: string | readonly string[] = skillsDirectory()): Promise<LoadedSkills> {
+  const directories = (typeof paths === "string" ? [paths] : [...paths]).map((directory) => path.resolve(directory));
   const byName = new Map<string, Skill>();
   const seenPaths = new Set<string>();
-  const diagnostics = [...found.diagnostics];
-  for (const skill of found.skills) {
-    let canonical = skill.filePath;
-    try {
-      canonical = await realpath(skill.filePath);
-    } catch {
-      /* keep the literal path when it cannot be resolved */
+  const diagnostics: SkillDiagnostic[] = [];
+  for (const directory of directories) {
+    const found = await scanDirectory(directory, true);
+    diagnostics.push(...found.diagnostics);
+    for (const skill of found.skills) {
+      let canonical = skill.filePath;
+      try {
+        canonical = await realpath(skill.filePath);
+      } catch {
+        /* keep the literal path when it cannot be resolved */
+      }
+      if (process.platform === "win32") canonical = canonical.toLowerCase();
+      if (seenPaths.has(canonical)) continue;
+      seenPaths.add(canonical);
+      const existing = byName.get(skill.name);
+      if (existing) {
+        diagnostics.push({
+          kind: "collision",
+          message: `skill name "${skill.name}" is already defined by ${existing.filePath}`,
+          path: skill.filePath,
+        });
+        continue;
+      }
+      byName.set(skill.name, skill);
     }
-    if (seenPaths.has(canonical)) continue;
-    const existing = byName.get(skill.name);
-    if (existing) {
-      diagnostics.push({
-        kind: "collision",
-        message: `skill name "${skill.name}" is already defined by ${existing.filePath}`,
-        path: skill.filePath,
-      });
-      continue;
-    }
-    byName.set(skill.name, skill);
-    seenPaths.add(canonical);
   }
   return {
     skills: [...byName.values()].sort((left, right) => left.name.localeCompare(right.name)),

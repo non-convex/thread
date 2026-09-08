@@ -7,10 +7,11 @@ import {
   type ToolResourceClaim,
 } from "../tools/execution.js";
 import type { AgentTool, ToolContext, ToolRegistry, ToolResult } from "../tools/types.js";
-import type { AskPresenter } from "../ui/ask.js";
-import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import type { AskPresenter } from "../runtime/interaction.js";
+import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { FileEditTracker } from "../file-history/service.js";
 import type { ExecutionJournal } from "./execution-journal.js";
+import type { ExecutionIdentity, HostToolPolicy } from "../runtime/policy.js";
 
 export interface PreparedToolCall {
   journal: ExecutionJournal;
@@ -36,11 +37,13 @@ function errorResult(error: unknown): ToolResult {
   return { content: error instanceof Error ? error.message : String(error), isError: true };
 }
 
-const UI_TOOL_ERROR_MAX_CHARACTERS = 8_000;
-
-function uiToolError(content: string): string {
-  if (content.length <= UI_TOOL_ERROR_MAX_CHARACTERS) return content;
-  return `${content.slice(0, UI_TOOL_ERROR_MAX_CHARACTERS)}\n[error output truncated for TUI]`;
+export interface ToolExecutorOptions {
+  askPresenter?: () => AskPresenter | undefined;
+  writableExternalPaths?: readonly string[];
+  fileHistory?: (executionId: string) => FileEditTracker;
+  toolPolicy?: HostToolPolicy;
+  agentId?: string;
+  writeScope?: readonly import("../tools/path-safety.js").FileWriteScope[];
 }
 
 /**
@@ -56,9 +59,7 @@ export class ToolCallExecutor {
     private readonly rootPath: string,
     private readonly tools: ToolRegistry,
     private readonly extensions: ExtensionEvents,
-    private readonly askPresenter?: () => AskPresenter | undefined,
-    private readonly writableExternalPaths: readonly string[] = [],
-    private readonly fileHistory?: (executionId: string) => FileEditTracker,
+    private readonly options: ToolExecutorOptions = {},
   ) {}
 
   async prepare(input: {
@@ -107,6 +108,28 @@ export class ToolCallExecutor {
       }
     }
 
+    // Host authorization is the final preflight gate. Extensions have already
+    // rewritten arguments, and neither policy nor later hooks can change them.
+    if (tool && !immediateResult && this.options.toolPolicy) {
+      try {
+        const decision = await this.options.toolPolicy({
+          ...this.identity(input.journal),
+          assistantEntryId: input.assistantEntryId,
+          toolCallId: input.call.id,
+          toolName: input.call.name,
+          args: structuredClone(args),
+          signal: input.signal,
+        });
+        if (!decision || decision.allow !== true) {
+          immediateResult = { content: decision?.reason ?? `Host denied tool ${input.call.name}`, isError: true };
+        }
+      } catch (error) {
+        if (input.signal.aborted) throw error;
+        immediateResult = errorResult(error);
+      }
+    }
+    input.signal.throwIfAborted();
+
     let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
     let resources: readonly ToolResourceClaim[] = [];
     if (!policy || immediateResult) {
@@ -116,7 +139,7 @@ export class ToolCallExecutor {
         resources = validateToolResourceClaims(
           await policy.resources(args, {
             rootPath: this.rootPath,
-            writableExternalPaths: this.writableExternalPaths,
+            writableExternalPaths: this.options.writableExternalPaths ?? [],
             signal: input.signal,
           }),
         );
@@ -152,9 +175,9 @@ export class ToolCallExecutor {
     };
   }
 
-  async execute(prepared: PreparedToolCall, signal: AbortSignal, ui?: UiEventSink): Promise<Message> {
+  async execute(prepared: PreparedToolCall, signal: AbortSignal, ui?: ExecutionEventSink): Promise<Message> {
     signal.throwIfAborted();
-    safeUiEvent(ui, {
+    safeExecutionEvent(ui, {
       type: "tool_started",
       id: prepared.call.id,
       name: prepared.call.name,
@@ -163,15 +186,17 @@ export class ToolCallExecutor {
 
     let result = prepared.immediateResult;
     if (!result && prepared.tool) {
-      const ask = this.askPresenter?.();
+      const ask = this.options.askPresenter?.();
       const context: ToolContext = {
-        ...(this.fileHistory ? { fileHistory: this.fileHistory(prepared.journal.executionId) } : {}),
+        ...(this.options.fileHistory ? { fileHistory: this.options.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
-        ...(this.writableExternalPaths.length > 0
-          ? { writableExternalPaths: this.writableExternalPaths }
+        ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
+        ...(this.options.writableExternalPaths?.length
+          ? { writableExternalPaths: this.options.writableExternalPaths }
           : {}),
         signal,
         invocation: {
+          ...this.identity(prepared.journal),
           executionId: prepared.journal.executionId,
           assistantEntryId: prepared.assistantEntryId,
           toolCallId: prepared.call.id,
@@ -200,12 +225,12 @@ export class ToolCallExecutor {
         modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
       }
     }
-    safeUiEvent(ui, {
+    safeExecutionEvent(ui, {
       type: "tool_finished",
       id: prepared.call.id,
       name: prepared.call.name,
       isError: settled.isError,
-      ...(settled.isError ? { error: uiToolError(settled.content) } : {}),
+      ...(settled.isError ? { error: settled.content } : {}),
       content: modelContent,
     });
 
@@ -217,6 +242,16 @@ export class ToolCallExecutor {
       details: { raw: settled },
       isError: settled.isError,
       timestamp: Date.now(),
+    };
+  }
+
+  private identity(journal: ExecutionJournal): ExecutionIdentity {
+    return {
+      executionId: journal.executionId,
+      sessionId: journal.identity?.sessionId ?? null,
+      turnId: journal.identity?.turnId ?? null,
+      ...(journal.identity?.taskId ? { taskId: journal.identity.taskId } : {}),
+      agentId: this.options.agentId ?? journal.identity?.agentId ?? "main",
     };
   }
 }

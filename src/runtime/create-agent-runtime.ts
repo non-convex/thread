@@ -9,10 +9,11 @@ import { ContextCompactionService } from "../context/compaction/index.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
-import type { AskPresenter } from "../ui/ask.js";
+import type { AskPresenter } from "./interaction.js";
 import type { FileHistoryService } from "../file-history/service.js";
+import type { HostToolPolicy } from "./policy.js";
 
-export interface CreateRuntimeInput {
+export interface CreateAgentRuntimeInput {
   model: ModelClient;
   reasoning?: ThinkingLevel;
   rootPath: string;
@@ -25,9 +26,11 @@ export interface CreateRuntimeInput {
   agentTasks: AgentTaskOrchestrator;
   askPresenter: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
+  toolPolicy?: HostToolPolicy;
+  profileId?: string;
 }
 
-export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
+export function createAgentRuntime(input: CreateAgentRuntimeInput): AgentRuntime {
   const maxOutputTokens = Math.min(
     input.model.maxOutputTokens,
     16_384,
@@ -42,9 +45,13 @@ export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
     input.rootPath,
     input.tools,
     input.extensions,
-    input.askPresenter,
-    input.writableExternalPaths,
-    (turnId) => input.fileHistory.forTurn(turnId),
+    {
+      askPresenter: input.askPresenter,
+      writableExternalPaths: input.writableExternalPaths ?? [],
+      fileHistory: (turnId) => input.fileHistory.forTurn(turnId),
+      ...(input.toolPolicy ? { toolPolicy: input.toolPolicy } : {}),
+      ...(input.profileId ? { agentId: input.profileId } : {}),
+    },
   );
   const runner = new TurnRunner(
     input.model,
@@ -58,5 +65,5 @@ export function createRuntime(input: CreateRuntimeInput): AgentRuntime {
     maxOutputTokens,
     input.reasoning,
   );
-  return new AgentRuntime(input.tree, runner, input.extensions, input.agentTasks);
+  return new AgentRuntime(input.tree, runner, input.extensions, input.agentTasks, input.fileHistory.captureEnabled);
 }

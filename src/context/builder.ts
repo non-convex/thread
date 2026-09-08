@@ -89,8 +89,8 @@ function appendEntryMessages(turns: RetainedTurn[], entries: readonly SessionEnt
 export class ContextBuilder {
   constructor(private readonly tree: SessionTreeService) {}
 
-  build(tipTurnId?: string): BuiltContext {
-    const turns = tipTurnId ? this.tree.pathToTurn(tipTurnId) : this.tree.livePath();
+  build(tipTurnId?: string, sessionId?: string): BuiltContext {
+    const turns = tipTurnId ? this.tree.pathToTurn(tipTurnId) : this.tree.livePath(sessionId);
     const entries = turns.flatMap((turn) => this.tree.entriesForTurn(turn.id));
     let compactionIndex = -1;
     for (let index = entries.length - 1; index >= 0; index--) {

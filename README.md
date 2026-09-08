@@ -12,7 +12,7 @@
 
 </div>
 
-Thread is a coding-agent runtime built around project memory. How a requirement emerged, why an approach was chosen, what execution revealed, and how the user corrected the direction—all of these interactions persist in one Session Tree. Together, they form the project's memory, ready to be searched, recalled, and continued as work progresses.
+Thread is an agent runtime with a coding TUI, built around project memory. How a requirement emerged, why an approach was chosen, what execution revealed, and how the user corrected the direction—all of these interactions persist in one Session Tree. Together, they form the project's memory, ready to be searched, recalled, and continued as work progresses.
 
 Thread follows two design principles: **add features with restraint; manage context with care.**
 
@@ -189,7 +189,7 @@ Stable information that applies across projects lives in one Markdown file, `${T
 | `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | Review interactions and execution traces in the background for well-supported implicit user patterns and lessons useful across projects, maintaining global memory. |
 
-Workers edit the current workspace directly, with `writeScope` serving as a coordination boundary. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the subagent architecture](./docs/subagent-architecture.md).
+Workers edit the current workspace directly. `writeScope` coordinates task ownership and is enforced by the built-in `write` and `edit` tools; it does not sandbox bash or arbitrary custom tools. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the subagent architecture](./docs/subagent-architecture.md).
 
 Dreamer starts after ten ended turns and ten continuous minutes of Main being idle. It stays silent and runs for at most five minutes; most reviews should leave memory unchanged. See [global memory and Dreamer architecture](./docs/global-memory-architecture.md).
 
@@ -250,6 +250,30 @@ The built-in tools track explicitly edited project files even when `.gitignore` 
 
 Project and Session Tree data use format version 2. Older project data is rejected with its location in the error; Thread neither migrates nor automatically deletes it. Start with fresh project state to use the new format.
 
+## Embed in an application
+
+Use the same `ThreadRuntime` from another Bun application or a GUI/Web backend:
+
+```ts
+import { ThreadRuntime } from "thread/runtime";
+
+const runtime = await ThreadRuntime.open({
+  rootPath,
+  stateDirectory,
+  model,
+  tools: ["read", "bash", "websearch", "webfetch", myCustomTool],
+  skills: { paths: ["./skills", "/path/to/shared-skills"] },
+  systemPrompt: "You are this application's assistant.",
+  fileCheckpoints: false,
+});
+```
+
+Select built-in tools by name and supply custom `AgentTool` objects in the same array. Skill paths resolve relative to `rootPath`; enabled Skills add their own `skill` tool and catalog to the host's prompt. By default, no basic tools, Skill directories, file checkpoints, Recall, or global memory are enabled. Session history still persists, and `rewind()` can rewind context without changing files. The CLI and `ThreadApp.open()` share the coding application defaults; `app.runtime` exposes its execution and queries.
+
+Terminal rendering has a separate `thread/tui` entrypoint. MCP is planned as a core tool integration; it is not implemented yet. See the [runtime guide](./docs/runtime.md) and [offline embedding example](./examples/runtime.ts). `bun run test:runtime` verifies the built public API from an independent host.
+
+The coding app reads the project-root `AGENTS.md` at startup and shares its instructions with the main agent and implementation workers. Set `projectInstructions: false` on `ThreadApp.open()` to disable this. The bare runtime discovers no project instructions; hosts can supply `sharedInstructions` explicitly. For work on this repository, [AGENTS.md](./AGENTS.md) maps the code, documentation and verification commands.
+
 ## Development
 
 ```bash
@@ -268,12 +292,11 @@ src/context/          live-path projection and compaction
 src/agent/            model steps, tool scheduling, journals, and turns
 src/agent-task/       shared-workspace worker lifecycle and task journal
 src/dreamer/          background global-memory curation and scheduling
-src/app/              runtime composition and input routing
+src/runtime/          public runtime, host configuration, events, and lifecycle
+src/app/              execution composition and terminal command routing
 src/tools/            built-in agent tools and execution policies
 src/ui/               plain and full-screen terminal interfaces
 ```
-
-Thread also exports its runtime, stores, model catalog, tools, commands, skills loader, extension API, and UI types for embedding. See [`src/index.ts`](./src/index.ts).
 
 Further reading:
 

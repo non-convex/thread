@@ -4,7 +4,9 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ThreadApp } from "../src/app.js";
+import { ProjectService } from "../src/project/service.js";
+import { SessionTreeRepository } from "../src/session-tree/repository.js";
+import { SessionTreeService } from "../src/session-tree/service.js";
 import { MODEL_FILES, MODEL_REPO, MODEL_REVISION, prepareModel } from "../src/session-recall/model-assets.js";
 
 const input = process.argv[2];
@@ -25,13 +27,16 @@ let manifestPath: string;
 let turnId: string;
 try {
   process.env.THREAD_HOME = home;
-  const seed = await ThreadApp.open({ rootPath: root, search: { semantic: false }, skills: { skills: [], diagnostics: [] } });
+  const project = await ProjectService.open(root);
+  const repository = await SessionTreeRepository.open(project);
+  const tree = new SessionTreeService(repository);
+  await tree.initialize();
   try {
-    const turn = await seed.sessionTree.startTurn("会话历史采用追加日志，旧记录会保留下来。文件 src/history/records.ts，错误码 E_HISTORY_271。");
-    await seed.sessionTree.finishTurn(turn.id, "completed");
+    const turn = await tree.startTurn("会话历史采用追加日志，旧记录会保留下来。文件 src/history/records.ts，错误码 E_HISTORY_271。");
+    await tree.finishTurn(turn.id, "completed");
     turnId = turn.id;
-    manifestPath = path.join(seed.project.statePath, "session-search/manifest.json");
-  } finally { await seed.close(); }
+    manifestPath = path.join(project.statePath, "session-search/manifest.json");
+  } finally { await repository.close(); }
 } finally {
   if (previousHome === undefined) delete process.env.THREAD_HOME;
   else process.env.THREAD_HOME = previousHome;

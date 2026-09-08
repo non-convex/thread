@@ -17,12 +17,6 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
-/**
- * Bumped when a recorded percent changes meaning. v2 counts the system prompt and
- * tool schemas, so its numbers are not comparable with a v1 record.
- */
-export const CONTEXT_ESTIMATOR_VERSION = "pi-ai-estimate-v2";
-
 const CHARS_PER_TOKEN = 4;
 const ESTIMATED_IMAGE_CHARS = 4800;
 
@@ -196,16 +190,6 @@ function isPrefixRewrite(message: Message): boolean {
     ? content
     : content.map((block) => (block.type === "text" ? block.text : "")).join("");
   return text.startsWith(COMPACTION_SUMMARY_PREFIX);
-}
-
-/**
- * Sum cache totals across a context. Numerator and denominator accumulate
- * separately: averaging each response's percentage would weight a tiny early
- * request the same as a full-window one. The first request of a context, and the
- * first after compaction rewrites the prefix, legitimately report no hits.
- */
-export function accumulateCacheHits(messages: readonly Message[]): CacheHitTotals {
-  return scanCacheUsage(messages).hitTotals;
 }
 
 /**

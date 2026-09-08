@@ -7,26 +7,29 @@ import {
 } from "../context/compaction/index.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { Turn } from "../session-tree/model.js";
-import type { PlannedTurn, SessionTreeService } from "../session-tree/service.js";
+import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
-import { safeUiEvent, type UiEventSink } from "../ui/events.js";
+import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
+import type { RuntimeEventSink } from "../runtime/events.js";
+import { RuntimeLimitError, type ExecutionLimits } from "../runtime/limits.js";
 import type { ModelClient } from "./model-client.js";
 import { SessionTurnJournal } from "./execution-journal.js";
 import { AgentStepRunner } from "./step-runner.js";
 import type { ToolCallExecutor } from "./tool-call-executor.js";
 
-export interface RunTurnOptions {
+export interface RunTurnOptions extends ExecutionLimits {
   signal: AbortSignal;
+  sessionId?: string;
+  onEvent?: RuntimeEventSink;
   onTextDelta?: (delta: string) => void;
-  onUiEvent?: UiEventSink;
+  onUiEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];
 }
 
 interface CompactionInvocation {
   reason: "manual" | "threshold" | "overflow";
   turnId: string;
-  appendAfter?: Promise<unknown>;
   budget?: ContextBudget;
 }
 
@@ -42,45 +45,36 @@ export class TurnRunner {
     toolRunner: ToolCallExecutor,
     private readonly extensions: ExtensionEvents,
     private readonly systemPrompt: string,
-    private readonly maxOutputTokens: number,
+    maxOutputTokens: number,
     reasoning?: ThinkingLevel,
   ) {
     this.stepRunner = new AgentStepRunner(model, toolRunner, maxOutputTokens, reasoning);
   }
 
-  prepareCurrent(): BuiltContext {
-    return this.builder.build();
-  }
-
-  async execute(
-    planned: PlannedTurn,
-    turnReady: Promise<Turn>,
-    options: RunTurnOptions,
-    prepared: BuiltContext,
-  ): Promise<AssistantMessage[]> {
+  async execute(turn: Turn, options: RunTurnOptions): Promise<AssistantMessage[]> {
     const assistantMessages: AssistantMessage[] = [];
     let overflowRecoveryUsed = false;
     for (let step = 1; ; step++) {
       options.signal.throwIfAborted();
-      let assembled = step === 1
-        ? await this.assemblePlanned(prepared, planned)
-        : await this.assemble(planned.id);
+      if (options.maxSteps !== undefined && step > options.maxSteps) {
+        throw new RuntimeLimitError("maxSteps", options.maxSteps);
+      }
+      let assembled = await this.assemble(turn.id);
       const budget = this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
       const threshold = Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
       if (budget.requestTokens > threshold &&
-          this.compaction.needsCompaction(assembled.built, budget.overheadTokens, planned.id)) {
+          this.compaction.needsCompaction(assembled.built, budget.overheadTokens, turn.id)) {
         const compacted = await this.compactBuilt(assembled, options, {
           reason: "threshold",
-          turnId: planned.id,
-          appendAfter: turnReady,
+          turnId: turn.id,
           budget,
         });
         if (compacted.compacted) {
-          assembled = await this.assemble(planned.id);
+          assembled = await this.assemble(turn.id);
           this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
         }
       }
-      const journal = new SessionTurnJournal(this.tree, planned.id, turnReady);
+      const journal = new SessionTurnJournal(this.tree, turn.id, turn.sessionId);
       const continuedContextMessages = [...assembled.context.messages];
       const continuedSessionMessages = [...assembled.built.messages];
       const result = await this.stepRunner.run(assembled.context, journal, {
@@ -106,7 +100,7 @@ export class TurnRunner {
       if (this.stepRunner.isContextOverflow(response)) {
         if (overflowRecoveryUsed) throw new Error("Context overflow remained after compaction; use /rewind or /new");
         overflowRecoveryUsed = true;
-        let overflowContext = await this.assemble(planned.id);
+        let overflowContext = await this.assemble(turn.id);
         const overflowBudget = this.reportContextUsage(
           overflowContext.context,
           overflowContext.built.messages,
@@ -115,20 +109,19 @@ export class TurnRunner {
         if (!this.compaction.needsCompaction(
           overflowContext.built,
           overflowBudget.overheadTokens,
-          planned.id,
+          turn.id,
         )) {
           throw new Error("Context overflow cannot be reduced by compaction; use /rewind or /new");
         }
         const recovered = await this.compactBuilt(overflowContext, options, {
           reason: "overflow",
-          turnId: planned.id,
-          appendAfter: turnReady,
+          turnId: turn.id,
           budget: overflowBudget,
         });
         if (!recovered.compacted) {
           throw new Error("Context overflow cannot be reduced by compaction; use /rewind or /new");
         }
-        overflowContext = await this.assemble(planned.id);
+        overflowContext = await this.assemble(turn.id);
         const recoveredBudget = this.reportContextUsage(
           overflowContext.context,
           overflowContext.built.messages,
@@ -162,48 +155,18 @@ export class TurnRunner {
 
   async compactActive(options: RunTurnOptions): Promise<CompactionResult> {
     this.tree.requireIdle();
-    const turnId = this.tree.activeLiveTip;
+    const turnId = options.sessionId
+      ? this.tree.projection.liveTips.get(options.sessionId)
+      : this.tree.activeLiveTip;
     if (!turnId) return { compacted: false };
-    const built = this.builder.build();
+    const built = this.builder.build(undefined, options.sessionId);
     const context = await this.extendContext(built, `compact_${Date.now()}`);
     return this.compactBuilt({ built, context }, options, { reason: "manual", turnId });
-  }
-
-  baseContextFor(messages: Message[]): Context {
-    return {
-      systemPrompt: this.systemPrompt,
-      messages: this.messagesForModel(messages),
-      tools: this.tools.modelDefinitions(),
-    };
-  }
-
-  estimateRequestBudget(messages: Message[]) {
-    return contextBudget(this.baseContextFor(messages), messages, this.maxOutputTokens);
   }
 
   private async assemble(turnId: string): Promise<{ built: BuiltContext; context: Context }> {
     const built = this.builder.build(turnId);
     return { built, context: await this.extendContext(built, turnId) };
-  }
-
-  private async assemblePlanned(
-    prepared: BuiltContext,
-    planned: PlannedTurn,
-  ): Promise<{ built: BuiltContext; context: Context }> {
-    const userMessage: Message = {
-      role: "user",
-      content: planned.content ?? planned.input,
-      timestamp: planned.startedAt,
-    };
-    const built: BuiltContext = {
-      messages: [...prepared.messages, userMessage],
-      compactableTurns: [
-        ...prepared.compactableTurns,
-        { turnId: planned.id, messages: [userMessage] },
-      ],
-      ...(prepared.latestCompaction ? { latestCompaction: prepared.latestCompaction } : {}),
-    };
-    return { built, context: await this.extendContext(built, planned.id) };
   }
 
   private async extendContext(built: BuiltContext, turnId: string): Promise<Context> {
@@ -228,13 +191,12 @@ export class TurnRunner {
     const budget = invocation.budget ?? contextBudget(
       assembled.context,
       assembled.built.messages,
-      this.maxOutputTokens,
     );
     if (invocation.reason !== "manual" &&
         !this.compaction.needsCompaction(assembled.built, budget.overheadTokens, invocation.turnId)) {
       return { compacted: false };
     }
-    safeUiEvent(options.onUiEvent, { type: "compaction_started", reason: invocation.reason });
+    safeExecutionEvent(options.onUiEvent, { type: "compaction_started", reason: invocation.reason });
     try {
       const result = await this.compaction.compact({
         built: assembled.built,
@@ -244,9 +206,8 @@ export class TurnRunner {
         signal: options.signal,
         systemTokens: budget.overheadTokens,
         tokensBefore: budget.requestTokens,
-        ...(invocation.appendAfter ? { appendAfter: invocation.appendAfter } : {}),
       });
-      safeUiEvent(options.onUiEvent, {
+      safeExecutionEvent(options.onUiEvent, {
         type: "compaction_finished",
         reason: invocation.reason,
         ok: true,
@@ -261,7 +222,7 @@ export class TurnRunner {
       });
       return result;
     } catch (error) {
-      safeUiEvent(options.onUiEvent, { type: "compaction_finished", reason: invocation.reason, ok: false });
+      safeExecutionEvent(options.onUiEvent, { type: "compaction_finished", reason: invocation.reason, ok: false });
       throw error;
     }
   }
@@ -269,12 +230,14 @@ export class TurnRunner {
   private reportContextUsage(
     context: Context,
     sessionMessages: readonly Message[],
-    sink: UiEventSink | undefined,
+    sink: ExecutionEventSink | undefined,
   ): ContextBudget {
-    const budget = contextBudget(context, sessionMessages, this.maxOutputTokens);
-    safeUiEvent(sink, {
+    const budget = contextBudget(context, sessionMessages);
+    safeExecutionEvent(sink, {
       type: "context_updated",
       percent: Math.min(999, Math.round((budget.requestTokens / this.model.contextWindow) * 100)),
+      estimatedTokens: budget.requestTokens,
+      contextWindow: this.model.contextWindow,
     });
     return budget;
   }

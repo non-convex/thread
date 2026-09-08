@@ -8,7 +8,11 @@ import { pathClassifier, readPath, readTurn } from "./reader.js";
 import { ZvecRecallIndex } from "./zvec-index.js";
 import type { EmbeddedFragment, ReadOptions, RecallDocument, RecallFragment, RecallSearchHit, RecallSearchResult, RetrievalSource } from "./types.js";
 
-export interface SessionRecallOptions { semantic?: boolean; embedding?: EmbeddingEngine }
+export interface SessionRecallOptions {
+  semantic?: boolean;
+  /** Shared engine supplied by the host; the host remains responsible for closing it. */
+  embedding?: EmbeddingEngine;
+}
 interface TurnDocuments { documents: RecallDocument[]; hash: string; semanticHash: string }
 interface Candidate { hit: RecallSearchHit; score: number; literal: boolean; snippetScore: number }
 
@@ -16,6 +20,7 @@ export class SessionRecallService {
   private readonly lifetime = new AbortController();
   private readonly documents = new Map<string, TurnDocuments>();
   private readonly embedding: EmbeddingEngine;
+  private readonly ownsEmbedding: boolean;
   private readonly semanticEnabled: boolean;
   private index: ZvecRecallIndex | undefined;
   private indexFailure: string | undefined;
@@ -30,6 +35,7 @@ export class SessionRecallService {
 
   constructor(private readonly tree: SessionTreeService, options: SessionRecallOptions = {}) {
     this.semanticEnabled = options.semantic ?? true;
+    this.ownsEmbedding = options.embedding === undefined;
     this.embedding = options.embedding ?? new LocalEmbedding();
   }
 
@@ -214,7 +220,7 @@ export class SessionRecallService {
       await this.preparation;
       await this.background;
       await this.queue;
-      await this.embedding.close().catch(() => undefined);
+      if (this.ownsEmbedding) await this.embedding.close().catch(() => undefined);
       try { this.index?.close(); } catch { /* The index can be reconstructed from the durable tree. */ }
     })();
   }

@@ -1,66 +1,69 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import type { ThreadApp } from "../../app.js";
+import type { ThreadApp } from "../../app/thread-app.js";
 
 export interface PlainRunnerOptions {
   configDescription?: string;
 }
 
 export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): Promise<void> {
-  const tree = app.sessionTree.tree;
+  const session = app.runtime.readSession(app.selectedSessionId);
   output.write(
-    `Session Tree ${tree.id}\nSession ${app.sessionTree.activeSession.id} @ ${app.sessionTree.activeLiveTip ?? "Root"}\n${
-      app.model
-        ? `model ${app.model.providerId}/${app.model.modelId}`
+    `Session Tree ${app.runtime.treeId}\nSession ${session.session.id} @ ${session.liveTipTurnId ?? "Root"}\n${
+      app.runtime.model
+        ? `model ${app.runtime.model.providerId}/${app.runtime.model.modelId}`
         : "no model configured; use /model to select one"
     }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
-  output.write(`implementation-worker ${app.subagentEnabled ? `on · ${app.subagentModel?.provider}/${app.subagentModel?.id}` : "off · use /agent to configure"}\n`);
-  output.write(`dreamer ${app.dreamerEnabled ? `on · ${app.dreamerModel?.provider}/${app.dreamerModel?.id}` : "off · use /agent to configure"}\n`);
-  for (const diagnostic of app.agentProfileDiagnostics) {
+  output.write(`implementation-worker ${app.runtime.subagentEnabled ? `on · ${app.runtime.subagentModel?.provider}/${app.runtime.subagentModel?.id}` : "off · use /agent to configure"}\n`);
+  output.write(`dreamer ${app.runtime.dreamerEnabled ? `on · ${app.runtime.dreamerModel?.provider}/${app.runtime.dreamerModel?.id}` : "off · use /agent to configure"}\n`);
+  for (const diagnostic of app.runtime.agentProfileDiagnostics) {
     output.write(`[agent ${diagnostic.level}] ${diagnostic.profileId}: ${diagnostic.message}\n`);
   }
   const readline = createInterface({ input, output, terminal: Boolean(input.isTTY && output.isTTY) });
   let active: AbortController | undefined;
   const onSigint = () => active?.abort(new Error("Interrupted by user"));
   process.on("SIGINT", onSigint);
+  let streamed = false;
+  const taskStatuses = new Map<string, string>();
+  const detachRuntime = app.runtime.subscribe((event) => {
+    if (event.sessionId !== app.selectedSessionId) return;
+    if (event.type === "assistant_text_delta") {
+      streamed = true;
+      output.write(event.delta);
+      return;
+    }
+    if (event.type === "agent_task_created") {
+      taskStatuses.set(event.summary.taskId, event.summary.status);
+      output.write(`\n[worker started] ${event.summary.taskId} ${event.summary.title} · ${event.summary.providerId}/${event.summary.modelId}\n`);
+      return;
+    }
+    if (event.type !== "agent_task_updated") return;
+    const previous = taskStatuses.get(event.summary.taskId);
+    if (previous === event.summary.status) return;
+    taskStatuses.set(event.summary.taskId, event.summary.status);
+    const label = event.summary.status === "completed" ? "worker completed"
+      : event.summary.status === "running" && event.summary.revision > 0 ? "worker revision"
+      : event.summary.status === "failed" ? "worker failed"
+      : event.summary.status === "cancelled" ? "worker cancelled"
+      : undefined;
+    if (label) output.write(`\n[${label}] ${event.summary.taskId} ${event.summary.title}\n`);
+  });
   try {
-    const taskStatuses = new Map<string, string>();
     while (true) {
       let line: string;
       try {
-        line = await readline.question(`\n${app.sessionTree.activeSession.id.slice(0, 12)}> `);
+        line = await readline.question(`\n${app.selectedSessionId.slice(0, 12)}> `);
       } catch {
         break;
       }
       if (line.trim() === "/exit") break;
       if (!line.trim()) continue;
       active = new AbortController();
-      let streamed = false;
+      streamed = false;
       try {
         const result = await app.handleInput(line, {
           signal: active.signal,
-          onTextDelta: (delta) => {
-            streamed = true;
-            output.write(delta);
-          },
-          onUiEvent: (event) => {
-            if (event.type === "agent_task_created") {
-              taskStatuses.set(event.summary.taskId, event.summary.status);
-              output.write(`\n[worker started] ${event.summary.taskId} ${event.summary.title} · ${event.summary.providerId}/${event.summary.modelId}\n`);
-              return;
-            }
-            if (event.type !== "agent_task_updated") return;
-            const previous = taskStatuses.get(event.summary.taskId);
-            if (previous === event.summary.status) return;
-            taskStatuses.set(event.summary.taskId, event.summary.status);
-            const label = event.summary.status === "completed" ? "worker completed"
-              : event.summary.status === "running" && event.summary.revision > 0 ? "worker revision"
-              : event.summary.status === "failed" ? "worker failed"
-              : event.summary.status === "cancelled" ? "worker cancelled"
-              : undefined;
-            if (label) output.write(`\n[${label}] ${event.summary.taskId} ${event.summary.title}\n`);
-          },
         });
         if (streamed) output.write("\n");
         if (result.kind === "command" && result.result.presentation === "clear") {
@@ -79,6 +82,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
       }
     }
   } finally {
+    detachRuntime();
     process.off("SIGINT", onSigint);
     readline.close();
   }

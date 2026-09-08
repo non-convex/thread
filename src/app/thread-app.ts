@@ -1,503 +1,111 @@
-import type { CacheRetention, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { AgentRuntime } from "../agent/runtime.js";
-import {
-  DEFAULT_COMMIT_ATTRIBUTION,
-  DEFAULT_SYSTEM_PROMPT,
-  FILE_EDITING_PROMPT,
-  formatCommitAttributionPrompt,
-} from "../agent/system-prompt.js";
-import type { ModelCatalog, ModelClient, ModelDescriptor } from "../agent/model-client.js";
-import {
-  AgentProfileRegistry,
-  MAIN_AGENT_PROFILE_ID,
-  type AgentProfile,
-  type AgentProfileDiagnostic,
-} from "../agent/profile.js";
-import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
-import {
-  createImplementationWorkerProfile,
-  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
-  IMPLEMENTATION_WORKER_PROFILE_ID,
-  type ImplementationWorkerProfileSettings,
-} from "../agent-task/profile.js";
-import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
-import { AgentTaskRepository } from "../agent-task/repository.js";
-import { createAgentTaskTools } from "../agent-task/tools.js";
+import path from "node:path";
+import type { ModelDescriptor, ModelCatalog } from "../agent/model-client.js";
+import { MAIN_AGENT_PROFILE_ID } from "../agent/profile.js";
+import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
+import { DREAMER_PROFILE_ID } from "../dreamer/profile.js";
 import { buildRewindItems, registerBuiltinCommands } from "../commands/builtins.js";
 import { ThreadCommandRouter } from "../commands/registry.js";
-import {
-  CommandRegistry,
-  ephemeral,
-  viewResult,
-  type CommandResult,
-} from "../commands/types.js";
-import { getThreadHome, type ModelSelectionConfig } from "../config/thread-config.js";
-import type { ThreadState } from "../config/thread-state.js";
-import { ContextBuilder } from "../context/builder.js";
-import { createDreamerProfile, DEFAULT_DREAMER_THINKING_LEVEL, DREAMER_PROFILE_ID } from "../dreamer/profile.js";
-import { DreamerScheduler } from "../dreamer/scheduler.js";
+import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "../commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
-import { ExtensionEvents } from "../extensions/events.js";
-import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
-import type { Project } from "../project/model.js";
-import { ProjectService } from "../project/service.js";
-import { SessionRecallService, type SessionRecallOptions } from "../session-recall/service.js";
-import { SessionTreeRepository } from "../session-tree/repository.js";
-import { SessionTreeService } from "../session-tree/service.js";
-import {
-  formatSkillsSection,
-  loadSkills,
-  skillsDirectory,
-  type LoadedSkills,
-  type Skill,
-  type SkillDiagnostic,
-} from "../skills/loader.js";
-import { createAskTool } from "../tools/ask.js";
-import { registerBuiltinTools } from "../tools/builtins.js";
-import { createSessionReadTool, createSessionSearchTool } from "../tools/session-recall.js";
-import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
-import { ToolRegistry } from "../tools/types.js";
-import type { AskPresenter } from "../ui/ask.js";
-import { safeUiEvent, type UiEventSink } from "../ui/events.js";
-import { FileHistoryService } from "../file-history/service.js";
-import { createRuntime } from "./create-runtime.js";
-import { MainAgentController } from "./main-agent-controller.js";
+import { safeUiEvent } from "../ui/events.js";
+import { ThreadRuntime, type ThreadRuntimeOptions } from "../runtime/thread-runtime.js";
+import { snapshotRuntimeOptions } from "../runtime/options.js";
 import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
+import { loadProjectInstructions } from "./project-instructions.js";
+
+import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, fileEditingPrompt, formatCommitAttributionPrompt } from "../agent/system-prompt.js";
+import { getThreadHome } from "../config/thread-config.js";
+import { GLOBAL_MEMORY_FILE } from "../global-memory.js";
+import { skillsDirectory } from "../skills/loader.js";
+import { createAskTool } from "../tools/ask.js";
 
 export type { InputResult } from "./input-router.js";
-
-export interface ThreadAppOptions {
-  rootPath: string;
-  search?: SessionRecallOptions;
-  model?: ModelClient;
-  modelCatalog?: ModelCatalog;
-  thinkingLevel?: ModelThinkingLevel;
-  systemPrompt?: string;
+/** Product options for the coding application. Other hosts open ThreadRuntime directly. */
+export interface ThreadAppOptions extends Omit<ThreadRuntimeOptions, "search" | "globalMemoryPath"> {
+  search?: ThreadRuntimeOptions["search"] | false;
+  globalMemoryPath?: string | false;
   commitAttribution?: string;
-  cacheRetention?: CacheRetention;
-  skills?: LoadedSkills;
-  implementationWorker?: {
-    enabled: boolean;
-    model?: ModelClient;
-    defaultModel?: ModelSelectionConfig;
-    settings?: ImplementationWorkerProfileSettings;
-  };
-  dreamer?: {
-    enabled: boolean;
-    model?: ModelClient;
-    defaultModel?: ModelSelectionConfig;
-    thinkingLevel?: ModelThinkingLevel;
-  };
-  agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
-  state?: ThreadState;
-  onStateChange?: (state: ThreadState) => void;
+  /** Read rootPath/AGENTS.md once at startup. Default: true. */
+  projectInstructions?: boolean;
 }
 
-const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
-
+/** CLI command/presentation adapter over the same runtime used by embedding hosts. */
 export class ThreadApp {
-  readonly project: Project;
-  readonly rootPath: string;
-  readonly sessionTree: SessionTreeService;
-  readonly fileHistory: FileHistoryService;
-  readonly recall: SessionRecallService;
-  readonly agentProfiles: AgentProfileRegistry;
-  readonly agentTasks: AgentTaskOrchestrator;
-  readonly tools = new ToolRegistry();
   readonly commands = new CommandRegistry();
   readonly extensionApi: ExtensionAPI;
-  private readonly repository: SessionTreeRepository;
-  private readonly contextBuilder: ContextBuilder;
-  private readonly events = new ExtensionEvents();
+  selectedSessionId: string;
   private readonly commandRouter: ThreadCommandRouter;
   private readonly inputRouter: InputRouter;
-  private readonly loadedSkills: LoadedSkills;
   private readonly modelCatalog: ModelCatalog | undefined;
-  private readonly configuredSystemPrompt: string | undefined;
-  private readonly commitAttribution: string;
-  private readonly cacheRetention: CacheRetention | undefined;
-  private readonly mainAgent: MainAgentController;
-  private readonly workerSettings: ImplementationWorkerProfileSettings;
-  private readonly workerDefaultModel: ModelSelectionConfig | undefined;
-  private readonly dreamerDefaultModel: ModelSelectionConfig | undefined;
-  private readonly dreamerThinkingLevel: ModelThinkingLevel;
-  private readonly globalMemory: GlobalMemorySnapshots;
-  private readonly dreamer: DreamerScheduler;
-  private readonly onStateChange: ((state: ThreadState) => void) | undefined;
-  private threadState: ThreadState;
-  private agentToolDisposers: (() => void)[] = [];
-  private runtime: AgentRuntime | undefined;
-  private askPresenter: AskPresenter | undefined;
-  private inputActive = false;
+  private readonly skillPaths: readonly string[];
+  private inputOperation: { controller: AbortController; done: Promise<InputResult> } | undefined;
+  private appClosing: Promise<void> | undefined;
 
-  private constructor(options: ThreadAppOptions, values: {
-    project: Project;
-    repository: SessionTreeRepository;
-    tree: SessionTreeService;
-    fileHistory: FileHistoryService;
-    builder: ContextBuilder;
-    recall: SessionRecallService;
-    skills: LoadedSkills;
-    agentTaskRepository: AgentTaskRepository;
-    globalMemory: GlobalMemorySnapshots;
-  }) {
-    this.project = values.project;
-    this.rootPath = values.project.rootPath;
-    this.repository = values.repository;
-    this.sessionTree = values.tree;
-    this.fileHistory = values.fileHistory;
-    this.contextBuilder = values.builder;
-    this.recall = values.recall;
-    this.events.on("turn_end", () => this.recall.turnFinished());
-    this.loadedSkills = values.skills;
-    this.modelCatalog = options.modelCatalog;
-    this.configuredSystemPrompt = options.systemPrompt;
-    this.commitAttribution = options.commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION;
-    this.cacheRetention = options.cacheRetention;
-    this.threadState = structuredClone(options.state ?? {});
-    this.onStateChange = options.onStateChange;
-    this.workerSettings = options.implementationWorker?.settings ?? DEFAULT_IMPLEMENTATION_WORKER_SETTINGS;
-    this.workerDefaultModel = options.implementationWorker?.defaultModel;
-    this.dreamerDefaultModel = options.dreamer?.defaultModel;
-    this.dreamerThinkingLevel = options.dreamer?.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL;
-    this.globalMemory = values.globalMemory;
-    this.mainAgent = new MainAgentController(
-      this.sessionTree.tree.id,
-      this.cacheRetention,
-      options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-      (state) => this.rememberMainState(state),
-    );
-
-    const workerProfile = options.implementationWorker?.enabled && options.implementationWorker.model
-      ? this.bindAgentProfile(createImplementationWorkerProfile(options.implementationWorker.model, this.workerSettings))
-      : undefined;
-    const dreamerProfile = options.dreamer?.enabled && options.dreamer.model
-      ? this.bindAgentProfile(createDreamerProfile(options.dreamer.model, this.dreamerThinkingLevel))
-      : undefined;
-    const profiles = [workerProfile, dreamerProfile].filter((profile): profile is AgentProfile => profile !== undefined);
-    this.agentProfiles = new AgentProfileRegistry(profiles, options.agentProfileDiagnostics);
-    this.agentTasks = new AgentTaskOrchestrator(
-      values.agentTaskRepository,
-      this.agentProfiles,
-      values.project.rootPath,
-      this.workerSettings,
-      this.fileHistory,
-    );
-    this.dreamer = new DreamerScheduler(
-      values.project.rootPath,
-      this.globalMemory.filePath,
-      dreamerProfile,
-    );
-
-    registerBuiltinTools(this.tools);
-    this.tools.register(createSessionSearchTool(this.recall));
-    this.tools.register(createSessionReadTool(this.recall));
-    if (values.skills.skills.some((skill) => !skill.disableModelInvocation)) {
-      this.tools.register(createSkillTool(() => this.loadedSkills.skills));
-    }
-    this.tools.register(createAskTool());
-    this.syncAgentTaskTools();
+  private constructor(readonly runtime: ThreadRuntime, modelCatalog: ModelCatalog | undefined, skillPaths: readonly string[]) {
+    this.modelCatalog = modelCatalog;
+    this.skillPaths = skillPaths.map((directory) => path.resolve(runtime.rootPath, directory));
+    this.selectedSessionId = runtime.initialSessionId;
     registerBuiltinCommands(this.commands);
     this.commandRouter = new ThreadCommandRouter(this.commands);
-    this.extensionApi = createExtensionAPI(this.tools, this.commands, this.events);
-    this.configureRuntime(options.model);
+    this.extensionApi = createExtensionAPI(runtime, this.commands);
     this.inputRouter = this.createInputRouter();
   }
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
-    const project = await ProjectService.open(options.rootPath);
-    let repository: SessionTreeRepository | undefined;
-    let agentTaskRepository: AgentTaskRepository | undefined;
-    let recall: SessionRecallService | undefined;
+    const { search, globalMemoryPath, commitAttribution, projectInstructions = true, ...core } = options;
+    const skills = core.skills ?? { paths: [skillsDirectory()] };
+    const paths = "paths" in skills ? [...skills.paths] : [];
+    const modelCatalog = core.modelCatalog;
+    const tools = core.tools ?? ["read", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
+    const needsAskTool = !core.askPresenter && !tools.some((tool) => typeof tool !== "string" && tool.name === "ask");
+    const fileCheckpoints = core.fileCheckpoints ?? true;
+    const runtimeOptions = snapshotRuntimeOptions({
+      ...core, tools, skills, fileCheckpoints,
+      systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, fileEditingPrompt(fileCheckpoints),
+        formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
+      ...(search === false ? {} : { search: search ?? {} }),
+      ...(globalMemoryPath === false ? {} : { globalMemoryPath: globalMemoryPath ?? path.join(getThreadHome(), GLOBAL_MEMORY_FILE) }),
+    });
+    if (projectInstructions) {
+      const projectText = await loadProjectInstructions(runtimeOptions.rootPath);
+      runtimeOptions.sharedInstructions = [runtimeOptions.sharedInstructions, projectText].filter(Boolean).join("\n\n");
+    }
+    const runtime = await ThreadRuntime.open(runtimeOptions);
     try {
-      repository = await SessionTreeRepository.open(project);
-      const tree = new SessionTreeService(repository);
-      await tree.initialize();
-      const globalMemory = await GlobalMemorySnapshots.open([...tree.projection.sessions.keys()]);
-      const fileHistory = new FileHistoryService(project, tree, [getThreadHome()]);
-      const builder = new ContextBuilder(tree);
-      recall = new SessionRecallService(tree, options.search);
-      const skills = options.skills ?? await loadSkills();
-      agentTaskRepository = await AgentTaskRepository.open(project);
-      const app = new ThreadApp(options, {
-        project,
-        repository,
-        tree,
-        fileHistory,
-        builder,
-        recall,
-        skills,
-        agentTaskRepository,
-        globalMemory,
-      });
-      await app.agentTasks.initialize();
-      return app;
+      // Plain mode retains the coding agent's ask contract and its unavailable response.
+      if (needsAskTool) runtime.registerTool(createAskTool());
+      return new ThreadApp(runtime, modelCatalog, paths);
     } catch (error) {
-      await recall?.close();
-      await agentTaskRepository?.close().catch(() => undefined);
-      await repository?.close();
+      await runtime.close();
       throw error;
     }
   }
 
-  /** Alias retained inside the new API for concise embedding code. */
-  get session(): SessionTreeService {
-    return this.sessionTree;
-  }
-
-  get model(): ModelClient | undefined {
-    return this.mainAgent.model;
-  }
-
-  get thinkingLevel(): ModelThinkingLevel {
-    return this.mainAgent.thinkingLevel;
-  }
-
-  get supportsThinking(): boolean {
-    return this.mainAgent.supportsThinking;
-  }
-
-  get availableThinkingLevels(): readonly ModelThinkingLevel[] {
-    return this.mainAgent.availableThinkingLevels;
-  }
-
-  get skills(): readonly Skill[] {
-    return this.loadedSkills.skills;
-  }
-
-  get skillDiagnostics(): readonly SkillDiagnostic[] {
-    return this.loadedSkills.diagnostics;
-  }
-
-  get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
-    const memoryDiagnostic = this.globalMemory.diagnostic;
-    return [
-      ...this.agentProfiles.diagnostics,
-      ...(memoryDiagnostic
-        ? [{ profileId: "main", level: "warning" as const, message: memoryDiagnostic }]
-        : []),
-    ];
-  }
-
-  get subagentEnabled(): boolean {
-    return this.agentTasks.enabled;
-  }
-
-  get subagentModel(): ModelSelectionConfig | undefined {
-    const profile = this.agentProfiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
-    if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
-    return this.threadState.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID]?.model ?? this.workerDefaultModel;
-  }
-
-  get dreamerEnabled(): boolean {
-    return this.dreamer.enabled;
-  }
-
-  get dreamerModel(): ModelSelectionConfig | undefined {
-    const profile = this.agentProfiles.get(DREAMER_PROFILE_ID);
-    if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
-    return this.threadState.agents?.dreamer?.model ?? this.dreamerDefaultModel;
-  }
-
-  get dreamerLastError(): string | undefined {
-    return this.dreamer.lastError;
-  }
-
-  agentTaskSummaries(parentTurnId: string) {
-    return this.agentTasks.summariesForTurn(parentTurnId);
-  }
-
-  agentTaskDetailsForTurn(parentTurnId: string) {
-    return [...this.agentTasks.repository.projection.tasks.values()]
-      .filter((task) => task.parentTurnId === parentTurnId)
-      .map((task) => ({
-        task: structuredClone(task),
-        summary: this.agentTasks.repository.projection.summary(task.id),
-      }));
-  }
-
-  setAskPresenter(presenter: AskPresenter | undefined): () => void {
-    this.askPresenter = presenter;
-    return () => {
-      if (this.askPresenter === presenter) this.askPresenter = undefined;
-    };
-  }
-
-  contextOccupancy(tipTurnId: string | null = this.sessionTree.activeLiveTip): { percent: number; requestTokens: number } | undefined {
-    if (!this.model || !this.runtime) return undefined;
-    const messages = this.contextBuilder.build(tipTurnId ?? undefined).messages;
-    const { requestTokens } = this.runtime.estimateRequestBudget(messages);
-    return {
-      percent: Math.min(999, Math.round((requestTokens / this.model.contextWindow) * 100)),
-      requestTokens,
-    };
-  }
-
-  liveContextMessages(): Message[] {
-    return this.contextBuilder.build().messages;
-  }
-
-  cycleThinkingLevel(): ModelThinkingLevel | undefined {
-    const level = this.mainAgent.cycleThinkingLevel();
-    if (level) this.rebuildRuntime();
-    return level;
-  }
-
-  private rememberMainState(main: Pick<ThreadState, "model" | "thinkingLevel">): void {
-    this.threadState = {
-      ...this.threadState,
-      ...(main.model ? { model: main.model } : {}),
-      ...(main.thinkingLevel ? { thinkingLevel: main.thinkingLevel } : {}),
-    };
-    this.onStateChange?.(structuredClone(this.threadState));
-  }
-
-  private rememberSecondaryAgentState(
-    id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID,
-    enabled: boolean,
-    model: ModelSelectionConfig | undefined,
-  ): void {
-    this.threadState = {
-      ...this.threadState,
-      agents: {
-        ...this.threadState.agents,
-        [id]: {
-          enabled,
-          ...(model ? { model } : {}),
-        },
-      },
-    };
-    this.onStateChange?.(structuredClone(this.threadState));
-  }
-
-  private syncAgentTaskTools(): void {
-    if (!this.agentTasks.enabled) {
-      for (const dispose of this.agentToolDisposers.splice(0)) dispose();
-      return;
-    }
-    if (this.agentToolDisposers.length > 0) return;
-    const taskTools = createAgentTaskTools(this.agentTasks);
-    const conflict = taskTools.find((tool) => this.tools.get(tool.name));
-    if (conflict) throw new Error(`Cannot enable subagents because tool ${conflict.name} is already registered`);
-    const registered: (() => void)[] = [];
-    try {
-      for (const tool of taskTools) registered.push(this.tools.register(tool));
-      this.agentToolDisposers = registered;
-    } catch (error) {
-      for (const dispose of registered.reverse()) dispose();
-      throw error;
-    }
+  async openSession(sessionId: string, options: { signal?: AbortSignal } = {}) {
+    this.assertOpen();
+    const session = await this.runtime.openSession(sessionId, options);
+    this.selectedSessionId = session.id;
+    return session;
   }
 
   private disableSubagent(): CommandResult {
-    const previous = this.subagentModel;
-    this.agentProfiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.agentProfiles.clearDiagnostics(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.syncAgentTaskTools();
-    this.rebuildRuntime();
-    this.rememberSecondaryAgentState(IMPLEMENTATION_WORKER_PROFILE_ID, false, previous);
+    this.runtime.configureAgent(IMPLEMENTATION_WORKER_PROFILE_ID, false);
     return ephemeral("Subagent: Off", true);
   }
-
   private enableSubagent(providerId: string, modelId: string): CommandResult {
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Worker model selection is unavailable");
-    const model = this.modelCatalog.createClient(providerId, modelId);
-    const profile = this.bindAgentProfile(createImplementationWorkerProfile(model, this.workerSettings));
-    const previous = this.agentProfiles.get(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.agentProfiles.set(profile);
-    try {
-      this.syncAgentTaskTools();
-    } catch (error) {
-      if (previous) this.agentProfiles.set(previous);
-      else this.agentProfiles.delete(IMPLEMENTATION_WORKER_PROFILE_ID);
-      throw error;
-    }
-    this.agentProfiles.clearDiagnostics(IMPLEMENTATION_WORKER_PROFILE_ID);
-    this.rebuildRuntime();
-    this.rememberSecondaryAgentState(IMPLEMENTATION_WORKER_PROFILE_ID, true, { provider: providerId, id: modelId });
+    this.runtime.configureAgent(IMPLEMENTATION_WORKER_PROFILE_ID, true, this.modelCatalog.createClient(providerId, modelId));
     return ephemeral(`Subagent: On · worker ${providerId}/${modelId}`, true);
   }
-
   private disableDreamer(): CommandResult {
-    const previous = this.dreamerModel;
-    this.agentProfiles.delete(DREAMER_PROFILE_ID);
-    this.agentProfiles.clearDiagnostics(DREAMER_PROFILE_ID);
-    this.dreamer.setProfile(undefined);
-    this.rememberSecondaryAgentState(DREAMER_PROFILE_ID, false, previous);
+    this.runtime.configureAgent(DREAMER_PROFILE_ID, false);
     return ephemeral("Dreamer: Off", true);
   }
-
   private enableDreamer(providerId: string, modelId: string): CommandResult {
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Dreamer model selection is unavailable");
-    const model = this.modelCatalog.createClient(providerId, modelId);
-    const profile = this.bindAgentProfile(createDreamerProfile(model, this.dreamerThinkingLevel));
-    this.agentProfiles.set(profile);
-    this.agentProfiles.clearDiagnostics(DREAMER_PROFILE_ID);
-    this.dreamer.setProfile(profile);
-    this.rememberSecondaryAgentState(DREAMER_PROFILE_ID, true, { provider: providerId, id: modelId });
+    this.runtime.configureAgent(DREAMER_PROFILE_ID, true, this.modelCatalog.createClient(providerId, modelId));
     return ephemeral(`Dreamer: On · ${providerId}/${modelId}`, true);
   }
-
-  private bindAgentProfile(profile: AgentProfile): AgentProfile {
-    let model = profile.model;
-    const cacheBindable = model as ModelClient & { withCacheKey?: (key: string) => ModelClient };
-    const cacheKey = `${this.sessionTree.tree.id}:${profile.id}`;
-    if (cacheBindable.withCacheKey && model.cacheKey !== cacheKey) model = cacheBindable.withCacheKey(cacheKey);
-    const retentionBindable = model as ModelClient & { withCacheRetention?: (retention: CacheRetention | undefined) => ModelClient };
-    if (retentionBindable.withCacheRetention && model.cacheRetention !== this.cacheRetention) {
-      model = retentionBindable.withCacheRetention(this.cacheRetention);
-    }
-    return { ...profile, model };
-  }
-
-  private configureRuntime(model: ModelClient | undefined): void {
-    this.mainAgent.select(model);
-    this.rebuildRuntime();
-  }
-
-  private rebuildRuntime(): void {
-    const model = this.mainAgent.model;
-    if (!model) {
-      this.agentProfiles.delete(MAIN_AGENT_PROFILE_ID);
-      this.runtime = undefined;
-      return;
-    }
-    const skills = formatSkillsSection(this.loadedSkills.skills);
-    const systemPrompt = [
-      this.configuredSystemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-      FILE_EDITING_PROMPT,
-      formatCommitAttributionPrompt(this.commitAttribution),
-      this.agentTasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "",
-      skills,
-      formatGlobalMemoryPrompt(
-        this.globalMemory.filePath,
-        this.globalMemory.snapshot(this.sessionTree.activeSession.id),
-      ),
-    ].filter(Boolean).join("\n\n");
-    const profile: AgentProfile = {
-      id: MAIN_AGENT_PROFILE_ID,
-      model,
-      thinkingLevel: this.thinkingLevel,
-      tools: this.tools,
-      systemPrompt,
-    };
-    this.agentProfiles.set(profile);
-    this.runtime = createRuntime({
-      model: profile.model,
-      ...(this.mainAgent.reasoning ? { reasoning: this.mainAgent.reasoning } : {}),
-      rootPath: this.rootPath,
-      systemPrompt: profile.systemPrompt,
-      tree: this.sessionTree,
-      fileHistory: this.fileHistory,
-      contextBuilder: this.contextBuilder,
-      tools: profile.tools,
-      extensions: this.events,
-      agentTasks: this.agentTasks,
-      askPresenter: () => this.askPresenter,
-      writableExternalPaths: [this.globalMemory.filePath],
-    });
-  }
-
   private modelPickerModels(scope: "configured" | "all"): ModelDescriptor[] {
     if (!this.modelCatalog) return [];
     return scope === "all"
@@ -507,36 +115,36 @@ export class ThreadApp {
 
   private modelStatus(scope: "configured" | "all" = "configured"): CommandResult {
     const models = this.modelPickerModels(scope);
-    const content = this.model
-      ? `Current model: ${this.model.providerId}/${this.model.modelId}\nContext window: ${this.model.contextWindow.toLocaleString("en-US")} tokens\nImages: ${this.model.acceptsImages === true ? "supported" : "not supported"}\nThinking level: ${this.thinkingLevel}`
+    const content = this.runtime.model
+      ? `Current model: ${this.runtime.model.providerId}/${this.runtime.model.modelId}\nContext window: ${this.runtime.model.contextWindow.toLocaleString("en-US")} tokens\nImages: ${this.runtime.model.acceptsImages === true ? "supported" : "not supported"}\nThinking level: ${this.runtime.thinkingLevel}`
       : "No model selected. Use /model list and /model <provider>/<model>.";
     if (!this.modelCatalog) return ephemeral(content);
     return viewResult(content, {
       type: "model_picker",
       agentId: MAIN_AGENT_PROFILE_ID,
       models,
-      currentProviderId: this.model?.providerId,
-      currentModelId: this.model?.modelId,
+      currentProviderId: this.runtime.model?.providerId,
+      currentModelId: this.runtime.model?.modelId,
       scope,
     });
   }
 
   private subagentStatus(): CommandResult {
-    const selected = this.subagentModel;
-    const content = this.subagentEnabled
+    const selected = this.runtime.subagentModel;
+    const content = this.runtime.subagentEnabled
       ? `Subagent: On\nWorker model: ${selected?.provider}/${selected?.id}`
       : `Subagent: Off${selected ? `\nLast worker model: ${selected.provider}/${selected.id}` : ""}`;
     return viewResult(content, {
       type: "agent_settings",
       agentId: IMPLEMENTATION_WORKER_PROFILE_ID,
       label: "Implementation worker",
-      enabled: this.subagentEnabled,
+      enabled: this.runtime.subagentEnabled,
     });
   }
 
   private workerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
     if (!this.modelCatalog) throw new Error("Worker model selection is unavailable");
-    const selected = this.subagentModel;
+    const selected = this.runtime.subagentModel;
     const models = this.modelPickerModels(scope);
     const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
     return viewResult(
@@ -555,23 +163,23 @@ export class ThreadApp {
   }
 
   private dreamerStatus(): CommandResult {
-    const selected = this.dreamerModel;
+    const selected = this.runtime.dreamerModel;
     const content = [
-      `Dreamer: ${this.dreamerEnabled ? "On" : "Off"}`,
+      `Dreamer: ${this.runtime.dreamerEnabled ? "On" : "Off"}`,
       selected ? `Dreamer model: ${selected.provider}/${selected.id}` : "Dreamer model: not selected",
-      this.dreamerLastError ? `Last error: ${this.dreamerLastError}` : undefined,
+      this.runtime.dreamerLastError ? `Last error: ${this.runtime.dreamerLastError}` : undefined,
     ].filter((line): line is string => line !== undefined).join("\n");
     return viewResult(content, {
       type: "agent_settings",
       agentId: DREAMER_PROFILE_ID,
       label: "Dreamer",
-      enabled: this.dreamerEnabled,
+      enabled: this.runtime.dreamerEnabled,
     });
   }
 
   private dreamerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
     if (!this.modelCatalog) throw new Error("Dreamer model selection is unavailable");
-    const selected = this.dreamerModel;
+    const selected = this.runtime.dreamerModel;
     const models = this.modelPickerModels(scope);
     const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
     return viewResult(
@@ -590,9 +198,9 @@ export class ThreadApp {
   }
 
   private agentOverview(): CommandResult {
-    const main = this.model ? `${this.model.providerId}/${this.model.modelId}` : "not selected";
-    const worker = this.subagentModel;
-    const dreamer = this.dreamerModel;
+    const main = this.runtime.model ? `${this.runtime.model.providerId}/${this.runtime.model.modelId}` : "not selected";
+    const worker = this.runtime.subagentModel;
+    const dreamer = this.runtime.dreamerModel;
     const workerDetail = worker ? `${worker.provider}/${worker.id}` : "not selected";
     const dreamerDetail = dreamer ? `${dreamer.provider}/${dreamer.id}` : "not selected";
     const agents = [
@@ -600,22 +208,22 @@ export class ThreadApp {
       {
         id: IMPLEMENTATION_WORKER_PROFILE_ID,
         label: "Implementation worker",
-        enabled: this.subagentEnabled,
+        enabled: this.runtime.subagentEnabled,
         detail: workerDetail,
       },
       {
         id: DREAMER_PROFILE_ID,
         label: "Dreamer",
-        enabled: this.dreamerEnabled,
-        detail: this.dreamerLastError ? `${dreamerDetail} · error: ${this.dreamerLastError}` : dreamerDetail,
+        enabled: this.runtime.dreamerEnabled,
+        detail: this.runtime.dreamerLastError ? `${dreamerDetail} · error: ${this.runtime.dreamerLastError}` : dreamerDetail,
       },
     ];
     const content = [
       `main: on · ${main}`,
-      `implementation-worker: ${this.subagentEnabled ? "on" : "off"} · ${workerDetail}`,
-      `dreamer: ${this.dreamerEnabled ? "on" : "off"} · ${dreamerDetail}`,
-      ...(this.dreamerLastError ? [`dreamer last error: ${this.dreamerLastError}`] : []),
-      ...this.agentProfileDiagnostics.map((diagnostic) =>
+      `implementation-worker: ${this.runtime.subagentEnabled ? "on" : "off"} · ${workerDetail}`,
+      `dreamer: ${this.runtime.dreamerEnabled ? "on" : "off"} · ${dreamerDetail}`,
+      ...(this.runtime.dreamerLastError ? [`dreamer last error: ${this.runtime.dreamerLastError}`] : []),
+      ...this.runtime.agentProfileDiagnostics.map((diagnostic) =>
         `${diagnostic.profileId} ${diagnostic.level}: ${diagnostic.message}`
       ),
     ].join("\n");
@@ -630,9 +238,9 @@ export class ThreadApp {
     const content = models.map((item) =>
       `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context${item.acceptsImages ? ", vision" : ""}`
     ).join("\n") || "(no models)";
-    const selected = agentId === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentModel
-      : agentId === DREAMER_PROFILE_ID ? this.dreamerModel
-      : this.model ? { provider: this.model.providerId, id: this.model.modelId } : undefined;
+    const selected = agentId === IMPLEMENTATION_WORKER_PROFILE_ID ? this.runtime.subagentModel
+      : agentId === DREAMER_PROFILE_ID ? this.runtime.dreamerModel
+      : this.runtime.model ? { provider: this.runtime.model.providerId, id: this.runtime.model.modelId } : undefined;
     const scope = args[0] ? "all" : "configured";
     return viewResult(content, {
       type: "model_picker",
@@ -683,7 +291,7 @@ export class ThreadApp {
       if (action === "off") return id === IMPLEMENTATION_WORKER_PROFILE_ID
         ? this.disableSubagent()
         : this.disableDreamer();
-      const selected = id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentModel : this.dreamerModel;
+      const selected = id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.runtime.subagentModel : this.runtime.dreamerModel;
       if (!selected) return id === IMPLEMENTATION_WORKER_PROFILE_ID
         ? this.workerModelPicker()
         : this.dreamerModelPicker();
@@ -710,17 +318,17 @@ export class ThreadApp {
       [providerId, modelId] = args as [string, string];
     } else throw new Error("Usage: /model <provider>/<model>");
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Model switching is unavailable");
-    const previous = this.model ? `${this.model.providerId}/${this.model.modelId}` : "none";
-    this.configureRuntime(this.modelCatalog.createClient(providerId, modelId));
-    this.mainAgent.remember();
+    const previous = this.runtime.model ? `${this.runtime.model.providerId}/${this.runtime.model.modelId}` : "none";
+    this.runtime.selectModel(providerId, modelId);
     return ephemeral(`Switched model from ${previous} to ${providerId}/${modelId}`, true);
   }
 
   private describeSkills(): string {
     return [
-      `skills directory: ${skillsDirectory()}`,
-      ...this.skills.map((skill) => `- ${skill.name}: ${skill.description}`),
-      ...this.skillDiagnostics.map((item) => `${item.kind}: ${item.message} (${item.path})`),
+      ...this.skillPaths.map((directory) => `Skills directory: ${directory}`),
+      this.runtime.skills.length ? `Loaded skills: ${this.runtime.skills.length}` : "No skills loaded for this application.",
+      ...this.runtime.skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.filePath})`),
+      ...this.runtime.skillDiagnostics.map((item) => `${item.kind}: ${item.message} (${item.path})`),
     ].join("\n");
   }
 
@@ -729,19 +337,12 @@ export class ThreadApp {
       newSession: async (options) => {
         safeUiEvent(options.onUiEvent, { type: "command_started", name: "new" });
         try {
-          options.signal.throwIfAborted();
-          const memorySnapshot = await this.globalMemory.loadFresh();
-          options.signal.throwIfAborted();
-          const session = await this.sessionTree.createSession();
-          this.globalMemory.bind(session.id, memorySnapshot);
-          this.rebuildRuntime();
+          const session = await this.runtime.createSession(options);
+          this.selectedSessionId = session.id;
           safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: session.id, liveTipTurnId: null, reason: "new" });
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: true });
-          const content = [
-            `Created empty Session ${session.id} from Root; workspace unchanged`,
-            ...(this.globalMemory.diagnostic ? [`Warning: ${this.globalMemory.diagnostic}`] : []),
-          ].join("\n");
-          return { kind: "command", result: ephemeral(content, true) };
+          const warnings = this.runtime.agentProfileDiagnostics.filter((item) => item.profileId === "main").map((item) => `Warning: ${item.message}`);
+          return { kind: "command", result: ephemeral([`Created empty Session ${session.id} from Root; workspace unchanged`, ...warnings].join("\n"), true) };
         } catch (error) {
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "new", ok: false });
           throw error;
@@ -750,30 +351,21 @@ export class ThreadApp {
       agent: async (args) => ({ kind: "command", result: this.handleAgentCommand(args) }),
       model: async (args) => ({ kind: "command", result: this.handleModelCommand(args) }),
       skill: async (name, extra, options) => {
-        if (!name) return {
-          kind: "command",
-          result: viewResult(this.describeSkills(), {
-            type: "command_picker",
-            title: "Skills",
-            items: this.skills.map((skill) => ({
-              label: skill.name,
-              description: skill.description,
-              command: `/skill ${skill.name} `,
-              submit: false,
-            })),
-            emptyText: `No skills installed. Add skills under ${skillsDirectory()}`,
-          }),
-        };
-        const skill = this.skills.find((item) => item.name === name);
-        if (!skill) throw new Error(`Unknown skill: ${name}`);
-        if (!this.runtime) throw new Error("/skill requires a configured model");
-        return { kind: "turn", result: await this.runtime.run(formatSkillInvocation(skill, extra), options) };
+        if (!name) return { kind: "command", result: viewResult(this.describeSkills(), {
+          type: "command_picker", title: "Skills",
+          items: this.runtime.skills.map((skill) => ({ label: skill.name, description: skill.description, command: `/skill ${skill.name} `, submit: false })),
+          emptyText: this.skillPaths.length
+            ? `No skills loaded. Add skills under ${this.skillPaths.join(", ")}`
+            : "No skills loaded for this application.",
+        }) };
+        if (!this.runtime.model) throw new Error("/skill requires a configured model");
+        return { kind: "turn", result: await this.runtime.invokeSkill(this.selectedSessionId, name, extra, options) };
       },
       compact: async (options) => {
-        if (!this.runtime) throw new Error("/compact requires a configured model");
+        if (!this.runtime.model) throw new Error("/compact requires a configured model");
         safeUiEvent(options.onUiEvent, { type: "command_started", name: "compact" });
         try {
-          const result = await this.runtime.compactCurrent(options);
+          const result = await this.runtime.compact(this.selectedSessionId, options);
           safeUiEvent(options.onUiEvent, { type: "command_finished", name: "compact", ok: true });
           return { kind: "command", result: ephemeral(result.compacted
             ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
@@ -783,138 +375,73 @@ export class ThreadApp {
           throw error;
         }
       },
-      session: (args, options) => {
-        const routed = args.length === 0 ? "/thread sessions" : `/thread open ${args.join(" ")}`;
-        return this.routeThreadCommand(routed, options);
-      },
+      session: (args, options) => this.routeThreadCommand(args.length === 0 ? "/thread sessions" : `/thread open ${args.join(" ")}`, options),
       rewind: async (args, options) => {
         if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
         if (args.length === 0) {
           const items = buildRewindItems(this.commandContext(options.signal));
           return { kind: "command", result: items.length
-            ? viewResult("Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten.", { type: "rewind", items })
+            ? viewResult(this.runtime.fileCheckpoints
+              ? "Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten."
+              : "Choose a current-path user message. Rewind changes the conversation context and leaves workspace files unchanged.", { type: "rewind", items })
             : ephemeral("(no user turns on the current live path)") };
         }
-        const candidate = await this.rewindTo(args[0]!);
-        safeUiEvent(options.onUiEvent, {
-          type: "session_changed",
-          sessionId: this.sessionTree.activeSession.id,
-          liveTipTurnId: this.sessionTree.activeLiveTip,
-          reason: "rewind",
-        });
+        const candidate = await this.runtime.rewind(this.selectedSessionId, args[0]!, options);
+        safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: this.selectedSessionId,
+          liveTipTurnId: this.runtime.readSession(this.selectedSessionId).liveTipTurnId, reason: "rewind" });
         return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
       turn: async (input, options) => {
-        if (!this.runtime) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
-        if ((options.images?.length ?? 0) > 0 && this.model?.acceptsImages !== true) {
+        if (!this.runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
+        if (options.images?.length && this.runtime.model.acceptsImages !== true) {
           throw new Error("Current model does not accept images. Use /model to pick a vision model.");
         }
-        return { kind: "turn", result: await this.runtime.run(input, options) };
+        return { kind: "turn", result: await this.runtime.prompt(this.selectedSessionId, input, options) };
       },
     });
   }
 
-  async handleInput(
-    input: string,
-    options: InputOptions,
-  ): Promise<InputResult> {
-    if (this.inputActive) throw new Error("Wait for the active turn or command to finish");
-    this.inputActive = true;
-    try {
-      this.dreamer.foregroundStarting();
-      const result = await this.inputRouter.route(input, options);
-      if (result.kind === "turn") {
-        this.dreamer.recordTurn(this.sessionTree.messagesForTurn(result.result.turn.id));
-      }
-      return result;
-    } finally {
-      this.inputActive = false;
-      this.dreamer.foregroundFinished();
-    }
+  handleInput(input: string, options: InputOptions): Promise<InputResult> {
+    try { this.assertOpen(); } catch (error) { return Promise.reject(error); }
+    if (this.inputOperation) return Promise.reject(new Error("Wait for the active turn or command to finish"));
+    const controller = new AbortController();
+    const signal = AbortSignal.any([options.signal, controller.signal]);
+    const done = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return this.inputRouter.route(input, { ...options, signal });
+    }).finally(() => {
+      if (this.inputOperation?.controller === controller) this.inputOperation = undefined;
+    });
+    this.inputOperation = { controller, done };
+    void done.catch(() => undefined);
+    return done;
   }
 
   private commandContext(signal: AbortSignal) {
-    return {
-      rootPath: this.rootPath,
-      tree: this.sessionTree,
-      recall: this.recall,
-      skills: this.skills,
-      skillDiagnostics: this.skillDiagnostics,
-      signal,
-    };
+    return { rootPath: this.runtime.rootPath, runtime: this.runtime, selectedSessionId: this.selectedSessionId,
+      skills: this.runtime.skills, skillDiagnostics: this.runtime.skillDiagnostics, signal,
+      openSession: (id: string) => this.openSession(id, { signal }) };
   }
 
-  private async routeThreadCommand(
-    input: string,
-    options: { signal: AbortSignal; onUiEvent?: UiEventSink },
-  ): Promise<InputResult> {
-    const beforeSession = this.sessionTree.activeSession.id;
+  private async routeThreadCommand(input: string, options: { signal: AbortSignal }): Promise<InputResult> {
     const result = await this.commandRouter.route(input, this.commandContext(options.signal));
     if (!result) throw new Error(`Could not route command: ${input}`);
-    if (beforeSession !== this.sessionTree.activeSession.id) {
-      this.rebuildRuntime();
-      safeUiEvent(options.onUiEvent, {
-        type: "session_changed",
-        sessionId: this.sessionTree.activeSession.id,
-        liveTipTurnId: this.sessionTree.activeLiveTip,
-        reason: "opened",
-      });
-    }
     return { kind: "command", result };
   }
 
-  async rewindTo(turnIdOrUserEntryId: string) {
-    this.sessionTree.requireIdle();
-    const candidate = this.sessionTree.resolveRewindCandidate(turnIdOrUserEntryId);
-    const livePath = this.sessionTree.livePath();
-    await this.fileHistory.restore(livePath.slice(livePath.findIndex((turn) => turn.id === candidate.turnId)));
-    const turn = this.sessionTree.projection.turns.get(candidate.turnId);
-    if (!turn) throw new Error(`Rewind target disappeared: ${candidate.turnId}`);
-    await this.sessionTree.moveLiveTipForRewind(turn.parentTurnId);
-    return candidate;
+  private assertOpen(): void {
+    if (this.appClosing) throw new Error("Thread application is closed or closing");
   }
 
-  async fsck(): Promise<string[]> {
-    const issues: string[] = [];
-    for (const session of this.sessionTree.projection.sessions.values()) {
-      try {
-        this.sessionTree.livePath(session.id);
-      } catch (error) {
-        issues.push(`session ${session.id} live path: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    for (const turn of this.sessionTree.projection.turns.values()) {
-      const entries = this.sessionTree.projection.entriesByTurn.get(turn.id) ?? [];
-      if (entries[0]?.id !== turn.userEntryId || entries[0]?.type !== "message" || entries[0].message.role !== "user") {
-        issues.push(`turn ${turn.id} has no leading user entry`);
-      }
-      try {
-        await this.fileHistory.verify(turn.id);
-      } catch (error) {
-        issues.push(`turn ${turn.id} file history: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    return issues;
-  }
-
-  cleanupFileHistory() {
-    this.sessionTree.requireIdle();
-    return this.fileHistory.garbageCollect();
-  }
-
-  async close(): Promise<void> {
-    const failures: unknown[] = [];
-    const collect = (task: Promise<unknown>) => task.catch((error) => failures.push(error));
-    // Start cancellation immediately, but do not make optional background work
-    // delay the Session Tree shutdown after worker edits have settled.
-    const workers = collect(this.agentTasks.close());
-    const background = [collect(this.dreamer.close()), collect(this.recall.close())];
-    await workers;
-    await collect(this.fileHistory.settle());
-    await collect(this.repository.close());
-    await Promise.all(background);
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) throw new AggregateError(failures, "Thread resources failed to close cleanly");
+  close(): Promise<void> {
+    if (this.appClosing) return this.appClosing;
+    const input = this.inputOperation;
+    this.appClosing = Promise.resolve().then(async () => {
+      await input?.done.catch(() => undefined);
+      await this.runtime.close();
+    });
+    input?.controller.abort(new DOMException("Thread application closed", "AbortError"));
+    return this.appClosing;
   }
 }

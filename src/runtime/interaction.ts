@@ -21,6 +21,14 @@ export interface AskQuestion {
 export interface AskRequest {
   id: string;
   questions: readonly AskQuestion[];
+  /** Present for requests made by a runtime-owned tool; absent for manually presented questions. */
+  invocation?: {
+    sessionId: string | null;
+    turnId: string | null;
+    toolCallId: string;
+    agentId: string;
+    taskId?: string;
+  };
 }
 
 /** One answer per question, each a list of chosen labels or the user's own text. */

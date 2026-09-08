@@ -12,7 +12,7 @@
 
 </div>
 
-Thread 是一个围绕项目记忆设计的 coding-agent runtime。需求如何提出，方案为什么被选中，执行得到了什么结果，用户又如何纠正方向——这些互动持续保存在同一棵 Session Tree 中，构成整个项目的记忆，供之后的工作搜索、召回和接续。
+Thread 是一个围绕项目记忆设计的 agent runtime，提供用于编程的 TUI。需求如何提出，方案为什么被选中，执行得到了什么结果，用户又如何纠正方向——这些互动持续保存在同一棵 Session Tree 中，构成整个项目的记忆，供之后的工作搜索、召回和接续。
 
 Thread 的设计遵循两条理念：**如无必要，勿增实体；精心的上下文管理。**
 
@@ -189,7 +189,7 @@ Agent 通过两个工具使用项目记忆：
 | `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | 在共享工作区完成一到两个写入范围互不重叠的独立叶子任务，由主 agent 检查文件与测试，并按需要求返工。 |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | 在后台审阅互动与执行轨迹，寻找证据充分、可跨项目复用的隐含用户模式和经验，维护全局记忆。 |
 
-Worker 直接编辑当前工作区，`writeScope` 是协调边界。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。撤销已记录的内置文件编辑使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
+Worker 直接编辑当前工作区，`writeScope` 用于任务协调，并由内置 `write`、`edit` 工具强制检查；它不隔离 bash 或自定义工具的任意操作。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。撤销已记录的内置文件编辑使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
 
 Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。它保持静默，单次运行最多五分钟；大多数审阅都应保持记忆不变。详见[全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)。
 
@@ -250,6 +250,30 @@ Session Tree 与 Agent Task 分别使用独立的 append-only log。文件编辑
 
 项目和 Session Tree 使用第 2 版数据格式。旧项目数据会被明确拒读，报错给出其位置；Thread 不迁移或自动删除旧数据，需要新的项目状态才能使用新格式。
 
+## 嵌入其他应用
+
+其他 Bun 应用或 GUI/Web 后端可以使用同一个 `ThreadRuntime`：
+
+```ts
+import { ThreadRuntime } from "thread/runtime";
+
+const runtime = await ThreadRuntime.open({
+  rootPath,
+  stateDirectory,
+  model,
+  tools: ["read", "bash", "websearch", "webfetch", myCustomTool],
+  skills: { paths: ["./skills", "/path/to/shared-skills"] },
+  systemPrompt: "你是本应用的助手。",
+  fileCheckpoints: false,
+});
+```
+
+按名称选择内置工具，并在同一数组中传入自定义 `AgentTool`。Skill 相对路径以 `rootPath` 为基准；启用 Skill 后会自动加入其 `skill` 工具，并向宿主提示词追加目录。默认不启用基础工具、Skill 扫描、文件 checkpoint、Recall 或全局记忆。会话历史仍然落盘，`rewind()` 可以只回退上下文而不修改文件。CLI 和 `ThreadApp.open()` 共享 coding 应用默认配置，执行和查询统一通过 `app.runtime` 访问。
+
+终端渲染使用独立的 `thread/tui` 入口。MCP 计划作为核心工具接入能力，目前尚未实现。参见 [runtime 使用指南](./docs/runtime.md) 和 [离线嵌入示例](./examples/runtime.ts)；`bun run test:runtime` 会从独立宿主验证构建后的公开接口。
+
+coding 应用启动时读取项目根目录的 `AGENTS.md`，并向主 agent 和 implementation worker 共享其中的指令。`ThreadApp.open()` 可用 `projectInstructions: false` 关闭读取；裸 runtime 不扫描项目指令，宿主可显式提供 `sharedInstructions`。本仓库的代码、文档和验证入口见 [AGENTS.md](./AGENTS.md)。
+
 ## 开发
 
 ```bash
@@ -268,12 +292,11 @@ src/context/          live-path 投影与 compaction
 src/agent/            模型 step、工具调度、journal 与 turn
 src/agent-task/       共享工作区 worker 生命周期与任务 journal
 src/dreamer/          后台全局记忆整理与调度
-src/app/              runtime 组装与输入路由
+src/runtime/          公共 runtime、宿主配置、事件与生命周期
+src/app/              执行组装与终端命令路由
 src/tools/            内置 agent 工具与执行策略
 src/ui/               plain 与全屏终端界面
 ```
-
-Thread 也导出了 runtime、store、model catalog、tool、command、skills loader、extension API 和 UI 类型，便于嵌入其他应用。公共接口见 [`src/index.ts`](./src/index.ts)。
 
 延伸阅读：
 

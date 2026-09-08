@@ -196,7 +196,7 @@ async function runCompaction(input: {
     messages: built.messages,
     tools: [],
   };
-  const budget = contextBudget(context, built.messages, 4_000);
+  const budget = contextBudget(context, built.messages);
   const tree = new CapturingTree();
   const service = new ContextCompactionService(tree as unknown as SessionTreeService, input.model);
   const result = await service.compact({

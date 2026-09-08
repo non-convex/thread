@@ -163,3 +163,36 @@ test("v1 Agent Task history is rejected instead of migrated", async (t) => {
 
   await assert.rejects(AgentTaskRepository.open(values.project), /Unsupported Agent Task record/);
 });
+
+test("worker and revision enforce their original scope even when the host policy allows the call", async (t) => {
+  const values = await fixture("thread-agent-task-scope-");
+  const repository = await AgentTaskRepository.open(values.project);
+  await writeFile(path.join(values.project.rootPath, "other.txt"), "private");
+  let calls = 0;
+  const model: ModelClient = { providerId: "test", modelId: "scope-worker", contextWindow: 128_000, maxOutputTokens: 8192,
+    async stream(context) {
+      calls++;
+      if (calls === 1 || calls === 3) return fauxAssistantMessage([
+        fauxToolCall("write", { path: "other.txt", content: "bad" }, { id: `outside-write-${calls}` }),
+        fauxToolCall("edit", { path: "other.txt", oldText: "private", newText: "bad" }, { id: `outside-edit-${calls}` }),
+        fauxToolCall("write", { path: "allowed.txt", content: `revision ${calls}` }, { id: `allowed-${calls}` }),
+      ], { stopReason: "toolUse" });
+      const results = context.messages.slice(-3);
+      assert.deepEqual(results.map((message) => message.role === "toolResult" && message.isError), [true, true, false]);
+      assert.match(JSON.stringify(results[0]), /declared write scope/);
+      return fauxAssistantMessage(fauxText("finished within assigned scope"));
+    },
+  };
+  const orchestrator = new AgentTaskOrchestrator(repository, new AgentProfileRegistry([profile(model)]), values.project.rootPath,
+    undefined, undefined, { toolPolicy: () => ({ allow: true }) });
+  t.after(async () => { await orchestrator.close(); await values.cleanup(); });
+  const signal = new AbortController().signal;
+  const [task] = await orchestrator.delegate([taskSpec("allowed.txt")], { parentTurnId: "turn", toolCallId: "delegate", signal });
+  await orchestrator.waitTasks([task!.taskId], "all", signal);
+  assert.equal(await readFile(path.join(values.project.rootPath, "other.txt"), "utf8"), "private");
+  await orchestrator.requestRevision(task!.taskId, "revise allowed.txt", signal);
+  const [revised] = await orchestrator.waitTasks([task!.taskId], "all", signal);
+  assert.equal(revised!.summary.status, "completed");
+  assert.equal(await readFile(path.join(values.project.rootPath, "allowed.txt"), "utf8"), "revision 3");
+  assert.equal(await readFile(path.join(values.project.rootPath, "other.txt"), "utf8"), "private");
+});

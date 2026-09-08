@@ -1,5 +1,5 @@
 import { createCliRenderer, destroyTreeSitterClient, type CliRenderer } from "@opentui/core";
-import type { ThreadApp } from "../../app.js";
+import type { ThreadApp } from "../../app/thread-app.js";
 import { settlesWithin } from "../../utils/async.js";
 import { ThreadTuiController } from "./controller.js";
 import { mountThreadView } from "./view.js";

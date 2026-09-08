@@ -274,13 +274,6 @@ function createHtmlTextCollector(): { parser: Parser; result: () => string } {
   return { parser, result: () => text.join("").trim() };
 }
 
-export function extractTextFromHtml(html: string): string {
-  const collector = createHtmlTextCollector();
-  collector.parser.write(html);
-  collector.parser.end();
-  return collector.result();
-}
-
 async function extractTextFromHtmlResponsive(html: string, signal: AbortSignal): Promise<string> {
   const collector = createHtmlTextCollector();
   const maybeYield = cooperativeYield();

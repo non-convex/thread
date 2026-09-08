@@ -28,6 +28,8 @@ export interface Turn {
   userEntryId: string;
   status: TurnStatus;
   startedAt: number;
+  /** Missing on legacy records, which captured file checkpoints by default. */
+  fileCheckpoints?: boolean;
   finishedAt?: number;
   error?: { code: string; message: string };
 }

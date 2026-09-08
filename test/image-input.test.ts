@@ -17,7 +17,7 @@ import type {
   ModelDescriptor,
   ModelRequestOptions,
 } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { isSlashCommandInput } from "../src/app/input-router.js";
 import {
   messageWithoutImages,
@@ -243,12 +243,12 @@ test("vision turns reach the model and remain visible in Session Tree history", 
       assert.ok(sent && Array.isArray(sent.content));
       assert.deepEqual(sent.content, [IMAGE, { type: "text", text: "describe this" }]);
 
-      const messages = app.sessionTree.messagesForTurn(result.kind === "turn" ? result.result.turn.id : "");
+      const messages = app.runtime["tree"].messagesForTurn(result.kind === "turn" ? result.result.turn.id : "");
       assert.deepEqual(messages[0]?.content, [IMAGE, { type: "text", text: "describe this" }]);
-      assert.equal(app.sessionTree.rewindCandidates()[0]?.label, "[image] describe this");
-      assert.equal((await app.recall.search(["[image]"])).hits.length, 1);
+      assert.equal(app.runtime["tree"].rewindCandidates()[0]?.label, "[image] describe this");
+      assert.equal((await app.runtime.searchHistory(["[image]"])).hits.length, 1);
 
-      const entries = app.sessionTree.entriesForTurn(result.kind === "turn" ? result.result.turn.id : "");
+      const entries = app.runtime["tree"].entriesForTurn(result.kind === "turn" ? result.result.turn.id : "");
       assert.equal(projectTranscript(entries)[0]?.content, "[image]\ndescribe this");
     } finally {
       await app.close();
@@ -274,7 +274,7 @@ test("text-only models reject a newly attached image before opening a turn", asy
         }),
         /does not accept images/,
       );
-      assert.equal(app.sessionTree.activeLiveTip, null);
+      assert.equal(app.runtime["tree"].activeLiveTip, null);
       assert.equal(model.contexts.length, 0);
     } finally {
       await app.close();

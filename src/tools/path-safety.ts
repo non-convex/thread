@@ -9,6 +9,12 @@ export interface ResolvePathOptions {
   allowedOutsidePaths?: readonly string[];
 }
 
+/** Workspace-relative paths writable through the built-in file tools. */
+export interface FileWriteScope {
+  path: string;
+  kind: "file" | "directory";
+}
+
 function comparable(value: string): string {
   const normalized = path.normalize(value);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -25,8 +31,20 @@ export function isPathInside(root: string, candidate: string): boolean {
   return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
-function samePath(left: string, right: string): boolean {
+export function samePath(left: string, right: string): boolean {
   return comparable(left) === comparable(right);
+}
+
+/** Compare the resolved target to declared paths; directory aliases cannot expand a scope. */
+export async function assertFileWriteScope(rootPath: string, target: string, scopes: readonly FileWriteScope[]): Promise<void> {
+  const root = await realPath(rootPath);
+  const allowed = scopes.some((scope) => {
+    const boundary = path.resolve(root, scope.path);
+    if (!isPathInside(root, boundary)) return false;
+    return scope.kind === "file" ? samePath(boundary, target)
+      : scope.kind === "directory" && isPathInside(boundary, target);
+  });
+  if (!allowed) throw new Error(`File write is outside the declared write scope: ${path.relative(root, target)}. Use a path assigned to this task.`);
 }
 
 function confine(root: string, candidate: string, inputPath: string, kind: "path" | "resolved" | "parent"): void {

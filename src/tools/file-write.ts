@@ -1,7 +1,7 @@
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FileContents, SaveBeforeWrite } from "../file-history/service.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { assertFileWriteScope, resolveWorkspacePath, samePath } from "./path-safety.js";
 import type { ToolContext } from "./types.js";
 
 /** Shared write boundary for built-in edit/write, including worker invocations. */
@@ -14,10 +14,15 @@ export async function updateFile(
     forWrite: true,
     ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
   };
-  const target = await resolveWorkspacePath(context.rootPath, inputPath, options);
+  const resolveTarget = async () => {
+    const target = await resolveWorkspacePath(context.rootPath, inputPath, options);
+    if (context.writeScope) await assertFileWriteScope(context.rootPath, target, context.writeScope);
+    return target;
+  };
+  const target = await resolveTarget();
   const operation = async (save: SaveBeforeWrite) => {
     context.signal.throwIfAborted();
-    await resolveWorkspacePath(context.rootPath, inputPath, options);
+    if (!samePath(await resolveTarget(), target)) throw new Error(`File target changed while waiting to write: ${inputPath}`);
     let before: FileContents | undefined;
     try {
       const info = await lstat(target);

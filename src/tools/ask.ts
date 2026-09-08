@@ -7,7 +7,7 @@ import {
   AskDismissedError,
   createAskRequest,
   type AskQuestion,
-} from "../ui/ask.js";
+} from "../runtime/interaction.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -77,6 +77,13 @@ export function createAskTool(): AgentTool<{ questions: AskQuestion[] }> {
       const invalid = validate(args.questions);
       if (invalid) return { content: invalid, isError: true };
       const request = createAskRequest(args.questions);
+      request.invocation = {
+        sessionId: context.invocation.sessionId ?? null,
+        turnId: context.invocation.turnId ?? null,
+        toolCallId: context.invocation.toolCallId,
+        agentId: context.invocation.agentId ?? "main",
+        ...(context.invocation.taskId ? { taskId: context.invocation.taskId } : {}),
+      };
       try {
         const answers = await context.ask.present(request, context.signal);
         return present(args.questions, answers);

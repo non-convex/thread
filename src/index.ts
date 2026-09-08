@@ -1,7 +1,8 @@
-export { ThreadApp, type ThreadAppOptions, type InputResult } from "./app.js";
+export * from "./runtime.js";
+export { ThreadApp, type ThreadAppOptions, type InputResult } from "./app/thread-app.js";
 export { ProjectService } from "./project/service.js";
 export { discoverProjectRoot } from "./project/discovery.js";
-export { SessionTreeService, type PlannedTurn, type RewindCandidate } from "./session-tree/service.js";
+export { SessionTreeService, type PlannedTurn } from "./session-tree/service.js";
 export { SessionTreeRepository } from "./session-tree/repository.js";
 export { SessionTreeProjection, SessionTreeCorruptionError } from "./session-tree/projection.js";
 export { SessionRecallService, type SessionRecallOptions } from "./session-recall/service.js";
@@ -15,16 +16,13 @@ export {
   COMPACTION_HISTORY_RESERVE_TOKENS,
   COMPACTION_PROGRESS_RESERVE_TOKENS,
   COMPACTION_TARGET_TOKENS,
-  type CompactionResult,
 } from "./context/compaction/index.js";
-export { AgentRuntime, type TurnResult } from "./agent/runtime.js";
+export { AgentRuntime } from "./agent/runtime.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./agent/execution-journal.js";
 export {
   AgentProfileRegistry,
   MAIN_AGENT_PROFILE_ID,
-  type AgentProfile,
-  type AgentProfileDiagnostic,
 } from "./agent/profile.js";
 export { AgentTaskOrchestrator, type AgentTaskOutcome } from "./agent-task/orchestrator.js";
 export { AgentTaskRepository } from "./agent-task/repository.js";
@@ -34,18 +32,6 @@ export {
   IMPLEMENTATION_WORKER_PROFILE_ID,
   type ImplementationWorkerProfileSettings,
 } from "./agent-task/profile.js";
-export {
-  createBuiltinModelClient,
-  createConfiguredModelCatalog,
-  createConfiguredModelClient,
-  PiModelCatalog,
-  PiModelClient,
-  type ModelAuthProviderStatus,
-  type ModelCatalog,
-  type ModelCatalogOptions,
-  type ModelClient,
-  type ModelDescriptor,
-} from "./agent/model-client.js";
 export {
   DEFAULT_AUTH_FILE,
   getAuthFilePath,
@@ -60,7 +46,6 @@ export {
   loadThreadConfig,
   type ThreadConfig,
   type AttributionConfig,
-  type AgentProfileConfig,
   type ImplementationWorkerConfig,
   type DreamerConfig,
   type CustomModelConfig,
@@ -109,37 +94,11 @@ export type {
   AgentPickerItem,
   HistoryViewItem,
 } from "./commands/types.js";
-export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
-export type {
-  ToolEffect,
-  ToolExecutionMode,
-  ToolExecutionPolicy,
-  ToolPlanningContext,
-  ToolResourceAccess,
-  ToolResourceClaim,
-  ToolResourceScope,
-} from "./tools/execution.js";
-export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./tools/execution.js";
-export {
-  ASK_MAX_QUESTIONS,
-  AskDismissedError,
-  AskService,
-  type AskAnswers,
-  type AskOption,
-  type AskPresenter,
-  type AskQuestion,
-  type AskRequest,
-} from "./ui/ask.js";
 export {
   formatSkillsSection,
-  loadSkills,
   skillsDirectory,
-  type LoadedSkills,
-  type Skill,
-  type SkillDiagnostic,
 } from "./skills/loader.js";
 export type { UiEvent, UiEventSink } from "./ui/events.js";
-export { ThreadTerminalApp, type TerminalAppOptions, type TerminalMode } from "./ui/terminal/app.js";
 export type * from "./domain.js";
 
 export const THREAD_VERSION = "0.1.0";

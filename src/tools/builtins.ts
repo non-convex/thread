@@ -6,7 +6,7 @@ import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
 import { listTool } from "./list.js";
 import { readTool } from "./read.js";
-import { ToolRegistry, type AgentTool, type ToolResult } from "./types.js";
+import type { ToolRegistry, AgentTool, ToolResult } from "./types.js";
 import { webFetchTool, webSearchTool } from "./web.js";
 
 function ok(content: string, details?: unknown): ToolResult {
@@ -51,10 +51,22 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
   },
 };
 
-export function registerBuiltinTools(registry: ToolRegistry): void {
-  for (const tool of [readTool, listTool, grepTool, writeTool, editTool, bashTool, webSearchTool, webFetchTool]) {
-    registry.register(tool);
-  }
+const BUILTIN_TOOLS = {
+  read: readTool,
+  list: listTool,
+  grep: grepTool,
+  write: writeTool,
+  edit: editTool,
+  bash: bashTool,
+  websearch: webSearchTool,
+  webfetch: webFetchTool,
+} as const satisfies Record<string, AgentTool>;
+
+export type BuiltinToolName = keyof typeof BUILTIN_TOOLS;
+
+export function builtinTool(name: BuiltinToolName): AgentTool {
+  if (!Object.hasOwn(BUILTIN_TOOLS, name)) throw new Error(`Unknown builtin tool: ${name}`);
+  return BUILTIN_TOOLS[name];
 }
 
 export function registerImplementationWorkerTools(registry: ToolRegistry): void {

@@ -11,7 +11,7 @@ import {
   type Context,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { loadSkills } from "../src/skills/loader.js";
 
 class CapturingModel implements ModelClient {
@@ -95,16 +95,16 @@ test("non-Git projects use one persistent Session Tree and /new creates empty ro
     const model = new CapturingModel();
     const app = await ThreadApp.open({ rootPath: values.root, model, skills: { skills: [], diagnostics: [] } });
     try {
-      const treeId = app.sessionTree.tree.id;
-      const firstSession = app.sessionTree.activeSession.id;
+      const treeId = app.runtime["tree"].tree.id;
+      const firstSession = app.selectedSessionId;
       await app.handleInput("remember alpha", { signal: new AbortController().signal });
       const beforeNew = await readFile(path.join(values.root, "seed.txt"), "utf8");
 
       await app.handleInput("/new", { signal: new AbortController().signal });
-      const secondSession = app.sessionTree.activeSession.id;
+      const secondSession = app.selectedSessionId;
       assert.notEqual(secondSession, firstSession);
-      assert.equal(app.sessionTree.activeLiveTip, null);
-      assert.deepEqual(app.sessionTree.livePath(), []);
+      assert.equal(app.runtime["tree"].activeLiveTip, null);
+      assert.deepEqual(app.runtime["tree"].livePath(), []);
       assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), beforeNew);
 
       await app.handleInput("fresh beta", { signal: new AbortController().signal });
@@ -114,13 +114,13 @@ test("non-Git projects use one persistent Session Tree and /new creates empty ro
 
       await writeFile(path.join(values.root, "seed.txt"), "manually changed\n");
       await app.handleInput(`/session ${firstSession}`, { signal: new AbortController().signal });
-      assert.equal(app.sessionTree.activeSession.id, firstSession);
+      assert.equal(app.selectedSessionId, firstSession);
       assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "manually changed\n");
 
       await app.handleInput("/new", { signal: new AbortController().signal });
-      assert.equal(app.sessionTree.projection.sessions.size, 3);
-      assert.equal(app.sessionTree.tree.id, treeId);
-      assert.ok([...app.sessionTree.projection.sessions.values()].every((session) => session.treeId === treeId));
+      assert.equal(app.runtime["tree"].projection.sessions.size, 3);
+      assert.equal(app.runtime["tree"].tree.id, treeId);
+      assert.ok([...app.runtime["tree"].projection.sessions.values()].every((session) => session.treeId === treeId));
     } finally {
       await app.close();
     }
@@ -138,38 +138,40 @@ test("rewind restores tracked edits and retains the abandoned path", async (t) =
       rootPath: values.root,
       search: { semantic: false },
       model: new EditingModel(),
+      tools: ["write"],
+      fileCheckpoints: true,
       skills: { skills: [], diagnostics: [] },
     });
     try {
       await app.handleInput("first request", { signal: new AbortController().signal });
-      const first = app.sessionTree.activeLiveTip!;
+      const first = app.runtime["tree"].activeLiveTip!;
       await unlink(path.join(values.root, "old.txt"));
 
       await app.handleInput("second request unique-needle", { signal: new AbortController().signal });
-      const second = app.sessionTree.activeLiveTip!;
+      const second = app.runtime["tree"].activeLiveTip!;
       await writeFile(path.join(values.root, "seed.txt"), "C\n");
       await unlink(path.join(values.root, "new.txt"));
       await writeFile(path.join(values.root, "later.txt"), "later\n");
 
-      const candidates = app.sessionTree.rewindCandidates();
+      const candidates = app.runtime["tree"].rewindCandidates();
       assert.deepEqual(candidates.map((item) => item.turnId), [first, second]);
       await app.handleInput(`/rewind ${second}`, { signal: new AbortController().signal });
-      assert.equal(app.sessionTree.activeLiveTip, first);
+      assert.equal(app.runtime["tree"].activeLiveTip, first);
       assert.equal(await readFile(path.join(values.root, "seed.txt"), "utf8"), "B\n");
       await assert.rejects(readFile(path.join(values.root, "old.txt")), /ENOENT/);
       await assert.rejects(readFile(path.join(values.root, "new.txt"), "utf8"), /ENOENT/);
       assert.equal(await readFile(path.join(values.root, "later.txt"), "utf8"), "later\n");
 
       await app.handleInput("replacement request", { signal: new AbortController().signal });
-      const replacement = app.sessionTree.activeLiveTip!;
-      assert.equal(app.sessionTree.projection.turns.get(replacement)!.parentTurnId, first);
-      assert.ok(app.sessionTree.projection.turns.has(second), "the abandoned turn remains factual history");
-      assert.deepEqual(app.sessionTree.livePath().map((turn) => turn.id), [first, replacement]);
+      const replacement = app.runtime["tree"].activeLiveTip!;
+      assert.equal(app.runtime["tree"].projection.turns.get(replacement)!.parentTurnId, first);
+      assert.ok(app.runtime["tree"].projection.turns.has(second), "the abandoned turn remains factual history");
+      assert.deepEqual(app.runtime["tree"].livePath().map((turn) => turn.id), [first, replacement]);
 
-      const found = await app.recall.search(["unique-needle"]);
+      const found = await app.runtime.searchHistory(["unique-needle"]);
       assert.equal(found.hits[0]?.turnId, second);
       assert.equal(found.hits[0]?.pathStatus, "current-session-off-path");
-      assert.deepEqual(await app.fsck(), []);
+      assert.deepEqual(await app.runtime.fsck(), []);
     } finally {
       await app.close();
     }
@@ -185,19 +187,21 @@ test("rewind refuses a missing file backup before moving the live tip", async (t
     const app = await ThreadApp.open({
       rootPath: values.root,
       model: new EditingModel(),
+      tools: ["write"],
+      fileCheckpoints: true,
       skills: { skills: [], diagnostics: [] },
     });
     try {
       await app.handleInput("one", { signal: new AbortController().signal });
-      const turnId = app.sessionTree.activeLiveTip!;
-      const edit = app.sessionTree.entriesForTurn(turnId).find((entry) => entry.type === "file_edit");
+      const turnId = app.runtime["tree"].activeLiveTip!;
+      const edit = app.runtime["tree"].entriesForTurn(turnId).find((entry) => entry.type === "file_edit");
       assert.ok(edit?.type === "file_edit" && edit.before);
-      await rm(app.fileHistory.store.blobPath(edit.before.blobId), { force: true });
+      await rm(app.runtime["files"].store.blobPath(edit.before.blobId), { force: true });
       await assert.rejects(
         app.handleInput(`/rewind ${turnId}`, { signal: new AbortController().signal }),
         /ENOENT/,
       );
-      assert.equal(app.sessionTree.activeLiveTip, turnId);
+      assert.equal(app.runtime["tree"].activeLiveTip, turnId);
     } finally {
       await app.close();
     }
@@ -211,14 +215,14 @@ test("startup seals unfinished turns as interrupted live tips", async (t) => {
 
   await withThreadHome(values.home, async () => {
     const first = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });
-    const running = await first.sessionTree.startTurn("unfinished");
+    const running = await first.runtime["tree"].startTurn("unfinished");
     await first.close();
 
     const reopened = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });
     try {
-      assert.equal(reopened.sessionTree.projection.turns.get(running.id)?.status, "interrupted");
-      assert.equal(reopened.sessionTree.activeLiveTip, running.id);
-      const roles = reopened.sessionTree.messagesForTurn(running.id).map((message) => message.role);
+      assert.equal(reopened.runtime["tree"].projection.turns.get(running.id)?.status, "interrupted");
+      assert.equal(reopened.runtime["tree"].activeLiveTip, running.id);
+      const roles = reopened.runtime["tree"].messagesForTurn(running.id).map((message) => message.role);
       assert.deepEqual(roles, ["user", "assistant"]);
     } finally {
       await reopened.close();
@@ -232,7 +236,7 @@ test("old Session Tree records are rejected instead of migrated", async (t) => {
 
   await withThreadHome(values.home, async () => {
     const app = await ThreadApp.open({ rootPath: values.root, skills: { skills: [], diagnostics: [] } });
-    const eventsPath = path.join(app.project.statePath, "session-tree", "events.jsonl");
+    const eventsPath = path.join(app.runtime.project.statePath, "session-tree", "events.jsonl");
     await app.close();
     await writeFile(eventsPath, `${JSON.stringify({ seq: 1, timestamp: Date.now(), type: "tree_created", tree: { formatVersion: 3 } })}\n`);
     await assert.rejects(

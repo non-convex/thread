@@ -11,7 +11,7 @@ import {
   type Context,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { GLOBAL_MEMORY_FILE, GlobalMemorySnapshots } from "../src/global-memory.js";
 
 class CapturingModel implements ModelClient {
@@ -63,14 +63,15 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
     const firstModel = new CapturingModel();
     const app = await ThreadApp.open({
       rootPath: values.root,
+      globalMemoryPath: memoryPath,
       search: { semantic: false },
       model: firstModel,
       skills: { skills: [], diagnostics: [] },
     });
-    const firstSession = app.sessionTree.activeSession.id;
+    const firstSession = app.selectedSessionId;
     try {
-      const firstBudget = app.contextOccupancy()!.requestTokens;
-      assert.equal(app.agentProfiles.get("main")?.model, firstModel);
+      const firstBudget = app.runtime.contextUsage(app.selectedSessionId)!.requestTokens;
+      assert.equal(app.runtime.model, firstModel);
       await app.handleInput("first", { signal: new AbortController().signal });
       assert.match(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v1/);
 
@@ -80,8 +81,8 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
       assert.doesNotMatch(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v2/);
 
       await app.handleInput("/new", { signal: new AbortController().signal });
-      const secondSession = app.sessionTree.activeSession.id;
-      assert.ok(app.contextOccupancy()!.requestTokens > firstBudget, "the refreshed memory is included in the request budget");
+      const secondSession = app.selectedSessionId;
+      assert.ok(app.runtime.contextUsage(app.selectedSessionId)!.requestTokens > firstBudget, "the refreshed memory is included in the request budget");
       await app.handleInput("new session", { signal: new AbortController().signal });
       assert.match(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v2/);
 
@@ -90,8 +91,8 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
       assert.match(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v1/);
       assert.doesNotMatch(firstModel.contexts.at(-1)!.systemPrompt, /stable-memory-v2/);
 
-      assert.equal((await app.recall.search(["stable-memory-v1"])).hits.length, 0);
-      assert.doesNotMatch(JSON.stringify(app.liveContextMessages()), /stable-memory-v[12]/);
+      assert.equal((await app.runtime.searchHistory(["stable-memory-v1"])).hits.length, 0);
+      assert.doesNotMatch(JSON.stringify(app.runtime.contextMessages(app.selectedSessionId)), /stable-memory-v[12]/);
       await app.handleInput(`/session ${secondSession}`, { signal: new AbortController().signal });
     } finally {
       await app.close();
@@ -100,6 +101,7 @@ test("global memory is a fixed per-Session system-prompt snapshot refreshed by /
     const restartedModel = new CapturingModel();
     const restarted = await ThreadApp.open({
       rootPath: values.root,
+      globalMemoryPath: memoryPath,
       model: restartedModel,
       skills: { skills: [], diagnostics: [] },
     });
@@ -156,6 +158,8 @@ test("the Main agent can write the exact memory file but not a neighboring exter
   await withThreadHome(values.home, async () => {
     const app = await ThreadApp.open({
       rootPath: values.root,
+      globalMemoryPath: memoryPath,
+      tools: ["write"],
       model: new WritingModel(),
       skills: { skills: [], diagnostics: [] },
     });
@@ -164,7 +168,7 @@ test("the Main agent can write the exact memory file but not a neighboring exter
       assert.equal(result.kind, "turn");
       assert.equal(await readFile(memoryPath, "utf8"), "- [2026-09-03] exact memory\n");
       await assert.rejects(readFile(siblingPath, "utf8"), /ENOENT/);
-      const toolResults = app.sessionTree.messagesForTurn(result.result.turn.id)
+      const toolResults = app.runtime["tree"].messagesForTurn(result.result.turn.id)
         .filter((message) => message.role === "toolResult");
       assert.equal(toolResults.find((message) => message.role === "toolResult" && message.toolCallId === "memory-write")?.isError, false);
       assert.equal(toolResults.find((message) => message.role === "toolResult" && message.toolCallId === "sibling-write")?.isError, true);

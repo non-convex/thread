@@ -12,7 +12,7 @@ import {
   type Context,
 } from "@earendil-works/pi-ai";
 import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { ThreadApp } from "../src/app.js";
+import { ThreadApp } from "../src/app/thread-app.js";
 import { noResources } from "../src/tools/execution.js";
 import type { AgentTool } from "../src/tools/types.js";
 
@@ -85,7 +85,7 @@ test("a model retry cancels the old streamed batch and binds results only to the
         .filter((message) => message.role === "toolResult")
         .map((message) => message.role === "toolResult" ? message.toolCallId : "");
       assert.deepEqual(resultIds, ["final-call"]);
-      const entries = app.sessionTree.entriesForTurn(app.sessionTree.activeLiveTip!);
+      const entries = app.runtime["tree"].entriesForTurn(app.runtime["tree"].activeLiveTip!);
       const executionEntries = entries.filter((entry) => entry.type === "tool_execution");
       assert.deepEqual(executionEntries.map((entry) => entry.toolCallId), ["old-call", "final-call"]);
       assert.notEqual(executionEntries[0]!.assistantEntryId, executionEntries[1]!.assistantEntryId);

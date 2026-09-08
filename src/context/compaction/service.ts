@@ -47,7 +47,6 @@ export class ContextCompactionService {
     signal: AbortSignal;
     systemTokens: number;
     tokensBefore: number;
-    appendAfter?: Promise<unknown>;
   }): Promise<CompactionResult> {
     const newestTurn = options.built.compactableTurns.at(-1);
     if (newestTurn && newestTurn.turnId !== options.turnId) {
@@ -93,13 +92,12 @@ export class ContextCompactionService {
       progressSummary,
     );
     const projected = replacementContext(options.built.messages, options.context, projectedMessages);
-    const tokensAfter = contextBudget(projected, projectedMessages, this.model.maxOutputTokens).requestTokens;
+    const tokensAfter = contextBudget(projected, projectedMessages).requestTokens;
     if (options.tokensBefore - tokensAfter < minimumUsefulSavings(options.tokensBefore)) {
       return { compacted: false };
     }
 
     options.signal.throwIfAborted();
-    await options.appendAfter;
     const entry = await this.tree.appendCompaction({
       turnId: options.turnId,
       summary: historySummary,

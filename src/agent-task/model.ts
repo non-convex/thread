@@ -1,8 +1,7 @@
 import type { Message, Usage } from "@earendil-works/pi-ai";
 import type { ToolExecutionFact } from "../agent/execution-journal.js";
-
-// Source-level compatibility for callers while shared profile types live in agent/.
-export type { AgentProfile, AgentProfileDiagnostic } from "../agent/profile.js";
+import type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
+export type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
 
 export const AGENT_TASK_FORMAT = "thread-agent-task-v2" as const;
 export const AGENT_TASK_TOOL_NAMES = new Set([
@@ -11,11 +10,6 @@ export const AGENT_TASK_TOOL_NAMES = new Set([
   "request_revision",
   "cancel_task",
 ]);
-
-export interface AgentTaskWriteScope {
-  path: string;
-  kind: "file" | "directory";
-}
 
 export interface ImplementationTaskSpec {
   title: string;

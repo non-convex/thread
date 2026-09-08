@@ -1,64 +1,9 @@
-import type { AgentTaskSummary } from "../agent-task/model.js";
+import type { ExecutionEvent } from "../runtime/events.js";
 
-export type AgentTaskLiveEvent =
-  | { type: "assistant_started"; step: number }
-  | { type: "assistant_text_delta"; step: number; delta: string }
-  | { type: "assistant_thinking_delta"; step: number; delta: string }
-  | { type: "tool_started"; id: string; name: string; args: Record<string, unknown>; phase?: "queued" | "running" }
-  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string; content?: string };
-
-export type UiEvent =
-  | { type: "agent_task_created"; summary: AgentTaskSummary }
-  | { type: "agent_task_updated"; summary: AgentTaskSummary }
-  | { type: "agent_task_trace"; taskId: string; event: AgentTaskLiveEvent }
+/** Presentation events for TUI commands and execution progress. */
+export type UiEvent = ExecutionEvent
   | { type: "command_started"; name: string }
-  | { type: "command_finished"; name: string; ok: boolean }
-  | {
-      type: "session_changed";
-      sessionId: string;
-      liveTipTurnId: string | null;
-      reason: "turn" | "new" | "opened" | "rewind";
-    }
-  | { type: "turn_preparing"; input: string; sessionId: string }
-  | {
-      type: "turn_started";
-      turnId: string;
-      userEntryId?: string;
-      input: string;
-      sessionId: string;
-    }
-  | { type: "assistant_started"; step: number }
-  | { type: "assistant_text_delta"; step: number; delta: string }
-  | { type: "assistant_thinking_delta"; step: number; delta: string }
-  | {
-      type: "model_retry_scheduled";
-      step: number;
-      attempt: number;
-      maxAttempts: number;
-      delayMs: number;
-      errorMessage: string;
-    }
-  | { type: "model_retry_started"; step: number; attempt: number; maxAttempts: number }
-  | { type: "context_updated"; percent: number }
-  | { type: "tool_started"; id: string; name: string; args: Record<string, unknown>; phase?: "queued" | "running" }
-  | { type: "tool_finished"; id: string; name: string; isError: boolean; error?: string; content?: string }
-  | { type: "compaction_started"; reason: "threshold" | "overflow" | "manual" }
-  | { type: "compaction_finished"; reason: "threshold" | "overflow" | "manual"; ok: false }
-  | {
-      type: "compaction_finished";
-      reason: "threshold" | "overflow" | "manual";
-      ok: true;
-      entryId?: string;
-      summarizedSteps?: number;
-      retainedSteps?: number;
-      tokensSaved?: number;
-    }
-  | {
-      type: "turn_finished";
-      outcome: "completed" | "interrupted" | "failed";
-      error?: string;
-    };
-
+  | { type: "command_finished"; name: string; ok: boolean };
 export type UiEventSink = (event: UiEvent) => void;
 
 export type UiEventBatchSink = (events: readonly UiEvent[]) => void;
@@ -80,12 +25,13 @@ export class UiEventBatcher {
   push(event: UiEvent): void {
     const previous = this.pending.at(-1);
     if ((event.type === "assistant_text_delta" || event.type === "assistant_thinking_delta") &&
-        previous?.type === event.type && previous.step === event.step) {
+        previous?.type === event.type && previous.step === event.step && previous.entryId === event.entryId) {
       previous.delta += event.delta;
     } else if (event.type === "agent_task_trace" && previous?.type === "agent_task_trace" &&
         previous.taskId === event.taskId &&
         (event.event.type === "assistant_text_delta" || event.event.type === "assistant_thinking_delta") &&
-        previous.event.type === event.event.type && previous.event.step === event.event.step) {
+        previous.event.type === event.event.type && previous.event.step === event.event.step &&
+        previous.event.entryId === event.event.entryId) {
       previous.event.delta += event.event.delta;
     } else {
       this.pending.push(event);
@@ -113,9 +59,5 @@ export class UiEventBatcher {
 
 export function safeUiEvent(sink: UiEventSink | undefined, event: UiEvent): void {
   if (!sink) return;
-  try {
-    sink(event);
-  } catch {
-    // Presentation must never change durable execution semantics.
-  }
+  try { sink(event); } catch { /* Rendering cannot change execution semantics. */ }
 }
