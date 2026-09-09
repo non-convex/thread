@@ -11,10 +11,10 @@ import {
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
-import { noResources } from "../src/tools/execution.js";
-import type { AgentTool } from "../src/tools/types.js";
+import { noResources } from "../src/core/tools/execution.js";
+import type { AgentTool } from "../src/core/tools/types.js";
 
 async function withHome<T>(home: string, operation: () => Promise<T>): Promise<T> {
   const before = process.env.THREAD_HOME;

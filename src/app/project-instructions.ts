@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises";
 import path from "node:path";
-import { resolveWorkspacePath } from "../tools/path-safety.js";
+import { resolveWorkspacePath } from "../core/tools/path-safety.js";
 
 export const PROJECT_INSTRUCTIONS_MAX_BYTES = 32 * 1024;
 

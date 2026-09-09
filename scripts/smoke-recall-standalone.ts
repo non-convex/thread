@@ -4,10 +4,10 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ProjectService } from "../src/project/service.js";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
-import { MODEL_FILES, MODEL_REPO, MODEL_REVISION, prepareModel } from "../src/session-recall/model-assets.js";
+import { ProjectService } from "../src/core/project/service.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
+import { MODEL_FILES, MODEL_REPO, MODEL_REVISION, prepareModel } from "../src/core/session-recall/model-assets.js";
 
 const input = process.argv[2];
 if (!input) throw new Error("Usage: bun scripts/smoke-recall-standalone.ts <binary>");

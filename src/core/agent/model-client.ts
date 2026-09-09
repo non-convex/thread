@@ -1,0 +1,405 @@
+import {
+  type AuthInteraction,
+  type Api,
+  type AssistantMessage,
+  type CacheRetention,
+  type Context,
+  type CredentialStore,
+  InMemoryCredentialStore,
+  type Model,
+  type ModelThinkingLevel,
+  type Models,
+  type MutableModels,
+  createProvider,
+  getSupportedThinkingLevels,
+  retryAssistantCall,
+  type ThinkingLevel,
+  type ToolCall,
+} from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { resolveConfigHeaders, resolveConfigValue } from "../config/config-value.js";
+import type { CustomProviderConfig, ModelOverrideConfig, SupportedCustomApi } from "../config/model-config.js";
+
+/** Transient provider errors (408/409/429/5xx and server-requested retries). */
+export const DEFAULT_MODEL_MAX_RETRIES = 10;
+/** Initial backoff for assistant-level retries; doubles each attempt. */
+export const DEFAULT_MODEL_RETRY_BASE_DELAY_MS = 500;
+
+export interface ModelRetryCallbacks {
+  onRetryScheduled?: (attempt: number, maxAttempts: number, delayMs: number, errorMessage: string) => void | Promise<void>;
+  onRetryAttemptStart?: (attempt: number, maxAttempts: number) => void | Promise<void>;
+  onRetryFinished?: (success: boolean, attempt: number, finalError?: string) => void | Promise<void>;
+}
+
+export interface ModelRequestOptions {
+  signal: AbortSignal;
+  maxTokens?: number;
+  reasoning?: ThinkingLevel;
+  /** Cache partition shared by matching request prefixes. Defaults to the client cacheKey. */
+  sessionId?: string;
+  /** Per-request cache lifetime; defaults to the client cacheRetention. */
+  cacheRetention?: CacheRetention;
+  /** Assistant-level transient retries; defaults to {@link DEFAULT_MODEL_MAX_RETRIES}. */
+  maxRetries?: number;
+  /** Backoff before the first retry; defaults to {@link DEFAULT_MODEL_RETRY_BASE_DELAY_MS}. */
+  retryBaseDelayMs?: number;
+  onRetryScheduled?: ModelRetryCallbacks["onRetryScheduled"];
+  onRetryAttemptStart?: ModelRetryCallbacks["onRetryAttemptStart"];
+  onRetryFinished?: ModelRetryCallbacks["onRetryFinished"];
+  onTextDelta?: (delta: string) => void;
+  onThinkingDelta?: (delta: string) => void;
+  /** Called when a streamed tool block has complete arguments, before the assistant response itself finishes. */
+  onToolCallComplete?: (call: ToolCall, contentIndex: number) => void | Promise<void>;
+}
+
+export interface ModelClient {
+  readonly modelId: string;
+  readonly providerId: string;
+  readonly contextWindow: number;
+  readonly maxOutputTokens: number;
+  readonly reasoning?: boolean;
+  readonly supportedThinkingLevels?: readonly ModelThinkingLevel[];
+  /** Default cache partition, set by withCacheKey(). */
+  readonly cacheKey?: string;
+  /** Default prompt-cache lifetime for this client's requests. */
+  readonly cacheRetention?: CacheRetention | undefined;
+  /** When true, user messages may include image blocks. */
+  readonly acceptsImages?: boolean;
+  stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
+}
+
+export interface ModelDescriptor {
+  providerId: string;
+  modelId: string;
+  name: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  reasoning: boolean;
+  acceptsImages?: boolean;
+}
+
+export interface ModelCatalog {
+  list(providerId?: string): ModelDescriptor[];
+  listAll?(providerId?: string): ModelDescriptor[];
+  createClient(providerId: string, modelId: string): ModelClient;
+}
+
+export interface ModelAuthProviderStatus {
+  providerId: string;
+  name: string;
+  authenticated: boolean;
+  credentialType?: "api_key" | "oauth";
+}
+
+export interface ModelCatalogOptions {
+  credentials?: CredentialStore;
+  enabledProviderIds?: readonly string[];
+  modelOverrides?: Readonly<Record<string, ModelOverrideConfig>>;
+}
+
+export class PiModelClient implements ModelClient {
+  readonly modelId: string;
+  readonly providerId: string;
+  readonly contextWindow: number;
+  readonly maxOutputTokens: number;
+  readonly reasoning: boolean;
+  readonly supportedThinkingLevels: readonly ModelThinkingLevel[];
+  readonly cacheKey: string;
+  readonly cacheRetention: CacheRetention | undefined;
+  readonly acceptsImages: boolean;
+  private readonly model: Model<Api>;
+
+  constructor(
+    private readonly models: Models,
+    model: Model<Api>,
+    cacheKey?: string,
+    cacheRetention?: CacheRetention,
+    override?: ModelOverrideConfig,
+  ) {
+    this.model = override ? { ...model, contextWindow: override.contextWindow } : model;
+    this.modelId = this.model.id;
+    this.providerId = this.model.provider;
+    this.contextWindow = this.model.contextWindow;
+    this.maxOutputTokens = this.model.maxTokens;
+    this.reasoning = this.model.reasoning;
+    this.supportedThinkingLevels = getSupportedThinkingLevels(this.model);
+    this.cacheKey = cacheKey ?? `thread:${this.providerId}:${this.modelId}`;
+    this.cacheRetention = cacheRetention;
+    this.acceptsImages = this.model.input.includes("image");
+  }
+
+  /** Copy this client with a separate cache partition. */
+  withCacheKey(cacheKey: string): PiModelClient {
+    return new PiModelClient(this.models, this.model, cacheKey, this.cacheRetention);
+  }
+
+  /** Same model and partition, different cache lifetime. */
+  withCacheRetention(cacheRetention: CacheRetention | undefined): PiModelClient {
+    return new PiModelClient(this.models, this.model, this.cacheKey, cacheRetention);
+  }
+
+  async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
+    const maxRetries = options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES;
+    const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
+    const cacheRetention = options.cacheRetention ?? this.cacheRetention;
+    let scheduledAttempt = 0;
+    return retryAssistantCall(
+      async () => {
+        const stream = this.models.streamSimple(this.model, context, {
+          signal: options.signal,
+          ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+          ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+          // Retries are handled above so the TUI can observe every attempt.
+          maxRetries: 0,
+          sessionId: options.sessionId ?? this.cacheKey,
+          ...(cacheRetention === undefined ? {} : { cacheRetention }),
+        });
+        for await (const event of stream) {
+          if (event.type === "text_delta") options.onTextDelta?.(event.delta);
+          if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
+          if (event.type === "toolcall_end") {
+            await options.onToolCallComplete?.(structuredClone(event.toolCall), event.contentIndex);
+          }
+        }
+        return stream.result();
+      },
+      { enabled: true, maxRetries, baseDelayMs },
+      options.signal,
+      {
+        onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
+          scheduledAttempt = attempt;
+          await options.onRetryScheduled?.(attempt, maxAttempts, delayMs, errorMessage);
+        },
+        onRetryAttemptStart: async () => {
+          await options.onRetryAttemptStart?.(scheduledAttempt, maxRetries);
+        },
+        onRetryFinished: async (success, attempt, finalError) => {
+          await options.onRetryFinished?.(success, attempt, finalError);
+        },
+      },
+    );
+  }
+}
+
+export class PiModelCatalog implements ModelCatalog {
+  private readonly configuredModelKeys: ReadonlySet<string> | undefined;
+  private readonly enabledProviderIds: ReadonlySet<string>;
+  private readonly modelOverrides: ReadonlyMap<string, ModelOverrideConfig>;
+
+  constructor(
+    private readonly models: Models,
+    configuredModels?: readonly { providerId: string; modelId: string }[],
+    private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
+    enabledProviderIds: readonly string[] = [],
+    modelOverrides: Readonly<Record<string, ModelOverrideConfig>> = {},
+  ) {
+    this.configuredModelKeys = configuredModels === undefined
+      ? undefined
+      : new Set(configuredModels.map((model) => modelKey(model.providerId, model.modelId)));
+    this.enabledProviderIds = new Set(enabledProviderIds);
+    this.modelOverrides = new Map(Object.entries(modelOverrides).map(([key, override]) => [key, { ...override }]));
+    for (const [key, override] of this.modelOverrides) {
+      const model = this.models.getModels().find((candidate) => modelOverrideKey(candidate.provider, candidate.id) === key);
+      if (!model) throw new Error(`Model override targets an unknown model: ${key}`);
+      if (override.contextWindow < model.maxTokens) {
+        throw new Error(`Model override contextWindow cannot be smaller than maxTokens for ${key}`);
+      }
+    }
+  }
+
+  list(providerId?: string): ModelDescriptor[] {
+    const models = this.models.getModels(providerId).filter((model) =>
+      this.configuredModelKeys === undefined ||
+      this.enabledProviderIds.has(model.provider) ||
+      this.configuredModelKeys.has(modelKey(model.provider, model.id)),
+    );
+    return this.describe(models);
+  }
+
+  listAll(providerId?: string): ModelDescriptor[] {
+    return this.describe(this.models.getModels(providerId));
+  }
+
+  private describe(models: readonly Model<Api>[]): ModelDescriptor[] {
+    return models
+      .map((model) => ({
+        providerId: model.provider,
+        modelId: model.id,
+        name: model.name,
+        contextWindow: this.modelOverrides.get(modelOverrideKey(model.provider, model.id))?.contextWindow ?? model.contextWindow,
+        maxOutputTokens: model.maxTokens,
+        reasoning: model.reasoning,
+        acceptsImages: model.input.includes("image"),
+      }))
+      .sort((left, right) =>
+        left.providerId.localeCompare(right.providerId) || left.modelId.localeCompare(right.modelId),
+      );
+  }
+
+  createClient(providerId: string, modelId: string): PiModelClient {
+    return selectModelClient(
+      this.models,
+      providerId,
+      modelId,
+      this.modelOverrides.get(modelOverrideKey(providerId, modelId)),
+    );
+  }
+
+  async login(providerId: string, interaction: AuthInteraction): Promise<void> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+    if (!provider.auth.oauth) throw new Error(`Provider ${providerId} does not support subscription login`);
+    await this.models.login(providerId, "oauth", interaction);
+  }
+
+  async logout(providerId: string, signal?: AbortSignal): Promise<void> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+    if (!provider.auth.oauth) throw new Error(`Provider ${providerId} does not support subscription login`);
+    await this.models.logout(providerId, signal ? { signal } : undefined);
+  }
+
+  async authStatus(signal?: AbortSignal): Promise<ModelAuthProviderStatus[]> {
+    const stored = new Map((await this.credentials.list(signal ? { signal } : undefined))
+      .map((credential) => [credential.providerId, credential.type] as const));
+    return this.models.getProviders()
+      .filter((provider) => provider.auth.oauth !== undefined)
+      .map((provider) => {
+        const credentialType = stored.get(provider.id);
+        return {
+          providerId: provider.id,
+          name: provider.name,
+          authenticated: credentialType === "oauth",
+          ...(credentialType ? { credentialType } : {}),
+        };
+      })
+      .sort((left, right) => left.providerId.localeCompare(right.providerId));
+  }
+}
+
+export function createBuiltinModelClient(providerId: string, modelId: string): PiModelClient {
+  const credentials = new InMemoryCredentialStore();
+  registerBunOAuthFlows();
+  return new PiModelCatalog(builtinModels({ credentials }), undefined, credentials).createClient(providerId, modelId);
+}
+
+function apiFor(api: SupportedCustomApi) {
+  if (api === "openai-completions") return openAICompletionsApi();
+  if (api === "openai-responses") return openAIResponsesApi();
+  return anthropicMessagesApi();
+}
+
+function registerCustomProvider(models: MutableModels, providerId: string, config: CustomProviderConfig): void {
+  if (!config.apiKeyEnv && !config.apiKey) throw new Error(`Provider ${providerId} has no API key configuration`);
+  const providerModels: Model<Api>[] = config.models.map((model) => {
+    const compat =
+      config.compat || model.compat ? { ...(config.compat ?? {}), ...(model.compat ?? {}) } : undefined;
+    return {
+      id: model.id,
+      name: model.name,
+      api: config.api,
+      provider: providerId,
+      baseUrl: config.baseUrl,
+      reasoning: model.reasoning,
+      input: model.input,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(model.samplingParams ? { samplingParams: model.samplingParams } : {}),
+      ...(compat ? { compat: compat as NonNullable<Model<Api>["compat"]> } : {}),
+    };
+  });
+  models.setProvider(
+    createProvider({
+      id: providerId,
+      name: config.name,
+      baseUrl: config.baseUrl,
+      auth: {
+        apiKey: {
+          name: `${config.name} API key`,
+          resolve: async ({ ctx, credential, signal }) => {
+            signal.throwIfAborted();
+            const key =
+              credential?.key ??
+              (config.apiKeyEnv
+                ? await ctx.env(config.apiKeyEnv)
+                : await resolveConfigValue(config.apiKey!, (name) => ctx.env(name)));
+            const headers = await resolveConfigHeaders(config.headers, (name) => ctx.env(name));
+            signal.throwIfAborted();
+            if (!key) return undefined;
+            return {
+              auth: { apiKey: key, ...(headers ? { headers } : {}) },
+              source: credential?.key ? "stored credential" : config.apiKeyEnv ?? "pi models.json",
+            };
+          },
+        },
+      },
+      models: providerModels,
+      api: apiFor(config.api),
+    }),
+  );
+}
+
+export function createConfiguredModelClient(
+  providerId: string,
+  modelId: string,
+  providers: Record<string, CustomProviderConfig>,
+): PiModelClient {
+  return createConfiguredModelCatalog(providers).createClient(providerId, modelId);
+}
+
+export function createConfiguredModelCatalog(
+  providers: Record<string, CustomProviderConfig>,
+  options: ModelCatalogOptions = {},
+): PiModelCatalog {
+  const credentials = options.credentials ?? new InMemoryCredentialStore();
+  // Standalone Bun executables cannot discover pi-ai's private lazy OAuth
+  // modules at runtime, so register their statically bundled loaders first.
+  registerBunOAuthFlows();
+  const models = builtinModels({ credentials });
+  const configuredModels: Array<{ providerId: string; modelId: string }> = [];
+  for (const [customProviderId, config] of Object.entries(providers)) {
+    registerCustomProvider(models, customProviderId, config);
+    configuredModels.push(...config.models.map((model) => ({ providerId: customProviderId, modelId: model.id })));
+  }
+  return new PiModelCatalog(
+    models,
+    configuredModels,
+    credentials,
+    options.enabledProviderIds,
+    options.modelOverrides,
+  );
+}
+
+function modelKey(providerId: string, modelId: string): string {
+  return `${providerId}\0${modelId}`;
+}
+
+function modelOverrideKey(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`;
+}
+
+function selectModelClient(
+  models: Models,
+  providerId: string,
+  modelId: string,
+  override?: ModelOverrideConfig,
+): PiModelClient {
+  const model = models.getModel(providerId, modelId);
+  if (!model) {
+    const examples = models
+      .getModels(providerId)
+      .slice(0, 8)
+      .map((candidate) => candidate.id)
+      .join(", ");
+    throw new Error(
+      `Unknown model ${providerId}/${modelId}.${examples ? ` Available examples: ${examples}` : " Unknown provider."}`,
+    );
+  }
+  return new PiModelClient(models, model, undefined, undefined, override);
+}

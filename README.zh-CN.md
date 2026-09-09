@@ -285,18 +285,23 @@ bun run build
 主要代码边界：
 
 ```text
-src/session-tree/     持久化项目历史与路径
-src/session-recall/   历史检索、派生索引与本地 embedding
-src/file-history/     内置文件编辑备份、恢复、校验与 GC
-src/context/          live-path 投影与 compaction
-src/agent/            模型 step、工具调度、journal 与 turn
-src/agent-task/       共享工作区 worker 生命周期与任务 journal
-src/dreamer/          后台全局记忆整理与调度
-src/runtime/          公共 runtime、宿主配置、事件与生命周期
-src/app/              执行组装与终端命令路由
-src/tools/            内置 agent 工具与执行策略
-src/ui/               plain 与全屏终端界面
+src/runtime.ts           thread/runtime 公共入口
+src/core/runtime/        runtime 配置、事件与生命周期
+src/core/agent/          模型 step、工具调度、journal 与 turn
+src/core/tools/          内置工具与执行策略
+src/core/skills/         显式 Skill 路径与加载
+src/core/session-tree/   持久化项目历史与路径
+src/core/context/        live-path 投影与 compaction
+src/core/file-history/   内置文件编辑 checkpoint 与恢复
+src/core/agent-task/     共享工作区 worker 与任务 journal
+src/core/session-recall/ 历史检索、索引与本地 embedding
+src/core/dreamer/        后台全局记忆整理
+src/app/                coding 默认配置、配置加载、命令与应用扩展
+src/cli/                启动与认证命令
+src/ui/                 plain 与全屏终端界面
 ```
+
+可嵌入实现统一位于 `src/core/`，不能导入应用或界面代码，类型引用也遵守这一边界。仓库仍是一个包，保留 `thread`、`thread/runtime` 和 `thread/tui` 三个入口。宿主接入与依赖边界见 [runtime 使用指南](./docs/runtime.md)。
 
 延伸阅读：
 

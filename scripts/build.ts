@@ -45,4 +45,4 @@ if (!library.success) {
 }
 // Keep shared chunks beside this worker: worker-path resolves it relative to
 // import.meta.url, whether the caller lives in an entry or a shared chunk.
-await build("src/session-recall/embedding-worker.ts", "embedding-worker.js");
+await build("src/core/session-recall/embedding-worker.ts", "embedding-worker.js");

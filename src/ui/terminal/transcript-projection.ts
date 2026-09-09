@@ -1,6 +1,6 @@
-import type { CompactionEntry, SessionEntry, ToolExecutionEntry } from "../../session-tree/model.js";
-import { userContentDisplay } from "../../session-tree/user-content.js";
-import { AGENT_TASK_TOOL_NAMES, type AgentTask, type AgentTaskSummary } from "../../agent-task/model.js";
+import type { CompactionEntry, SessionEntry, ToolExecutionEntry } from "../../core/session-tree/model.js";
+import { userContentDisplay } from "../../core/session-tree/user-content.js";
+import { AGENT_TASK_TOOL_NAMES, type AgentTask, type AgentTaskSummary } from "../../core/agent-task/model.js";
 import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
 
 function textContent(content: unknown): string {

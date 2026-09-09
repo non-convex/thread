@@ -3,11 +3,11 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { Type, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { ThreadRuntime } from "../src/runtime/thread-runtime.js";
-import type { ThreadRuntimeOptions } from "../src/runtime/options.js";
-import type { RuntimeEvent } from "../src/runtime/events.js";
-import type { HostToolCall } from "../src/runtime/policy.js";
-import type { AgentTool } from "../src/tools/types.js";
+import { ThreadRuntime } from "../src/core/runtime/thread-runtime.js";
+import type { ThreadRuntimeOptions } from "../src/core/runtime/options.js";
+import type { RuntimeEvent } from "../src/core/runtime/events.js";
+import type { HostToolCall } from "../src/core/runtime/policy.js";
+import type { AgentTool } from "../src/core/tools/types.js";
 import { fixture, ScriptedModel, skills } from "./fixtures/runtime.js";
 
 test("context usage reads the requested session's memory snapshot without changing another session", async (t) => {

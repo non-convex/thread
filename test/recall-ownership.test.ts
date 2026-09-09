@@ -3,10 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { LocalEmbedding, type EmbeddingEngine } from "../src/session-recall/embedding.js";
-import { SessionRecallService } from "../src/session-recall/service.js";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
+import { LocalEmbedding, type EmbeddingEngine } from "../src/core/session-recall/embedding.js";
+import { SessionRecallService } from "../src/core/session-recall/service.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
 
 async function fixture(t: TestContext): Promise<SessionTreeService> {
   const directory = await mkdtemp(path.join(tmpdir(), "thread-recall-ownership-"));

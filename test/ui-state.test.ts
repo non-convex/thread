@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentTaskSummary } from "../src/agent-task/model.js";
+import type { AgentTaskSummary } from "../src/core/agent-task/model.js";
 import { createUiState, formatDurationMs, statusLineParts } from "../src/ui/state.js";
 import { reduceUiEvent } from "../src/ui/reducer.js";
 import { projectTranscript } from "../src/ui/terminal/transcript-projection.js";

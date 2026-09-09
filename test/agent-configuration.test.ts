@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { spyOn } from "bun:test";
-import * as git from "../src/utils/git.js";
+import * as git from "../src/ui/terminal/git.js";
 import {
   fauxAssistantMessage,
   fauxText,
@@ -16,12 +16,13 @@ import type {
   ModelClient,
   ModelDescriptor,
   ModelRequestOptions,
-} from "../src/agent/model-client.js";
+} from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
-import { DEFAULT_COMMIT_ATTRIBUTION, formatCommitAttributionPrompt } from "../src/agent/system-prompt.js";
-import { GLOBAL_MEMORY_FILE } from "../src/global-memory.js";
-import { loadThreadConfig } from "../src/config/thread-config.js";
-import { loadThreadState, saveThreadState, type ThreadState } from "../src/config/thread-state.js";
+import { DEFAULT_COMMIT_ATTRIBUTION, formatCommitAttributionPrompt } from "../src/app/system-prompt.js";
+import { GLOBAL_MEMORY_FILE } from "../src/core/global-memory.js";
+import { loadThreadConfig } from "../src/app/config/thread-config.js";
+import { loadThreadState, saveThreadState } from "../src/app/config/thread-state.js";
+import { type ThreadState } from "../src/core/runtime/state.js";
 import { primarySlashSuggestions, ThreadTuiController } from "../src/ui/terminal/controller.js";
 import { filteredModels, isFloatingOverlay, type UiScreen } from "../src/ui/state.js";
 

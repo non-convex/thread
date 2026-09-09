@@ -1,10 +1,10 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app/thread-app.js";
-import type { CommandResult, EphemeralView } from "../../commands/types.js";
-import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../context/usage.js";
-import { gitBranchName } from "../../utils/git.js";
-import type { RuntimeEvent } from "../../runtime/events.js";
-import { AskService } from "../../runtime/interaction.js";
+import type { CommandResult, EphemeralView } from "../../app/commands/types.js";
+import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../core/context/usage.js";
+import { gitBranchName } from "./git.js";
+import type { RuntimeEvent } from "../../core/runtime/events.js";
+import { AskService } from "../../core/runtime/interaction.js";
 import { UiEventBatcher, type UiEvent } from "../events.js";
 import { composerImageContent, type ComposerImage } from "../images.js";
 import {

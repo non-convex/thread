@@ -320,8 +320,8 @@ Thread 对路径的判断很保守：
 - `src/ui/terminal/composer-paste.ts`：把各种粘贴来源收束成附件或文字
 - `src/ui/images.ts`：图片校验、缩放、编码、路径读取
 - `src/ui/terminal/session-screen.tsx`：附件行和提交行为
-- `src/session-tree/user-content.ts`：图文消息组装、展示和纯文本模型降级
-- `src/session-tree/service.ts`：把完整用户内容写进 turn
-- `src/agent/runtime.ts` / `src/agent/turn-runner.ts`：把图文消息送进模型上下文
-- `src/agent/model-client.ts`：从模型元数据读取视觉能力
+- `src/core/session-tree/user-content.ts`：图文消息组装、展示和纯文本模型降级
+- `src/core/session-tree/service.ts`：把完整用户内容写进 turn
+- `src/core/agent/runtime.ts` / `src/core/agent/turn-runner.ts`：把图文消息送进模型上下文
+- `src/core/agent/model-client.ts`：从模型元数据读取视觉能力
 - `test/image-input.test.ts`：图片处理、持久化、模型能力和模型切换测试

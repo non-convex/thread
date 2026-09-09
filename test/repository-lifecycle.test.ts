@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm, writeFile, type FileHandle } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import type { AgentTask } from "../src/agent-task/model.js";
-import { AgentTaskRepository } from "../src/agent-task/repository.js";
-import type { Project } from "../src/project/model.js";
-import type { SessionTreeEvent } from "../src/session-tree/model.js";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
+import type { AgentTask } from "../src/core/agent-task/model.js";
+import { AgentTaskRepository } from "../src/core/agent-task/repository.js";
+import type { Project } from "../src/core/project/model.js";
+import type { SessionTreeEvent } from "../src/core/session-tree/model.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
 
 function deferred() {
   let resolve!: () => void;

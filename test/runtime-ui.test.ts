@@ -5,11 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { spyOn } from "bun:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall, type ThinkingLevel } from "@earendil-works/pi-ai";
-import type { ModelClient } from "../src/agent/model-client.js";
+import type { ModelClient } from "../src/core/agent/model-client.js";
 import { ThreadApp, type ThreadAppOptions } from "../src/app/thread-app.js";
 import { ThreadTuiController } from "../src/ui/terminal/controller.js";
 import type { TerminalKey } from "../src/ui/terminal/view-model.js";
-import * as git from "../src/utils/git.js";
+import * as git from "../src/ui/terminal/git.js";
 
 function gate() {
   let resolve!: () => void;

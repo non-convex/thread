@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { createId } from "../utils/id.js";
+import { createId } from "../core/utils/id.js";
 
 export const MAX_COMPOSER_IMAGES = 8;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;

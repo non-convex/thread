@@ -285,18 +285,23 @@ bun run build
 Main code boundaries:
 
 ```text
-src/session-tree/     persistent project history and paths
-src/session-recall/   history retrieval, derived indexes, and local embeddings
-src/file-history/     built-in file edit backups, restore, verification, and GC
-src/context/          live-path projection and compaction
-src/agent/            model steps, tool scheduling, journals, and turns
-src/agent-task/       shared-workspace worker lifecycle and task journal
-src/dreamer/          background global-memory curation and scheduling
-src/runtime/          public runtime, host configuration, events, and lifecycle
-src/app/              execution composition and terminal command routing
-src/tools/            built-in agent tools and execution policies
-src/ui/               plain and full-screen terminal interfaces
+src/runtime.ts           public thread/runtime entrypoint
+src/core/runtime/        runtime configuration, events, and lifecycle
+src/core/agent/          model steps, tool scheduling, journals, and turns
+src/core/tools/          built-in tools and execution policies
+src/core/skills/         declared Skill paths and loading
+src/core/session-tree/   persistent project history and paths
+src/core/context/        live-path projection and compaction
+src/core/file-history/   built-in file edit checkpoints and restore
+src/core/agent-task/     shared-workspace workers and task journals
+src/core/session-recall/ history retrieval, indexes, and local embeddings
+src/core/dreamer/        background global-memory curation
+src/app/                coding defaults, configuration loading, commands, and extensions
+src/cli/                startup and authentication commands
+src/ui/                 plain and full-screen terminal interfaces
 ```
+
+All embeddable implementation lives in `src/core/`; it cannot import application or frontend code, including through types. The repository remains one package with `thread`, `thread/runtime`, and `thread/tui` entrypoints. See the [runtime guide](./docs/runtime.md) for host integration and dependency boundaries.
 
 Further reading:
 

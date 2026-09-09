@@ -137,4 +137,4 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。
 - `src/ui/terminal/spinner.tsx`：共享动画时钟。
 - `src/ui/events.ts` / `src/ui/state.ts`：展示事件、live 状态、`tool_finished.content`。
-- `src/agent/tool-call-executor.ts`：把工具输出送进 UI。
+- `src/core/agent/tool-call-executor.ts`：生成工具执行事件，由 UI 订阅展示。

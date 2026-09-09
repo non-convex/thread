@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
-import { SessionRecallService } from "../src/session-recall/service.js";
-import { createSessionReadTool, SESSION_READ_MAX_BYTES } from "../src/tools/session-recall.js";
-import type { ToolContext } from "../src/tools/types.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
+import { SessionRecallService } from "../src/core/session-recall/service.js";
+import { createSessionReadTool, SESSION_READ_MAX_BYTES } from "../src/core/tools/session-recall.js";
+import type { ToolContext } from "../src/core/tools/types.js";
 
 test("session_read pages a large historical turn without losing text or splitting Unicode", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "thread-read-pages-"));

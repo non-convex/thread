@@ -1,10 +1,10 @@
 /** Supported headless entrypoint. Terminal rendering lives in thread/tui. */
-export { ThreadRuntime } from "./runtime/thread-runtime.js";
-export type { ThreadRuntimeOptions, PromptOptions, RewindOptions } from "./runtime/options.js";
-export type { BuiltinToolName } from "./tools/builtins.js";
-export type { RuntimeEvent, RuntimeEventSink, RuntimeScope } from "./runtime/events.js";
-export type { ExecutionIdentity, HostToolCall, HostToolDecision, HostToolPolicy } from "./runtime/policy.js";
-export { RuntimeLimitError, type ExecutionLimits, type RuntimeLimit } from "./runtime/limits.js";
+export { ThreadRuntime } from "./core/runtime/thread-runtime.js";
+export type { ThreadRuntimeOptions, PromptOptions, RewindOptions } from "./core/runtime/options.js";
+export type { BuiltinToolName } from "./core/tools/builtins.js";
+export type { RuntimeEvent, RuntimeEventSink, RuntimeScope } from "./core/runtime/events.js";
+export type { ExecutionIdentity, HostToolCall, HostToolDecision, HostToolPolicy } from "./core/runtime/policy.js";
+export { RuntimeLimitError, type ExecutionLimits, type RuntimeLimit } from "./core/runtime/limits.js";
 export {
   ASK_MAX_QUESTIONS,
   AskDismissedError,
@@ -14,7 +14,7 @@ export {
   type AskPresenter,
   type AskQuestion,
   type AskRequest,
-} from "./runtime/interaction.js";
+} from "./core/runtime/interaction.js";
 export {
   createBuiltinModelClient,
   createConfiguredModelCatalog,
@@ -28,11 +28,11 @@ export {
   type ModelDescriptor,
   type ModelRequestOptions,
   type ModelRetryCallbacks,
-} from "./agent/model-client.js";
-export type { TurnResult } from "./agent/runtime.js";
-export type { AgentProfile } from "./agent/profile.js";
-export type { AgentTool, ToolContext, ToolResult } from "./tools/types.js";
-export type { FileWriteScope } from "./tools/path-safety.js";
+} from "./core/agent/model-client.js";
+export type { TurnResult } from "./core/agent/runtime.js";
+export type { AgentProfile } from "./core/agent/profile.js";
+export type { AgentTool, ToolContext, ToolResult } from "./core/tools/types.js";
+export type { FileWriteScope } from "./core/tools/path-safety.js";
 export type {
   ToolEffect,
   ToolExecutionMode,
@@ -41,10 +41,10 @@ export type {
   ToolResourceAccess,
   ToolResourceClaim,
   ToolResourceScope,
-} from "./tools/execution.js";
-export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./tools/execution.js";
-export type { Project } from "./project/model.js";
-export type { ProjectSession, SessionEntry, Turn } from "./session-tree/model.js";
-export type { RewindCandidate } from "./session-tree/service.js";
-export type { CompactionResult } from "./context/compaction/index.js";
-export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./skills/loader.js";
+} from "./core/tools/execution.js";
+export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./core/tools/execution.js";
+export type { Project } from "./core/project/model.js";
+export type { ProjectSession, SessionEntry, Turn } from "./core/session-tree/model.js";
+export type { RewindCandidate } from "./core/session-tree/service.js";
+export type { CompactionResult } from "./core/context/compaction/index.js";
+export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./core/skills/loader.js";

@@ -4,12 +4,12 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
-import { SessionRecallService } from "../src/session-recall/service.js";
-import { LocalEmbedding } from "../src/session-recall/embedding.js";
-import { getThreadHome } from "../src/config/thread-config.js";
-import { MODEL_REVISION } from "../src/session-recall/model-assets.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
+import { SessionRecallService } from "../src/core/session-recall/service.js";
+import { LocalEmbedding } from "../src/core/session-recall/embedding.js";
+import { getThreadHome } from "../src/core/config/home.js";
+import { MODEL_REVISION } from "../src/core/session-recall/model-assets.js";
 import { Tokenizer } from "@huggingface/tokenizers";
 import { recallCorpus } from "../test/fixtures/recall-corpus.js";
 

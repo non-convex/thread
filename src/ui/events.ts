@@ -1,4 +1,4 @@
-import type { ExecutionEvent } from "../runtime/events.js";
+import type { ExecutionEvent } from "../core/runtime/events.js";
 
 /** Presentation events for TUI commands and execution progress. */
 export type UiEvent = ExecutionEvent

@@ -11,11 +11,11 @@ import {
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
-import { INTERRUPTED_TOOL_RESULT, needsPlaceholderAssistant, unmatchedToolCalls } from "../src/session-tree/conversation-seal.js";
-import { singletonResource } from "../src/tools/execution.js";
-import type { AgentTool } from "../src/tools/types.js";
+import { INTERRUPTED_TOOL_RESULT, needsPlaceholderAssistant, unmatchedToolCalls } from "../src/core/session-tree/conversation-seal.js";
+import { singletonResource } from "../src/core/tools/execution.js";
+import type { AgentTool } from "../src/core/tools/types.js";
 
 interface Deferred<T> {
   promise: Promise<T>;

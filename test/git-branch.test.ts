@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { gitBranchName } from "../src/utils/git.js";
-import { runProcess } from "../src/utils/process.js";
+import { gitBranchName } from "../src/ui/terminal/git.js";
+import { runProcess } from "../src/core/utils/process.js";
 
 async function fixture(prefix: string): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(path.join(tmpdir(), prefix));

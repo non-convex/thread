@@ -80,8 +80,8 @@ CLI/TUI 启动处显式装配产品默认配置：
 
 - [ThreadApp](</D:/WORK/projects/thread/src/app/thread-app.ts:69>) 中与运行、配置、会话操作有关的内容成为公共控制入口。
 - [InputRouter](</D:/WORK/projects/thread/src/app/input-router.ts:1>)、命令解析、picker、composer 和 clear 留在客户端适配层。嵌入式 prompt 应按输入原文运行，不解析 `/new` 之类命令。
-- [createAgentRuntime](../src/runtime/create-agent-runtime.ts) 负责每轮执行器的普通对象装配；产品默认配置在 `ThreadApp.open()` 中声明，不增加服务定位器。
-- [AgentStepRunner](</D:/WORK/projects/thread/src/agent/step-runner.ts:41>)、[ExecutionJournal](</D:/WORK/projects/thread/src/agent/execution-journal.ts:15>)、工具调度、上下文压缩和文件回退继续使用。
+- [createAgentRuntime](../src/core/runtime/create-agent-runtime.ts) 负责每轮执行器的普通对象装配；产品默认配置在 `ThreadApp.open()` 中声明，不增加服务定位器。
+- [AgentStepRunner](</D:/WORK/projects/thread/src/core/agent/step-runner.ts:41>)、[ExecutionJournal](</D:/WORK/projects/thread/src/core/agent/execution-journal.ts:15>)、工具调度、上下文压缩和文件回退继续使用。
 - [入口文件](</D:/WORK/projects/thread/src/index.ts:142>) 将 TUI 的静态导出移到单独子入口，让 runtime 导入不需要加载 OpenTUI。单独子入口解决模块加载边界；若要减少必装原生依赖，还需另行调整依赖或分包，不能把两者混为一谈。
 
 ### 一个公共 API 即可
@@ -121,7 +121,7 @@ Session Tree 和 model 元数据可以通过只读查询返回。不要让新 UI
 本轮会话上一阶段已经用隔离假模型复现两个问题：
 
 1. [ThreadApp.close](</D:/WORK/projects/thread/src/app/thread-app.ts:906>) 返回后主任务仍运行，模型返回时持久化失败。
-2. [Repository.close](</D:/WORK/projects/thread/src/session-tree/repository.ts:198>) 重复删除锁，旧实例可能移除新实例的锁。
+2. [Repository.close](</D:/WORK/projects/thread/src/core/session-tree/repository.ts:198>) 重复删除锁，旧实例可能移除新实例的锁。
 
 第二项除幂等关闭外，还需要只由持锁实例释放锁，并在关闭后立即拒绝新写入。
 
@@ -142,7 +142,7 @@ pi 的工具选择和资源配置说明支持这些扩展点，但 thread 不必
 
 ### 4.3 工具策略覆盖所有执行者
 
-当前 [worker 创建空 ExtensionEvents](</D:/WORK/projects/thread/src/agent-task/task-runner.ts:68>)，所以主 agent 的 before_tool_call 不能被当作宿主级全局策略。
+当前 [worker 创建空 ExtensionEvents](</D:/WORK/projects/thread/src/core/agent-task/task-runner.ts:68>)，所以主 agent 的 before_tool_call 不能被当作宿主级全局策略。
 
 最小方案是一个可选的宿主授权回调，传到所有 ToolCallExecutor，携带 sessionId、turnId、agent/profile 身份、toolCallId 和最终参数。参数规范化或扩展改写完成后，对最终将执行的调用做策略检查。普通扩展不能再扩大宿主明确拒绝的权限。
 
@@ -162,13 +162,13 @@ Codex 的对象身份和 AG-UI 的事件分类是参照，但不需要直接以�
 
 ### 4.5 等待人类输入先维持简单实现
 
-现有 [AskPresenter / AskService](../src/runtime/interaction.ts) 已经提供了 Promise、request ID 与取消能力。它们已迁到 runtime 并补充执行身份和所有权，不需要立即把 Promise 挂起改成持久化工作流。
+现有 [AskPresenter / AskService](../src/core/runtime/interaction.ts) 已经提供了 Promise、request ID 与取消能力。它们已迁到 runtime 并补充执行身份和所有权，不需要立即把 Promise 挂起改成持久化工作流。
 
 断开展示连接、用户拒绝回答、运行取消是不同结果；不得把其中一种默认为另一种。没有交互能力时不暴露 ask 工具，避免内核永久等待。长期等待、进程重启后继续回答等需求出现时，再设计请求列表、回答去重、过期和持久化。
 
 ### 4.6 小型执行预算
 
-[主循环](</D:/WORK/projects/thread/src/agent/turn-runner.ts:63>) 可以继续使用普通 for 循环，补 maxSteps 与 timeoutMs，并在结果中明确限制触发原因。保留宿主主动取消；如果需要 token 预算，再统计主 agent、worker 和 compaction 的总体使用量，不能只统计主模型最终答案。
+[主循环](</D:/WORK/projects/thread/src/core/agent/turn-runner.ts:63>) 可以继续使用普通 for 循环，补 maxSteps 与 timeoutMs，并在结果中明确限制触发原因。保留宿主主动取消；如果需要 token 预算，再统计主 agent、worker 和 compaction 的总体使用量，不能只统计主模型最终答案。
 
 预算必须说明计数单位：thread 中 Turn 是一次用户请求，而一些 SDK 的 maxTurns 指模型/工具往返。不同框架默认值也不同，不宜照抄某个数字。OpenAI、Claude 和 Vercel 都提供类似控制点；建议可配置，并让现有 CLI 默认策略显式化。[OpenAI 运行选项](https://openai.github.io/openai-agents-js/guides/running-agents/)、[Claude 循环限制](https://code.claude.com/docs/en/agent-sdk/agent-loop)、[Vercel ToolLoopAgent](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent)。
 

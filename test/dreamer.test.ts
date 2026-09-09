@@ -11,10 +11,10 @@ import {
   type Context,
   type Message,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { createDreamerProfile } from "../src/dreamer/profile.js";
-import { dreamerConversation } from "../src/dreamer/review.js";
-import { DreamerScheduler } from "../src/dreamer/scheduler.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
+import { createDreamerProfile } from "../src/core/dreamer/profile.js";
+import { dreamerConversation } from "../src/core/dreamer/review.js";
+import { DreamerScheduler } from "../src/core/dreamer/scheduler.js";
 
 class DreamerModel implements ModelClient {
   readonly modelId = "dreamer-test";

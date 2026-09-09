@@ -1,23 +1,24 @@
 import path from "node:path";
-import type { ModelDescriptor, ModelCatalog } from "../agent/model-client.js";
-import { MAIN_AGENT_PROFILE_ID } from "../agent/profile.js";
-import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
-import { DREAMER_PROFILE_ID } from "../dreamer/profile.js";
-import { buildRewindItems, registerBuiltinCommands } from "../commands/builtins.js";
-import { ThreadCommandRouter } from "../commands/registry.js";
-import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "../commands/types.js";
-import { createExtensionAPI, type ExtensionAPI } from "../extensions/api.js";
+import type { ModelDescriptor, ModelCatalog } from "../core/agent/model-client.js";
+import { MAIN_AGENT_PROFILE_ID } from "../core/agent/profile.js";
+import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
+import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
+import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
+import { ThreadCommandRouter } from "./commands/registry.js";
+import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
+import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { safeUiEvent } from "../ui/events.js";
-import { ThreadRuntime } from "../runtime/thread-runtime.js";
-import { snapshotRuntimeOptions, type ThreadRuntimeOptions } from "../runtime/options.js";
+import { ThreadRuntime } from "../core/runtime/thread-runtime.js";
+import { snapshotRuntimeOptions, type ThreadRuntimeOptions } from "../core/runtime/options.js";
 import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
 import { loadProjectInstructions } from "./project-instructions.js";
 
-import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, fileEditingPrompt, formatCommitAttributionPrompt } from "../agent/system-prompt.js";
-import { getThreadHome } from "../config/thread-config.js";
-import { GLOBAL_MEMORY_FILE } from "../global-memory.js";
-import { skillsDirectory } from "../skills/loader.js";
-import { createAskTool } from "../tools/ask.js";
+import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
+import { fileEditingPrompt } from "../core/tools/file-editing-prompt.js";
+import { getThreadHome } from "../core/config/home.js";
+import { GLOBAL_MEMORY_FILE } from "../core/global-memory.js";
+import { skillsDirectory } from "../core/skills/loader.js";
+import { createAskTool } from "../core/tools/ask.js";
 
 export type { InputResult } from "./input-router.js";
 /** Product options for the coding application. Other hosts open ThreadRuntime directly. */

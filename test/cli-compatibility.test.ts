@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DEFAULT_SYSTEM_PROMPT, DEFAULT_COMMIT_ATTRIBUTION, FILE_EDITING_PROMPT } from "../src/agent/system-prompt.js";
-import { GLOBAL_MEMORY_FILE } from "../src/global-memory.js";
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_COMMIT_ATTRIBUTION } from "../src/app/system-prompt.js";
+import { FILE_EDITING_PROMPT } from "../src/core/tools/file-editing-prompt.js";
+import { GLOBAL_MEMORY_FILE } from "../src/core/global-memory.js";
 
 interface RequestBody {
   model: string;

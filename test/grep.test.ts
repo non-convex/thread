@@ -3,10 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { grepTool } from "../src/tools/grep.js";
-import { GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepDetails } from "../src/tools/grep-results.js";
-import type { ToolContext } from "../src/tools/types.js";
-import { runProcess } from "../src/utils/process.js";
+import { grepTool } from "../src/core/tools/grep.js";
+import { GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepDetails } from "../src/core/tools/grep-results.js";
+import type { ToolContext } from "../src/core/tools/types.js";
+import { runProcess } from "../src/core/utils/process.js";
 
 function context(rootPath: string, signal = new AbortController().signal): ToolContext {
   return { rootPath, signal, invocation: { executionId: "e", assistantEntryId: "a", toolCallId: "t" } };

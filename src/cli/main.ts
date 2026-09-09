@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 import { stderr as errorOutput, stdout as output } from "node:process";
 import { ThreadApp } from "../app/thread-app.js";
-import { createConfiguredModelCatalog } from "../agent/model-client.js";
-import type { AgentProfileDiagnostic } from "../agent/profile.js";
-import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../agent-task/profile.js";
-import { DREAMER_PROFILE_ID } from "../dreamer/profile.js";
-import { ThreadCredentialStore } from "../auth/credential-store.js";
-import { loadThreadConfig } from "../config/thread-config.js";
-import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../config/thread-state.js";
-import { loadExtension } from "../extensions/loader.js";
+import { createConfiguredModelCatalog } from "../core/agent/model-client.js";
+import type { AgentProfileDiagnostic } from "../core/agent/profile.js";
+import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
+import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
+import { ThreadCredentialStore } from "../core/auth/credential-store.js";
+import { loadThreadConfig } from "../app/config/thread-config.js";
+import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../app/config/thread-state.js";
+import { loadExtension } from "../app/extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
-import { settlesWithin } from "../utils/async.js";
+import { settlesWithin } from "../core/utils/async.js";
 import { loginProvider, logoutProvider, showAuthStatus } from "./subscription-auth.js";
 
 interface CliOptions {
@@ -296,7 +296,7 @@ function formatCliError(error: unknown): string {
 }
 
 if (process.argv[2] === "--internal-embedding-worker" && process.send) {
-  await import("../session-recall/embedding-worker.js");
+  await import("../core/session-recall/embedding-worker.js");
 } else void main().then(
   () => process.exit(0),
   (error) => {

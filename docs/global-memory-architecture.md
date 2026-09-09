@@ -18,7 +18,7 @@ ${THREAD_HOME}/.THREAD.md
 
 ## Agent Profile 与生命周期
 
-`src/agent/profile.ts` 定义所有 Agent 共用的最小 `AgentProfile`：
+`src/core/agent/profile.ts` 定义所有 Agent 共用的最小 `AgentProfile`：
 
 - `id`
 - `model`

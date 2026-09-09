@@ -1,8 +1,8 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
-import type { TurnResult } from "../agent/runtime.js";
-import { parseCommandLine } from "../commands/parser.js";
-import { THREAD_COMMAND_PREFIX } from "../commands/registry.js";
-import { clearDisplayResult, type CommandResult } from "../commands/types.js";
+import type { TurnResult } from "../core/agent/runtime.js";
+import { parseCommandLine } from "./commands/parser.js";
+import { THREAD_COMMAND_PREFIX } from "./commands/registry.js";
+import { clearDisplayResult, type CommandResult } from "./commands/types.js";
 import type { UiEventSink } from "../ui/events.js";
 
 export interface InputOptions {

@@ -10,12 +10,12 @@ import {
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
-import { AgentTaskOrchestrator } from "../src/agent-task/orchestrator.js";
-import { AgentProfileRegistry } from "../src/agent/profile.js";
-import { createImplementationWorkerProfile } from "../src/agent-task/profile.js";
-import { AgentTaskRepository } from "../src/agent-task/repository.js";
-import type { Project } from "../src/project/model.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
+import { AgentTaskOrchestrator } from "../src/core/agent-task/orchestrator.js";
+import { AgentProfileRegistry } from "../src/core/agent/profile.js";
+import { createImplementationWorkerProfile } from "../src/core/agent-task/profile.js";
+import { AgentTaskRepository } from "../src/core/agent-task/repository.js";
+import type { Project } from "../src/core/project/model.js";
 
 interface Deferred<T> {
   promise: Promise<T>;

@@ -4,15 +4,15 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
-import { SessionTreeRepository } from "../src/session-tree/repository.js";
-import { SessionTreeService } from "../src/session-tree/service.js";
-import { SessionRecallService } from "../src/session-recall/service.js";
-import { extractDocuments, keywordFragments } from "../src/session-recall/documents.js";
-import { ZvecRecallIndex } from "../src/session-recall/zvec-index.js";
-import { MODEL_REVISION, prepareModel } from "../src/session-recall/model-assets.js";
-import { loadThreadConfig } from "../src/config/thread-config.js";
-import type { EmbeddingEngine } from "../src/session-recall/embedding.js";
-import type { SessionEntry } from "../src/session-tree/model.js";
+import { SessionTreeRepository } from "../src/core/session-tree/repository.js";
+import { SessionTreeService } from "../src/core/session-tree/service.js";
+import { SessionRecallService } from "../src/core/session-recall/service.js";
+import { extractDocuments, keywordFragments } from "../src/core/session-recall/documents.js";
+import { ZvecRecallIndex } from "../src/core/session-recall/zvec-index.js";
+import { MODEL_REVISION, prepareModel } from "../src/core/session-recall/model-assets.js";
+import { loadThreadConfig } from "../src/app/config/thread-config.js";
+import type { EmbeddingEngine } from "../src/core/session-recall/embedding.js";
+import type { SessionEntry } from "../src/core/session-tree/model.js";
 
 class TestEmbedding implements EmbeddingEngine {
   initialized = 0;
@@ -53,7 +53,7 @@ test("Chinese BM25, exact identifiers, retained branches and current-turn exclus
   const f = await fixture();
   const recall = new SessionRecallService(f.tree, { semantic: false });
   try {
-    const first = await f.turn("会话历史采用追加日志，旧记录会保留下来。 src/session-tree/repository.ts E_CHECKPOINT_042");
+    const first = await f.turn("会话历史采用追加日志，旧记录会保留下来。 src/core/session-tree/repository.ts E_CHECKPOINT_042");
     const second = await f.turn("失败的尝试仍然保留", "failed");
     await f.tree.moveLiveTipForRewind(first);
     const keyword = await recall.search(["历史日志"]);

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fauxAssistantMessage, fauxText, type AssistantMessage, type Context } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../../src/core/agent/model-client.js";
 
 export function deferred() {
   let resolve!: () => void;

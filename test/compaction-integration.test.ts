@@ -12,14 +12,14 @@ import {
   type Context,
   type Message,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
 import {
   isHistorySummaryInstruction,
   isProgressSummaryInstruction,
-} from "../src/context/compaction/index.js";
-import { singletonResource } from "../src/tools/execution.js";
-import type { AgentTool } from "../src/tools/types.js";
+} from "../src/core/context/compaction/index.js";
+import { singletonResource } from "../src/core/tools/execution.js";
+import type { AgentTool } from "../src/core/tools/types.js";
 
 const HISTORY_REPLY = "## Current project state\n\ncompacted by the integration test";
 const PROGRESS_REPLY = "earlier steps of this turn probed the workspace";

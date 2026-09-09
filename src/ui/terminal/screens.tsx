@@ -1,6 +1,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { Accessor } from "solid-js";
-import type { ModelDescriptor } from "../../agent/model-client.js";
+import type { ModelDescriptor } from "../../core/agent/model-client.js";
 import type { UiScreen, UiState } from "../state.js";
 import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";

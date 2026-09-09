@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { writeTool } from "../src/tools/builtins.js";
-import { editTool } from "../src/tools/edit.js";
-import type { ToolContext } from "../src/tools/types.js";
+import { writeTool } from "../src/core/tools/builtins.js";
+import { editTool } from "../src/core/tools/edit.js";
+import type { ToolContext } from "../src/core/tools/types.js";
 
 async function fixture() {
   const rootPath = await mkdtemp(path.join(tmpdir(), "thread-write-scope-"));

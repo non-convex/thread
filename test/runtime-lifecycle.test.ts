@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Type, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { ThreadRuntime } from "../src/runtime/thread-runtime.js";
-import { AskService, type AskQuestion, type AskRequest } from "../src/runtime/interaction.js";
-import type { AgentTool } from "../src/tools/types.js";
+import { ThreadRuntime } from "../src/core/runtime/thread-runtime.js";
+import { AskService, type AskQuestion, type AskRequest } from "../src/core/runtime/interaction.js";
+import type { AgentTool } from "../src/core/tools/types.js";
 import { deferred, fixture, ScriptedModel, skills } from "./fixtures/runtime.js";
 
 test("close owns cancellation and waits for model cleanup before releasing persisted state", async (t) => {

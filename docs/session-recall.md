@@ -289,17 +289,17 @@ zvec、Jieba 字典和 ONNX 所需的原生库随程序一起打包，运行时�
 761b726dd34fb83930e26aab4e9ac3899aa1fa78
 ```
 
-版本、文件大小和 SHA-256 都定义在 [model-assets.ts](../src/session-recall/model-assets.ts)。Thread 当前只支持这一套固定模型。
+版本、文件大小和 SHA-256 都定义在 [model-assets.ts](../src/core/session-recall/model-assets.ts)。Thread 当前只支持这一套固定模型。
 
-整体流程在 [service.ts](../src/session-recall/service.ts)。工具和命令通过 `ThreadApp.recall` 使用同一个 `SessionRecallService`，旧的 `SessionSearchService` 已移除。
+整体流程在 [service.ts](../src/core/session-recall/service.ts)。runtime 为工具和历史检索接口提供同一个 `SessionRecallService`；应用命令通过 `app.runtime` 查询。
 
-文本提取和关键词切片在 [documents.ts](../src/session-recall/documents.ts)，原文读取在 [reader.ts](../src/session-recall/reader.ts)。
+文本提取和关键词切片在 [documents.ts](../src/core/session-recall/documents.ts)，原文读取在 [reader.ts](../src/core/session-recall/reader.ts)。
 
-[zvec-index.ts](../src/session-recall/zvec-index.ts) 管理索引与进度。当前 Node 绑定没有单独的 flush 方法，也就是没有“立即把修改刷新到磁盘”的独立操作。因此每个 turn 写入后会关闭并重新打开 collection，确认持久化后才提交进度。
+[zvec-index.ts](../src/core/session-recall/zvec-index.ts) 管理索引与进度。当前 Node 绑定没有单独的 flush 方法，也就是没有“立即把修改刷新到磁盘”的独立操作。因此每个 turn 写入后会关闭并重新打开 collection，确认持久化后才提交进度。
 
-[embedding.ts](../src/session-recall/embedding.ts) 管理模型子进程和任务顺序，[embedding-worker.ts](../src/session-recall/embedding-worker.ts) 处理模型分词、推理和向量计算。
+[embedding.ts](../src/core/session-recall/embedding.ts) 管理模型子进程和任务顺序，[embedding-worker.ts](../src/core/session-recall/embedding-worker.ts) 处理模型分词、推理和向量计算。
 
-原生文件的打包与释放分别在 [recall-bundle.ts](../scripts/recall-bundle.ts) 和 [native-assets.ts](../src/session-recall/native-assets.ts)。
+原生文件的打包与释放分别在 [recall-bundle.ts](../scripts/recall-bundle.ts) 和 [native-assets.ts](../src/core/session-recall/native-assets.ts)。
 
 ## 怎样验证这套流程
 

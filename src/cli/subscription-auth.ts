@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { PiModelCatalog } from "../agent/model-client.js";
+import type { PiModelCatalog } from "../core/agent/model-client.js";
 
 function openExternalUrl(url: string): void {
   const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open";

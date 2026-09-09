@@ -2,6 +2,14 @@
 
 `thread/runtime` 提供 Bun 进程内的公共入口，适合由其他 AI 应用、GUI 或 Web 后端持有。统一通过 `ThreadRuntime.open()` 配置 agent loop、工具、Skill 和持久化 Session Tree；基础工具和文件 checkpoint 按需启用。Web 前端通过自己的后端适配器调用这个入口；runtime 本身没有 HTTP 服务。
 
+## 源码与依赖边界
+
+公共入口保持在 `src/runtime.ts`，实现统一放在 `src/core/`。其中 `runtime/` 负责配置、装配和生命周期，`agent/`、`tools/`、`skills/`、会话与记忆等子目录按能力组织。宿主从 `thread/runtime` 导入，无需依赖内部路径。
+
+`src/app/` 持有 coding 默认提示词、命令、应用扩展、配置文件加载与用户选择的保存；`src/cli/` 和 `src/ui/` 负责启动和展示。核心保留模型配置类型、状态回调的数据结构及共用能力，不能导入应用代码，类型依赖也遵守同一方向。
+
+`scripts/verify-runtime.ts` 检查整个 `src/core/`（包括 worker 和原生资源入口）的依赖方向，以及构建后的 runtime 不加载 TUI。仓库仍是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`；本次目录分层不改变安装依赖，也不增加独立发布流程。MCP 实现后同样归入核心。
+
 ## 运行离线示例
 
 在仓库根目录执行：

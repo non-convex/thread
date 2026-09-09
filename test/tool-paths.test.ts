@@ -3,14 +3,14 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { writeTool } from "../src/tools/builtins.js";
-import { editTool } from "../src/tools/edit.js";
-import { workspacePathClaim } from "../src/tools/execution.js";
-import { grepFilePath, grepTool } from "../src/tools/grep.js";
-import { listTool } from "../src/tools/list.js";
-import { resolveWorkspacePath } from "../src/tools/path-safety.js";
-import { readTool } from "../src/tools/read.js";
-import type { ToolContext } from "../src/tools/types.js";
+import { writeTool } from "../src/core/tools/builtins.js";
+import { editTool } from "../src/core/tools/edit.js";
+import { workspacePathClaim } from "../src/core/tools/execution.js";
+import { grepFilePath, grepTool } from "../src/core/tools/grep.js";
+import { listTool } from "../src/core/tools/list.js";
+import { resolveWorkspacePath } from "../src/core/tools/path-safety.js";
+import { readTool } from "../src/core/tools/read.js";
+import type { ToolContext } from "../src/core/tools/types.js";
 
 async function fixture(prefix: string): Promise<{
   root: string;

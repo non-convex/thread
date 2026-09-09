@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "..");
 const dist = path.join(root, "dist");
@@ -26,20 +27,23 @@ for (const entry of ["index.js", "runtime.js"]) {
   await assertHeadlessImportGraph(path.join(dist, entry));
 }
 
-const sourceScanner = new Bun.Transpiler({ loader: "ts" });
-const sourceFiles = new Set<string>();
 async function assertCoreDependencyDirection(file: string): Promise<void> {
-  if (sourceFiles.has(file)) return;
-  sourceFiles.add(file);
-  for (const imported of sourceScanner.scanImports(await readFile(file, "utf8"))) {
-    if (!imported.path.startsWith(".")) continue;
-    const dependency = path.resolve(path.dirname(file), imported.path.replace(/\.js$/, ".ts"));
+  const source = ts.preProcessFile(await readFile(file, "utf8"), true, true);
+  for (const imported of source.importedFiles) {
+    const specifier = imported.fileName;
+    assert.doesNotMatch(specifier, /^(?:@opentui\/|solid-js(?:\/|$)|thread(?:\/|$))/, `${file} imports a frontend or package entry`);
+    if (!specifier.startsWith(".")) continue;
+    const dependency = path.resolve(path.dirname(file), specifier.replace(/\.js$/, ".ts"));
     const relative = path.relative(path.join(root, "src"), dependency).replaceAll("\\", "/");
-    assert.doesNotMatch(relative, /^(?:app(?:\/|\.ts$)|ui\/|cli\/)/, `Runtime depends on application code: ${relative}`);
-    await assertCoreDependencyDirection(dependency);
+    assert.match(relative, /^core\//, `${file} imports outside src/core: ${relative}`);
+    await access(dependency);
   }
 }
 await assertCoreDependencyDirection(path.join(root, "src", "runtime.ts"));
+// Include type imports and modules reached only by workers or standalone builds.
+for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: path.join(root, "src", "core"), absolute: true })) {
+  await assertCoreDependencyDirection(file);
+}
 
 // An independent host resolves the package's published exports. Running outside
 // the repository also prevents its TUI preload from concealing an import leak.

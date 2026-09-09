@@ -1,7 +1,7 @@
-import type { ModelDescriptor } from "../agent/model-client.js";
-import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../commands/types.js";
-import type { AskRequest } from "../runtime/interaction.js";
-import type { AgentTaskSummary } from "../agent-task/model.js";
+import type { ModelDescriptor } from "../core/agent/model-client.js";
+import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../app/commands/types.js";
+import type { AskRequest } from "../core/runtime/interaction.js";
+import type { AgentTaskSummary } from "../core/agent-task/model.js";
 
 export interface TranscriptItem {
   id: string;

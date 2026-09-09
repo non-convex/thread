@@ -288,4 +288,4 @@ ID 前缀同时匹配多个 turn 时，会返回 `Turn prefix is ambiguous: ...`
 
 终端命令显示较短的 ID、片段类型、检索来源和覆盖情况，当前最多展示 20 个 turn。它与 agent 使用的 `session_search` 共享搜索逻辑；工具的 `limit` 参数仍然是默认 8、最多 50。
 
-工具参数与文本格式定义在 [src/tools/session-recall.ts](../src/tools/session-recall.ts)，终端命令展示在 [src/commands/builtins.ts](../src/commands/builtins.ts)，路径展开和原文读取在 [src/session-recall/reader.ts](../src/session-recall/reader.ts)。
+工具参数与文本格式定义在 [src/core/tools/session-recall.ts](../src/core/tools/session-recall.ts)，终端命令展示在 [src/app/commands/builtins.ts](../src/app/commands/builtins.ts)，路径展开和原文读取在 [src/core/session-recall/reader.ts](../src/core/session-recall/reader.ts)。

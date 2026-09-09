@@ -1,4 +1,4 @@
-import { AGENT_TASK_TOOL_NAMES } from "../agent-task/model.js";
+import { AGENT_TASK_TOOL_NAMES } from "../core/agent-task/model.js";
 import type { UiEvent } from "./events.js";
 import type { AgentTaskCard, LiveTurn, UiState } from "./state.js";
 

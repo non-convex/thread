@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ToolScheduler, resourceClaimsConflict } from "../src/agent/tool-scheduler.js";
-import { claim } from "../src/tools/execution.js";
+import { ToolScheduler, resourceClaimsConflict } from "../src/core/agent/tool-scheduler.js";
+import { claim } from "../src/core/tools/execution.js";
 
 function gate(): { promise: Promise<void>; release(): void } {
   let release!: () => void;

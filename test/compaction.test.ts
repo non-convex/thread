@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { ContextBuilder, progressSummaryMessage, projectedContextMessages, TURN_PROGRESS_PREFIX } from "../src/context/builder.js";
+import { ContextBuilder, progressSummaryMessage, projectedContextMessages, TURN_PROGRESS_PREFIX } from "../src/core/context/builder.js";
 import {
   COMPACTION_MIN_RETAINED_STEPS,
   isHistorySummaryInstruction,
   isProgressSummaryInstruction,
   partitionCompactable,
   selectRetained,
-} from "../src/context/compaction/index.js";
-import type { CompactionEntry, RetainedTurn, SessionEntry, Turn } from "../src/session-tree/model.js";
-import type { SessionTreeService } from "../src/session-tree/service.js";
+} from "../src/core/context/compaction/index.js";
+import type { CompactionEntry, RetainedTurn, SessionEntry, Turn } from "../src/core/session-tree/model.js";
+import type { SessionTreeService } from "../src/core/session-tree/service.js";
 import {
   ScriptedModel,
   FlakyModel,

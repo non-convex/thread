@@ -16,14 +16,14 @@ import type {
   ModelClient,
   ModelDescriptor,
   ModelRequestOptions,
-} from "../src/agent/model-client.js";
+} from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
 import { isSlashCommandInput } from "../src/app/input-router.js";
 import {
   messageWithoutImages,
   userContentDisplay,
   userContentFrom,
-} from "../src/session-tree/user-content.js";
+} from "../src/core/session-tree/user-content.js";
 import {
   candidateImagePaths,
   composerImageFromBytes,

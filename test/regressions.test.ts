@@ -10,9 +10,9 @@ import {
   type AssistantMessage,
   type Context,
 } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../src/agent/model-client.js";
+import type { ModelClient, ModelRequestOptions } from "../src/core/agent/model-client.js";
 import { ThreadApp } from "../src/app/thread-app.js";
-import { loadSkills } from "../src/skills/loader.js";
+import { loadSkills } from "../src/core/skills/loader.js";
 
 class CapturingModel implements ModelClient {
   readonly modelId = "capture";

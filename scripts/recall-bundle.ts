@@ -10,7 +10,7 @@ export function recallNativePlugin(target: string): BunPlugin {
   const [, os, arch] = target.split("-");
   const platform = os === "windows" ? "win32" : os;
   const platformId = `${platform}-${arch}`;
-  const helper = path.join(root, "src/session-recall/native-assets.ts");
+  const helper = path.join(root, "src/core/session-recall/native-assets.ts");
 
   async function prelude(version: string, directory: string, names: string[]): Promise<string> {
     const imports: string[] = [];

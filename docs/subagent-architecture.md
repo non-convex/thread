@@ -101,10 +101,10 @@ Worker 和主 agent 共用文件历史入口。开启文件 checkpoint 时，内
 
 ## 代码位置
 
-- `src/agent-task/tools.ts`：四个主 agent 任务工具。
-- `src/agent-task/orchestrator.ts`：范围校验、并发、等待、返工、取消和回合归属。
-- `src/agent-task/task-runner.ts`：以项目根目录运行一个 worker。
-- `src/agent-task/model.ts` 与 `repository.ts`：v2 状态、事件和持久化。
-- `src/agent/step-runner.ts`：主 agent 与 worker 复用的单步执行核心。
-- `src/file-history/`：主 agent 和 worker 共用的内置编辑备份、恢复、校验和 GC。
+- `src/core/agent-task/tools.ts`：四个主 agent 任务工具。
+- `src/core/agent-task/orchestrator.ts`：范围校验、并发、等待、返工、取消和回合归属。
+- `src/core/agent-task/task-runner.ts`：以项目根目录运行一个 worker。
+- `src/core/agent-task/model.ts` 与 `repository.ts`：v2 状态、事件和持久化。
+- `src/core/agent/step-runner.ts`：主 agent 与 worker 复用的单步执行核心。
+- `src/core/file-history/`：主 agent 和 worker 共用的内置编辑备份、恢复、校验和 GC。
 - `src/ui/`：精简的任务卡片和 trace 展示。

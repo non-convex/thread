@@ -1,10 +1,10 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall, type AssistantMessage, type Context, type Message } from "@earendil-works/pi-ai";
-import type { ModelClient, ModelRequestOptions } from "../../src/agent/model-client.js";
-import { projectedContextMessages } from "../../src/context/builder.js";
-import { contextBudget } from "../../src/context/budget.js";
-import { ContextCompactionService } from "../../src/context/compaction/index.js";
-import type { CompactionEntry, RetainedTurn } from "../../src/session-tree/model.js";
-import type { SessionTreeService } from "../../src/session-tree/service.js";
+import type { ModelClient, ModelRequestOptions } from "../../src/core/agent/model-client.js";
+import { projectedContextMessages } from "../../src/core/context/builder.js";
+import { contextBudget } from "../../src/core/context/budget.js";
+import { ContextCompactionService } from "../../src/core/context/compaction/index.js";
+import type { CompactionEntry, RetainedTurn } from "../../src/core/session-tree/model.js";
+import type { SessionTreeService } from "../../src/core/session-tree/service.js";
 
 export class ScriptedModel implements ModelClient {
   readonly modelId = "compaction-test";

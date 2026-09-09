@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWebSearchTool } from "../src/tools/web.js";
-import type { ToolContext } from "../src/tools/types.js";
+import { createWebSearchTool } from "../src/core/tools/web.js";
+import type { ToolContext } from "../src/core/tools/types.js";
 
 const context: ToolContext = {
   rootPath: process.cwd(), signal: new AbortController().signal,
