@@ -1,3 +1,5 @@
+import type { ToolResourceClaim } from "../tools/execution.js";
+
 /** Identifies an execution independently of a selected UI session. */
 export interface ExecutionIdentity {
   executionId: string;
@@ -12,8 +14,9 @@ export interface HostToolCall extends ExecutionIdentity {
   assistantEntryId: string;
   toolCallId: string;
   toolName: string;
-  /** A copy of the final validated arguments. Policy cannot rewrite them. */
+  /** Effective arguments after validation, extension rewriting and tool preparation. */
   args: Readonly<Record<string, unknown>>;
+  resources: readonly ToolResourceClaim[];
   signal: AbortSignal;
 }
 

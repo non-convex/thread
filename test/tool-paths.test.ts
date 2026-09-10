@@ -11,6 +11,7 @@ import { listTool } from "../src/core/tools/list.js";
 import { resolveWorkspacePath } from "../src/core/tools/path-safety.js";
 import { readTool } from "../src/core/tools/read.js";
 import type { ToolContext } from "../src/core/tools/types.js";
+import { executeTool } from "./fixtures/tools.js";
 
 async function fixture(prefix: string): Promise<{
   root: string;
@@ -87,7 +88,7 @@ test("read, list, and grep can inspect paths outside the project", async (t) => 
 
   await workspacePathClaim(values.root, values.outsideFile, "read", { allowOutside: true });
 
-  const grep = await grepTool.execute({ pattern: "outside-token", path: values.outsideFile, literal: true }, ctx);
+  const grep = await executeTool(grepTool, { pattern: "outside-token", path: values.outsideFile, literal: true }, ctx);
   assert.equal(grep.isError, false, grep.content);
   assert.match(grep.content, /outside-token/);
   assert.match(grep.content, /notes\.txt/);

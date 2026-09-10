@@ -88,6 +88,7 @@ export function snapshotTool(tool: AgentTool): AgentTool {
   if (typeof tool.execute !== "function") throw new Error(`Tool ${tool.name} must provide execute()`);
   return {
     name: tool.name, description: tool.description, parameters: snapshotSchema(tool.parameters), replay: tool.replay,
+    ...(tool.prepare ? { prepare: tool.prepare.bind(tool) } : {}),
     execution: { effect: tool.execution.effect, mode: tool.execution.mode, resources: tool.execution.resources.bind(tool.execution) },
     execute: tool.execute.bind(tool),
   };

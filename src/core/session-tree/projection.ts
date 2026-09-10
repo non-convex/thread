@@ -26,6 +26,7 @@ export class SessionTreeProjection {
   activeSessionId: string | undefined;
   readonly sessions = new Map<string, ProjectSession>();
   readonly turns = new Map<string, Turn>();
+  readonly runningTurnsBySession = new Map<string, Turn>();
   readonly entries = new Map<string, SessionEntry>();
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
   readonly liveTips = new Map<string, string | null>();
@@ -96,6 +97,7 @@ export class SessionTreeProjection {
           }
         }
         this.turns.set(turn.id, structuredClone(turn));
+        this.runningTurnsBySession.set(turn.sessionId, this.turns.get(turn.id)!);
         this.entriesByTurn.set(turn.id, []);
         return;
       }
@@ -174,6 +176,7 @@ export class SessionTreeProjection {
         }
         if (!this.entries.has(turn.userEntryId)) throw new SessionTreeCorruptionError(`Turn ${turn.id} has no user entry`);
         turn.status = event.status;
+        this.runningTurnsBySession.delete(turn.sessionId);
         turn.finishedAt = event.finishedAt;
         if (event.error) turn.error = structuredClone(event.error);
         return;

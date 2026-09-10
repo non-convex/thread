@@ -186,9 +186,12 @@ export class ThreadRuntime {
     this.assertOpen();
     const session = this.tree.resolveSession(sessionId);
     const turns = this.tree.livePath(session.id);
+    const running = this.tree.projection.runningTurnsBySession.get(session.id);
     return structuredClone({ session, liveTipTurnId: this.tree.projection.liveTips.get(session.id) ?? null,
       turns, entries: turns.flatMap((turn) => this.tree.entriesForTurn(turn.id)),
-      tasks: turns.flatMap((turn) => this.agentTaskDetailsForTurn(turn.id)) });
+      tasks: turns.flatMap((turn) => this.agentTaskDetailsForTurn(turn.id)),
+      activeTurn: running ? { turn: running, entries: this.tree.entriesForTurn(running.id),
+        tasks: this.agentTaskDetailsForTurn(running.id) } : null });
   }
 
   /** Complete retained project history, including paths abandoned by rewind. */

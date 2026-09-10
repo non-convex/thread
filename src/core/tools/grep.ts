@@ -3,16 +3,29 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { Type } from "@earendil-works/pi-ai";
 import { ProcessError, runProcess } from "../utils/process.js";
-import { workspacePathClaim } from "./execution.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { prepareFilePath, resolveToolPath, workspacePathClaim, type ToolPlanningContext } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 import {
   assertCursorCompatible, clampInt, decodeGrepCursor, presentContentPage, presentFilesPage,
   renderMatchWithContext, searchFromArgs, GREP_DEFAULT_LIMIT, GREP_MAX_CONTEXT, GREP_MAX_LIMIT,
-  GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepDetails, type GrepMatch,
+  GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepDetails, type GrepMatch, type GrepSearch,
 } from "./grep-results.js";
 
 const MODEL_OUTPUT_LIMIT = 64 * 1024;
+
+type PreparedGrepArgs = GrepSearch & { offset: number; limit: number };
+
+async function prepareGrep(args: GrepArgs, context: ToolPlanningContext): Promise<PreparedGrepArgs> {
+  const pattern = args.pattern.trim();
+  if (!pattern) throw new Error("pattern cannot be empty");
+  const cursor = args.cursor ? decodeGrepCursor(args.cursor) : undefined;
+  const search = await prepareFilePath(cursor?.search ?? searchFromArgs({ ...args, pattern }), context, { literal: true });
+  if (cursor) {
+    const explicit = args.path === undefined ? {} : { path: (await prepareFilePath(args, context, { defaultPath: "." })).path };
+    assertCursorCompatible({ ...args, ...explicit, pattern }, search);
+  }
+  return { ...search, offset: cursor?.offset ?? 0, limit: clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT) };
+}
 
 function ok(content: string, details?: GrepDetails): ToolResult {
   return { content, isError: false, ...(details === undefined ? {} : { details }) };
@@ -182,7 +195,7 @@ async function mtimesFor(root: string, files: Iterable<string>): Promise<Map<str
   return mtimes;
 }
 
-export const grepTool: AgentTool<GrepArgs> = {
+export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
   name: "grep",
   description:
     "Search text with ripgrep. Defaults to the workspace root; absolute paths and paths outside the project are allowed. Matches are grouped by file and ranked so git-changed and recently modified files come first, then paginated (default 20 matches, max 100). Use glob to narrow, outputMode=files for ranked paths only, and pass cursor unchanged to continue the same search. Hidden files are not searched; .gitignore is respected. Requires rg on PATH.",
@@ -220,11 +233,12 @@ export const grepTool: AgentTool<GrepArgs> = {
     ),
   }),
   replay: "safe",
+  prepare: prepareGrep,
   execution: {
     effect: "read",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", {
+      await workspacePathClaim(context.rootPath, args.path, "read", {
         allowOutside: true,
         scope: "subtree",
       }),
@@ -233,14 +247,8 @@ export const grepTool: AgentTool<GrepArgs> = {
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
-      const pattern = args.pattern.trim();
-      if (!pattern) throw new Error("pattern cannot be empty");
-      const cursor = args.cursor ? decodeGrepCursor(args.cursor) : undefined;
-      if (cursor) assertCursorCompatible({ ...args, pattern }, cursor.search);
-      const search = cursor?.search ?? searchFromArgs({ ...args, pattern });
-      const offset = cursor?.offset ?? 0;
-      const limit = clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT);
-      const target = await resolveWorkspacePath(context.rootPath, search.path, { allowOutside: true });
+      const { offset, limit, ...search } = args;
+      const target = await resolveToolPath(context, search.path);
       const rgArgs = ["--json", "--line-number", "--color", "never"];
       if (search.ignoreCase) rgArgs.push("--ignore-case");
       if (search.literal) rgArgs.push("--fixed-strings");
@@ -262,7 +270,7 @@ export const grepTool: AgentTool<GrepArgs> = {
         return ok(limited(presented.content), presented.details);
       }
       const page = ordered.slice(offset, offset + limit);
-      const renderLine = await renderMatchWithContext(context.rootPath, page, search.context);
+      const renderLine = await renderMatchWithContext(context, page, search.context);
       const presented = presentContentPage({
         ordered,
         offset,

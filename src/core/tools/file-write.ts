@@ -1,7 +1,8 @@
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FileContents, SaveBeforeWrite } from "../file-history/service.js";
-import { assertFileWriteScope, resolveWorkspacePath, samePath } from "./path-safety.js";
+import { assertFileWriteScope, samePath } from "./path-safety.js";
+import { resolveToolPath } from "./execution.js";
 import type { ToolContext } from "./types.js";
 
 /** Shared write boundary for built-in edit/write, including worker invocations. */
@@ -10,12 +11,8 @@ export async function updateFile(
   inputPath: string,
   transform: (before: FileContents | undefined) => Buffer,
 ): Promise<{ existed: boolean; bytes: number }> {
-  const options = {
-    forWrite: true,
-    ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
-  };
   const resolveTarget = async () => {
-    const target = await resolveWorkspacePath(context.rootPath, inputPath, options);
+    const target = await resolveToolPath(context, inputPath, true);
     if (context.writeScope) await assertFileWriteScope(context.rootPath, target, context.writeScope);
     return target;
   };

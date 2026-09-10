@@ -299,7 +299,7 @@ zvec、Jieba 字典和 ONNX 所需的原生库随程序一起打包，运行时�
 
 [embedding.ts](../src/core/session-recall/embedding.ts) 管理模型子进程和任务顺序，[embedding-worker.ts](../src/core/session-recall/embedding-worker.ts) 处理模型分词、推理和向量计算。
 
-原生文件的打包与释放分别在 [recall-bundle.ts](../scripts/recall-bundle.ts) 和 [native-assets.ts](../src/core/session-recall/native-assets.ts)。
+原生文件的打包与释放分别在 [native-bundle.ts](../scripts/native-bundle.ts) 和 [native-assets.ts](../src/core/utils/native-assets.ts)。
 
 ## 怎样验证这套流程
 

@@ -2,8 +2,7 @@ import { createReadStream } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { Type } from "@earendil-works/pi-ai";
-import { workspacePathClaim } from "./execution.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { prepareFilePath, workspacePathClaim, resolveToolPath } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 export const READ_DEFAULT_LIMIT = 2_000;
@@ -187,6 +186,7 @@ export const readTool: AgentTool<ReadArgs> = {
     ),
   }),
   replay: "safe",
+  prepare: (args, context) => prepareFilePath(args, context),
   execution: {
     effect: "read",
     mode: "parallel",
@@ -197,11 +197,11 @@ export const readTool: AgentTool<ReadArgs> = {
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
-      const inputPath = args.path.trim();
+      const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
       const offset = clampInt(args.offset, 1, Number.MAX_SAFE_INTEGER, 1);
       const limit = clampInt(args.limit, 1, READ_MAX_LIMIT, READ_DEFAULT_LIMIT);
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, { allowOutside: true });
+      const target = await resolveToolPath(context, inputPath);
       const info = await stat(target);
       if (info.isDirectory() || !info.isFile()) throw new Error(`Not a file: ${inputPath}`);
       if (info.size === 0) return ok("(empty file)", { offset, shown: 0, total: 0 });

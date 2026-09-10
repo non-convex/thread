@@ -1,27 +1,17 @@
 import { constants } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rm, truncate, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdir, open, readFile, truncate, writeFile, type FileHandle } from "node:fs/promises";
+import { tryLock } from "fs-native-extensions";
 import path from "node:path";
 import type { Project } from "../project/model.js";
 import type { SessionTreeEvent, SessionTreeRecord } from "./model.js";
 import { SESSION_TREE_FORMAT } from "./model.js";
 import { SessionTreeCorruptionError, SessionTreeProjection } from "./projection.js";
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 export class SessionTreeRepository {
   readonly projection = new SessionTreeProjection();
   readonly treePath: string;
   readonly eventsPath: string;
   private readonly lockPath: string;
-  private readonly lockId = randomUUID();
   private eventsHandle: FileHandle | undefined;
   private lockHandle: FileHandle | undefined;
   private queue: Promise<void> = Promise.resolve();
@@ -54,23 +44,10 @@ export class SessionTreeRepository {
   }
 
   private async acquireLock(): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        this.lockHandle = await open(this.lockPath, "wx", 0o600);
-        await this.lockHandle.writeFile(`${process.pid}\n${new Date().toISOString()}\n${this.lockId}\n`);
-        await this.lockHandle.sync();
-        return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const content = await readFile(this.lockPath, "utf8").catch(() => "");
-        const pid = Number.parseInt(content.split(/\r?\n/, 1)[0] ?? "", 10);
-        if (Number.isFinite(pid) && processAlive(pid)) {
-          throw new Error(`Session Tree is already open by process ${pid}`);
-        }
-        await rm(this.lockPath, { force: true });
-      }
+    this.lockHandle = await open(this.lockPath, "a+", 0o600);
+    if (!tryLock(this.lockHandle.fd)) {
+      throw new Error(`Session Tree is already open: ${this.lockPath}`);
     }
-    throw new Error(`Could not acquire Session Tree lock: ${this.lockPath}`);
   }
 
   private async load(): Promise<void> {
@@ -236,12 +213,10 @@ export class SessionTreeRepository {
       await this.eventsHandle?.close().catch(() => undefined);
       this.eventsHandle = undefined;
       if (this.lockHandle) {
-        await this.lockHandle.close().catch(() => undefined);
+        // Keep the lock file's identity stable. Unlinking it lets another opener
+        // lock a replacement while an existing handle still owns the old file.
+        await this.lockHandle.close().catch((cause) => { failure ??= cause; });
         this.lockHandle = undefined;
-        const content = await readFile(this.lockPath, "utf8").catch(() => "");
-        if (content.split(/\r?\n/)[2] === this.lockId) {
-          await rm(this.lockPath, { force: true }).catch(() => undefined);
-        }
       }
     }
     if (failure) throw failure;

@@ -6,11 +6,11 @@ import type { BunPlugin } from "bun";
 const root = path.resolve(import.meta.dir, "..");
 
 /** Bundle the pinned SDK loaders without relying on runtime node_modules discovery. */
-export function recallNativePlugin(target: string): BunPlugin {
+export function nativeAssetsPlugin(target: string): BunPlugin {
   const [, os, arch] = target.split("-");
   const platform = os === "windows" ? "win32" : os;
   const platformId = `${platform}-${arch}`;
-  const helper = path.join(root, "src/core/session-recall/native-assets.ts");
+  const helper = path.join(root, "src/core/utils/native-assets.ts");
 
   async function prelude(version: string, directory: string, names: string[]): Promise<string> {
     const imports: string[] = [];
@@ -29,8 +29,13 @@ export function recallNativePlugin(target: string): BunPlugin {
   }
 
   return {
-    name: "thread-recall-native",
+    name: "thread-native",
     setup(build) {
+      build.onLoad({ filter: /[\\/]fs-native-extensions[\\/]binding\.js$/ }, async () => {
+        const directory = path.join(root, "node_modules/fs-native-extensions/prebuilds", platformId);
+        const head = await prelude("fs-native-extensions-1.5.1", directory, ["fs-native-extensions.node"]);
+        return { contents: `${head}\nmodule.exports = nativeRequire(import.meta.url)(nativeJoin(nativeDirectory,'fs-native-extensions.node'));`, loader: "js" };
+      });
       build.onLoad({ filter: /[\\/]@zvec[\\/]zvec[\\/]src[\\/]index\.mjs$/ }, async ({ path: file }) => {
         const source = await readFile(file, "utf8");
         return { contents: `import cjs from './index.js';\n${source.slice(source.indexOf("export const"))}`, loader: "js" };

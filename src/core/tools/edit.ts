@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { workspacePathClaim } from "./execution.js";
+import { prepareFilePath, workspacePathClaim } from "./execution.js";
 import { updateFile } from "./file-write.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
@@ -58,6 +58,7 @@ export const editTool: AgentTool<EditArgs> = {
     newText: Type.String({ description: "Replacement text. Empty string deletes the match." }),
   }),
   replay: "never",
+  prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
   execution: {
     effect: "write",
     mode: "parallel",
@@ -73,7 +74,7 @@ export const editTool: AgentTool<EditArgs> = {
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
-      const inputPath = args.path.trim();
+      const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
       const oldText = normalizeToLF(args.oldText);
       const newText = normalizeToLF(args.newText);

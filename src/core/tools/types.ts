@@ -1,5 +1,5 @@
 import type { TSchema } from "@earendil-works/pi-ai";
-import { validateToolExecutionPolicy, type ToolExecutionPolicy } from "./execution.js";
+import { validateToolExecutionPolicy, type ToolExecutionPolicy, type ToolPlanningContext, type ToolResourceClaim } from "./execution.js";
 
 export interface ToolResult {
   content: string;
@@ -14,6 +14,8 @@ export interface ToolContext {
   /** Omitted: ordinary workspace policy. Empty: no built-in file writes are allowed. */
   writeScope?: readonly import("./path-safety.js").FileWriteScope[];
   signal: AbortSignal;
+  /** Resources approved and reserved for this invocation. Absent for direct tool calls. */
+  resources?: readonly ToolResourceClaim[];
   fileHistory?: import("../file-history/service.js").FileEditTracker;
   invocation: {
     executionId: string;
@@ -32,13 +34,18 @@ export interface ToolContext {
   ask?: import("../runtime/interaction.js").AskPresenter;
 }
 
-export interface AgentTool<TArgs extends Record<string, unknown> = Record<string, unknown>> {
+export interface AgentTool<
+  TArgs extends Record<string, unknown> = Record<string, unknown>,
+  TPrepared extends Record<string, unknown> = TArgs,
+> {
   name: string;
   description: string;
   parameters: TSchema;
   replay: "safe" | "never";
-  execution: ToolExecutionPolicy<TArgs>;
-  execute(args: TArgs, context: ToolContext): Promise<ToolResult>;
+  /** Resolve effective arguments once, after schema validation and extension rewriting. No tool side effects. */
+  prepare?(args: TArgs, context: ToolPlanningContext): TPrepared | Promise<TPrepared>;
+  execution: ToolExecutionPolicy<TPrepared>;
+  execute(args: TPrepared, context: ToolContext): Promise<ToolResult>;
 }
 
 export class ToolRegistry {

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { resolveToolPath } from "./execution.js";
+import type { ToolContext } from "./types.js";
 
 export const GREP_DEFAULT_LIMIT = 20;
 export const GREP_MAX_LIMIT = 100;
@@ -24,7 +25,7 @@ export type GrepArgs = {
   cursor?: string;
 };
 
-interface GrepSearch {
+export type GrepSearch = {
   pattern: string;
   path: string;
   glob?: string;
@@ -32,7 +33,7 @@ interface GrepSearch {
   literal: boolean;
   context: number;
   outputMode: GrepOutputMode;
-}
+};
 
 export interface GrepMatch {
   file: string;
@@ -83,7 +84,7 @@ export function searchFromArgs(args: GrepArgs): GrepSearch {
 export function assertCursorCompatible(args: GrepArgs, search: GrepSearch): void {
   const mismatch = "cursor does not match this search; pass the same query fields and the cursor from the previous result";
   if (args.pattern !== search.pattern) throw new Error(mismatch);
-  if (args.path !== undefined && (args.path.trim() || ".") !== search.path) throw new Error(mismatch);
+  if (args.path !== undefined && args.path !== search.path) throw new Error(mismatch);
   if (args.glob !== undefined && (args.glob.trim() || undefined) !== search.glob) throw new Error(mismatch);
   if (args.ignoreCase !== undefined && args.ignoreCase !== search.ignoreCase) throw new Error(mismatch);
   if (args.literal !== undefined && args.literal !== search.literal) throw new Error(mismatch);
@@ -111,7 +112,14 @@ export function decodeGrepCursor(value: string): GrepCursor {
     throw new Error("Invalid grep cursor");
   }
   const cursor = parsed as GrepCursor;
-  if (typeof cursor.offset !== "number" || cursor.offset < 0 || typeof cursor.search?.pattern !== "string") {
+  const search = cursor.search;
+  if (!Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
+      !search || typeof search.pattern !== "string" || !search.pattern.trim() ||
+      typeof search.path !== "string" || !search.path ||
+      (search.glob !== undefined && typeof search.glob !== "string") ||
+      typeof search.ignoreCase !== "boolean" || typeof search.literal !== "boolean" ||
+      !Number.isInteger(search.context) || search.context < 0 || search.context > GREP_MAX_CONTEXT ||
+      !["content", "files"].includes(search.outputMode)) {
     throw new Error("Invalid grep cursor");
   }
   return cursor;
@@ -256,17 +264,19 @@ function groupRendered(chunk: GrepMatch[], renderLine: (match: GrepMatch) => str
 }
 
 export async function renderMatchWithContext(
-  root: string,
+  toolContext: ToolContext,
   page: GrepMatch[],
   context: number,
 ): Promise<(match: GrepMatch) => string> {
   if (context <= 0) return defaultRender;
   const read = async (file: string): Promise<string[]> => {
+    const target = await resolveToolPath(toolContext, file);
     try {
-      const content = await readFile(path.join(root, file), "utf8");
+      const content = await readFile(target, { encoding: "utf8", signal: toolContext.signal });
       const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
       return lines;
     } catch {
+      toolContext.signal.throwIfAborted();
       return [];
     }
   };

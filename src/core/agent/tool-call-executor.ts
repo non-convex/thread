@@ -108,20 +108,33 @@ export class ToolCallExecutor {
       }
     }
 
-    // Host authorization is the final preflight gate. Extensions have already
-    // rewritten arguments, and neither policy nor later hooks can change them.
-    if (tool && !immediateResult && this.options.toolPolicy) {
+    const planning = Object.freeze({
+      rootPath: this.rootPath,
+      writableExternalPaths: Object.freeze([...(this.options.writableExternalPaths ?? [])]),
+      signal: input.signal,
+    });
+    let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
+    let resources: readonly ToolResourceClaim[] = [];
+    if (tool && policy && !immediateResult) {
       try {
-        const decision = await this.options.toolPolicy({
-          ...this.identity(input.journal),
-          assistantEntryId: input.assistantEntryId,
-          toolCallId: input.call.id,
-          toolName: input.call.name,
-          args: structuredClone(args),
-          signal: input.signal,
-        });
-        if (!decision || decision.allow !== true) {
-          immediateResult = { content: decision?.reason ?? `Host denied tool ${input.call.name}`, isError: true };
+        if (tool.prepare) args = await tool.prepare(structuredClone(args), planning);
+        if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool preparation must return an argument object");
+        args = structuredClone(args);
+        resources = validateToolResourceClaims(await policy.resources(structuredClone(args), planning));
+        input.signal.throwIfAborted();
+        if (this.options.toolPolicy) {
+          const decision = await this.options.toolPolicy({
+            ...this.identity(input.journal),
+            assistantEntryId: input.assistantEntryId,
+            toolCallId: input.call.id,
+            toolName: input.call.name,
+            args: structuredClone(args),
+            resources: structuredClone(resources),
+            signal: input.signal,
+          });
+          if (!decision || decision.allow !== true) {
+            immediateResult = { content: decision?.reason ?? `Host denied tool ${input.call.name}`, isError: true };
+          }
         }
       } catch (error) {
         if (input.signal.aborted) throw error;
@@ -129,25 +142,7 @@ export class ToolCallExecutor {
       }
     }
     input.signal.throwIfAborted();
-
-    let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
-    let resources: readonly ToolResourceClaim[] = [];
-    if (!policy || immediateResult) {
-      policy = immediatePolicy;
-    } else {
-      try {
-        resources = validateToolResourceClaims(
-          await policy.resources(args, {
-            rootPath: this.rootPath,
-            writableExternalPaths: this.options.writableExternalPaths ?? [],
-            signal: input.signal,
-          }),
-        );
-      } catch (error) {
-        immediateResult = errorResult(error);
-        policy = immediatePolicy;
-      }
-    }
+    if (!policy || immediateResult) { policy = immediatePolicy; resources = []; }
 
     // appendToolExecution is the side-effect durability barrier. The scheduler
     // cannot call execute() until this factual record has reached the log.
@@ -195,6 +190,7 @@ export class ToolCallExecutor {
           ? { writableExternalPaths: this.options.writableExternalPaths }
           : {}),
         signal,
+        resources: structuredClone(prepared.resources),
         invocation: {
           ...this.identity(prepared.journal),
           executionId: prepared.journal.executionId,

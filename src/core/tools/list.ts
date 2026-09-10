@@ -1,7 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
-import { workspacePathClaim } from "./execution.js";
-import { resolveWorkspacePath } from "./path-safety.js";
+import { prepareFilePath, workspacePathClaim, resolveToolPath } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 
 export const LIST_DEFAULT_LIMIT = 200;
@@ -80,11 +79,12 @@ export const listTool: AgentTool<ListArgs> = {
     ),
   }),
   replay: "safe",
+  prepare: (args, context) => prepareFilePath(args, context, { defaultPath: "." }),
   execution: {
     effect: "read",
     mode: "parallel",
     resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path?.trim() || ".", "read", {
+      await workspacePathClaim(context.rootPath, args.path ?? ".", "read", {
         allowOutside: true,
         scope: "subtree",
       }),
@@ -93,8 +93,8 @@ export const listTool: AgentTool<ListArgs> = {
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
-      const inputPath = args.path?.trim() ? args.path.trim() : ".";
-      const target = await resolveWorkspacePath(context.rootPath, inputPath, { allowOutside: true });
+      const inputPath = args.path ?? ".";
+      const target = await resolveToolPath(context, inputPath);
       const limit = clampInt(args.limit, 1, LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT);
       let dirents;
       try {

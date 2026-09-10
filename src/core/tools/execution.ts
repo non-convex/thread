@@ -1,5 +1,6 @@
 import path from "node:path";
-import { realPath, resolveWorkspacePath } from "./path-safety.js";
+import { isPathInside, realPath, resolveWorkspacePath } from "./path-safety.js";
+import type { ToolContext } from "./types.js";
 
 export type ToolEffect = "read" | "write" | "process" | "interactive";
 export type ToolExecutionMode = "parallel" | "sequential";
@@ -19,9 +20,9 @@ export interface ToolResourceClaim {
 }
 
 export interface ToolPlanningContext {
-  rootPath: string;
-  writableExternalPaths?: readonly string[];
-  signal: AbortSignal;
+  readonly rootPath: string;
+  readonly writableExternalPaths?: readonly string[];
+  readonly signal: AbortSignal;
 }
 
 export interface ToolExecutionPolicy<TArgs extends Record<string, unknown>> {
@@ -91,7 +92,7 @@ function normalizeResourcePath(value: string): string {
 
 async function canonicalTarget(target: string): Promise<string> {
   try {
-    return normalizeResourcePath(await realPath(target));
+    return await realPath(target);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -100,10 +101,10 @@ async function canonicalTarget(target: string): Promise<string> {
   while (true) {
     missing.unshift(path.basename(parent));
     const next = path.dirname(parent);
-    if (next === parent) return normalizeResourcePath(target);
+    if (next === parent) return path.normalize(target);
     parent = next;
     try {
-      return normalizeResourcePath(path.join(await realPath(parent), ...missing));
+      return path.join(await realPath(parent), ...missing);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -127,7 +128,41 @@ export async function workspacePathClaim(
     allowOutside: options.allowOutside === true,
     ...(options.allowedOutsidePaths ? { allowedOutsidePaths: options.allowedOutsidePaths } : {}),
   });
-  return claim("workspace", await canonicalTarget(target), access, options.scope ?? "exact");
+  return claim("workspace", normalizeResourcePath(await canonicalTarget(target)), access, options.scope ?? "exact");
+}
+
+/** Preserve ordinary relative paths for display, but resolve aliases before host authorization. */
+export async function prepareFilePath<T extends Record<string, unknown> & { path?: string }>(
+  args: T, context: ToolPlanningContext, options: { forWrite?: boolean; defaultPath?: string; literal?: boolean } = {},
+): Promise<T & { path: string }> {
+  context.signal.throwIfAborted();
+  const input = (options.literal ? args.path : args.path?.trim()) || options.defaultPath;
+  if (!input) throw new Error("path cannot be empty");
+  const root = await realPath(context.rootPath);
+  const target = await canonicalTarget(await resolveWorkspacePath(root, input, {
+    forWrite: options.forWrite === true,
+    allowOutside: options.forWrite !== true,
+    ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+  }));
+  context.signal.throwIfAborted();
+  return { ...args, path: path.isAbsolute(input) || !isPathInside(root, target) ? target : path.relative(root, target) || "." };
+}
+
+/** Recheck the actual target, including after a write waits for another editor. */
+export async function resolveToolPath(context: ToolContext, input: string, forWrite = false): Promise<string> {
+  context.signal.throwIfAborted();
+  const target = await resolveWorkspacePath(context.rootPath, input, {
+    forWrite, allowOutside: !forWrite,
+    ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+  });
+  if (context.resources) {
+    const actual = normalizeResourcePath(await canonicalTarget(target));
+    const approved = context.resources.some((resource) => resource.namespace === "workspace" &&
+      (!forWrite || resource.access === "write") && (resource.resource === "*" ||
+        (resource.scope === "subtree" ? isPathInside(resource.resource, actual) : resource.resource === actual)));
+    if (!approved) throw new Error(`File target changed outside the approved resources: ${input}`);
+  }
+  return target;
 }
 
 /** A conservative claim for tools, such as a shell, whose workspace effects cannot be enumerated. */

@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { workspacePathClaim } from "./execution.js";
+import { prepareFilePath, workspacePathClaim } from "./execution.js";
 import { updateFile } from "./file-write.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
@@ -26,6 +26,7 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
     content: Type.String({ description: "Full file contents." }),
   }),
   replay: "never",
+  prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
   execution: {
     effect: "write",
     mode: "parallel",
@@ -41,7 +42,7 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();
-      const inputPath = args.path.trim();
+      const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
       const { existed, bytes } = await updateFile(context, inputPath, () => Buffer.from(args.content, "utf8"));
       return ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`);

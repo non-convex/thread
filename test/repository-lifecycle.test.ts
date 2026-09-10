@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -74,10 +74,10 @@ test("repeated and concurrent Session Tree close preserve the next owner's lock"
 
   const second = await values.openTree();
   const lockPath = path.join(values.project.statePath, "session-tree.lock");
-  const secondLock = await readFile(lockPath, "utf8");
+  const secondLock = await stat(lockPath);
   assert.strictEqual(first.close(), closing);
   await first.close();
-  assert.equal(await readFile(lockPath, "utf8"), secondLock);
+  assert.equal((await stat(lockPath)).ino, secondLock.ino);
   await assert.rejects(SessionTreeRepository.open(values.project), /already open/);
   await second.append(() => sessionCreated(second, "still-owned"), true);
   await second.close();
@@ -127,23 +127,29 @@ test("Session Tree close drains admitted writes and immediately rejects new writ
   assert.equal(reopened.projection.sessions.has("rejected"), false);
 });
 
-test("Session Tree only releases a lock bearing its own identity", async (t) => {
+test("Session Tree keeps the lock file identity stable across owners", async (t) => {
   const values = await fixture(t);
-  const repository = await values.openTree();
+  const first = await values.openTree();
   const lockPath = path.join(values.project.statePath, "session-tree.lock");
-  const replacement = `${process.pid}\n${new Date().toISOString()}\nanother-owner\n`;
-  await writeFile(lockPath, replacement, "utf8");
-  await repository.close();
-  assert.equal(await readFile(lockPath, "utf8"), replacement);
+  const identity = await stat(lockPath);
+  await first.close();
+  const second = await values.openTree();
+  assert.equal((await stat(lockPath)).ino, identity.ino);
+  await assert.rejects(SessionTreeRepository.open(values.project), /already open/);
+  await first.close();
+  await assert.rejects(SessionTreeRepository.open(values.project), /already open/);
+  await second.close();
 });
 
 test("a failed Session Tree open releases its own lock and preserves the load error", async (t) => {
   const values = await fixture(t);
   const repository = await values.openTree();
   await repository.close();
+  const original = await readFile(repository.eventsPath);
   await writeFile(repository.eventsPath, "invalid JSON\n", "utf8");
   await assert.rejects(SessionTreeRepository.open(values.project), /Invalid JSON/);
-  await assert.rejects(readFile(path.join(values.project.statePath, "session-tree.lock")), { code: "ENOENT" });
+  await writeFile(repository.eventsPath, original);
+  await values.openTree();
 });
 
 test("Session Tree close preserves a persistence failure and still releases the lock", async (t) => {

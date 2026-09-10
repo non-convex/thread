@@ -88,6 +88,10 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 自定义工具实现公共 `AgentTool` 接口，提供名称、描述、参数 schema、执行策略和 `execute()`；可在创建时传入，或空闲时通过 `runtime.registerTool(tool)` 添加。内置工具和自定义工具使用同一参数校验、调度、宿主策略、取消信号和执行记录。可运行的自定义工具见离线示例中的 `add`。
 
+需要解析别名、默认路径或游标的工具可实现 `prepare(args, context)`。执行顺序为：schema 校验 → 扩展改写与再次校验 → `prepare()` → 资源声明 → 宿主授权 → 调度与执行。`prepare()` 每次调用只运行一次，收到取消信号，只能进行参数和目标解析，不能执行工具的业务副作用。省略时沿用校验后的参数；`AgentTool<Input, Prepared>` 可声明与模型输入不同的有效参数类型。资源声明、授权、执行与 `effectiveArgs` 记录均使用准备后的参数，模型的原始 tool call 仍保留在助手消息中。
+
+内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 把游标中的搜索条件和分页位置展开为有效参数，宿主无需解码私有游标。文件访问前仍检查实际路径是否落在批准的资源范围，写入排队后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
+
 `skills: { paths: [...] }` 只在启动时扫描声明的目录。相对路径以 `rootPath` 为基准，多个目录按声明顺序加载；同一文件去重，同名 Skill 保留先声明项并报告诊断。runtime 不自动扫描 `${THREAD_HOME}/skills` 或其他全局路径。宿主也可传入已加载的 `LoadedSkills`，形如 `{ skills, diagnostics }`。
 
 有可供模型调用的 Skill 时，runtime 自动加入 `skill` 工具；无需在 `tools` 中重复声明。系统提示词只包含这些 Skill 的目录和加载说明，正文由工具按需返回。带 `disable-model-invocation: true` 的 Skill 不进入模型目录，也不能由模型的 `skill` 工具加载；宿主仍可使用 `invokeSkill()` 显式调用。`runtime.skills` 和 `runtime.skillDiagnostics` 返回独立副本。
@@ -129,7 +133,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | --- | --- |
 | `createSession()` | 创建并返回 `ProjectSession` |
 | `listSessions()` | 返回会话 ID、live tip、turn 数和创建时间 |
-| `readSession(sessionId)` | 返回会话和当前 live path 上 `turns`、`entries`、`tasks` 的独立快照，以及 `liveTipTurnId` |
+| `readSession(sessionId)` | 返回会话、已提交 live path 上的 `turns`、`entries`、`tasks`、`liveTipTurnId`，以及独立的 `activeTurn` |
 | `readHistory()` | 返回整个项目保留的会话、turn、条目和 live tips，包含回退后保留的分支 |
 | `prompt(sessionId, input, options?)` | 执行并返回 `TurnResult`，包含 turn、结果和模型消息 |
 | `setModel(model)` / `setThinkingLevel(level)` | 模型在空闲时切换；思考偏好可以随时调整，从下一轮生效 |
@@ -141,6 +145,10 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `close()` | 停止接收操作、取消并等待执行、关闭实例拥有的资源 |
 
 Session Tree 的历史与传给模型的上下文分别保存。读取快照不会改变内部状态；客户端不应通过修改快照来编辑历史。进程恢复时保留未完成任务的记录并将其结算为 interrupted，不自动重跑结果不确定的工具。
+
+`activeTurn` 为 `{ turn, entries, tasks }` 或 `null`，包含目标会话正在运行的一轮及其已记录的输入、助手内容、工具调用和结果。它与顶层已提交的历史分开；完成、中断或失败后，该轮进入 live path，`activeTurn` 变为 `null`，不重复返回。运行中查询通过会话索引定位这一轮，不需要复制其他会话的历史。未形成记录的流式增量不在此快照中，刷新后继续通过 `subscribe()` 接收进度。
+
+Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整个 runtime 的持久化写入。正常关闭或进程退出会释放锁；`session-tree.lock` 文件保留，文件存在或其中的旧 PID 文本不代表被占用，也不要通过删除它解锁。升级到该锁协议前须先退出使用同一数据目录的旧版进程；旧版只识别 PID 文件，不应与新版同时运行。旧锁文件可以直接复用，无需清理；会话日志格式不变。
 
 每轮开始时创建执行器，捕获该轮的模型、思考级别和系统提示词。执行中通过 `setThinkingLevel()` 或 TUI 的 `Shift+Tab` 调整偏好，不改变当前轮后续模型步骤；下一轮使用新设置。
 
@@ -162,7 +170,7 @@ Session Tree 的历史与传给模型的上下文分别保存。读取快照不�
 
 流式增量是临时进度，订阅不是持久化事件重放接口。`turn_started` 和 `turn_finished` 在相应持久化屏障后发布。需要网络重连时，适配层应协调状态快照和后续事件之间的衔接。
 
-宿主工具策略与普通观察者分开。策略在参数校验和扩展改写后判断最终调用，主 agent、worker 和后台 agent 均使用宿主策略；拒绝后的调用不会执行。策略回调不等同于进程沙箱。
+宿主工具策略与普通观察者分开。策略收到准备后的 `args` 和已解析的 `resources`，可按资源的 `namespace`、`resource`、`access`、`scope` 判断权限。主 agent、worker 和后台 agent 均使用该策略；拒绝后的调用不会执行。传给策略和资源声明函数的数据是副本，修改它们不会改写后续执行。自定义工具必须如实声明其资源；策略回调不等同于进程沙箱。
 
 通过 `askPresenter` 提供交互能力，可以传入公共入口导出的 `AskService`，或实现自己的 `AskPresenter`。工具发起的 `AskRequest.invocation` 标明 session、turn、tool call 和 agent 身份。取消或关闭 runtime 会取消它正在等待的问题，并等待 turn 结算；宿主传入的 `AskService` 仍由宿主负责 `dispose()`，可被其他客户端继续使用。
 
