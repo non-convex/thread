@@ -34,7 +34,7 @@ export function ModelPickerOverlay(props: {
       ? "Main model"
       : props.screen().agentId === "dreamer"
         ? "Dreamer model"
-        : "Implementation worker model";
+        : "Worker model";
     return props.screen().scope === "all" ? `${target} · all` : target;
   };
   return (

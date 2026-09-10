@@ -301,31 +301,9 @@ zvec、Jieba 字典和 ONNX 所需的原生库随程序一起打包，运行时�
 
 原生文件的打包与释放分别在 [native-bundle.ts](../scripts/native-bundle.ts) 和 [native-assets.ts](../src/core/utils/native-assets.ts)。
 
-## 怎样验证这套流程
+## 历史性能记录
 
-普通回归测试使用可控制的 embedding 测试实现，不下载真实模型。它们检查历史分支、内容过滤、增量更新、失败恢复和取消等行为：
-
-```bash
-bun run check
-bun test test --timeout 30000
-```
-
-真实模型验证单独运行。它会使用固定的合成开发对话，检查改写查询、精确标识符、参考向量以及长文本切分，并输出索引耗时、查询延迟和进程内存：
-
-```bash
-bun run test:recall
-```
-
-发布产物还需要在没有项目依赖目录的环境里运行。以下命令会编译程序，再把它复制到 checkout 之外的临时目录，验证中文路径、自动下载、离线重启和正常退出：
-
-```bash
-bun run build:standalone
-bun run test:standalone-recall release/thread.exe
-```
-
-在 Linux 和 macOS 上，最后一个路径改为 `release/thread`。测试使用合成历史，不读取真实项目对话；下载检查通过临时的本地 HTTP 源提供固定模型文件，然后关闭该源，验证离线复用。
-
-2026-09-05 的 Windows x64 验证中，类型检查、普通构建、单文件构建和 85 项回归测试通过。20-turn 固定样本的结果如下：
+2026-09-05 在 Windows x64 上使用 20-turn 固定样本的结果如下：
 
 | 项目 | 实测结果 |
 | --- | --- |
@@ -338,4 +316,4 @@ bun run test:standalone-recall release/thread.exe
 
 RSS 表示进程当时驻留在物理内存中的页面大小。两者相加约 871 MiB，其中共享页可能重复计算；这个值也不是峰值。模型下载只有约 135 MB，并不意味着运行时只占用这么多内存。
 
-这些数据来自小型固定样本，用于确认流程和基本质量，不能作为大型项目的耗时或内存上限。Windows 单文件的首次下载、中文路径和离线重启已在本机通过；其他五个平台配置了发布验证，此记录不代表已经在本机实测它们。
+这些数据来自小型固定样本，不能作为大型项目的耗时或内存上限，也不代表其他平台的实测结果。

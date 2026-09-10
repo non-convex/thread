@@ -3,7 +3,7 @@ import { stderr as errorOutput, stdout as output } from "node:process";
 import { ThreadApp } from "../app/thread-app.js";
 import { createConfiguredModelCatalog } from "../core/agent/model-client.js";
 import type { AgentProfileDiagnostic } from "../core/agent/profile.js";
-import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
+import { WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
 import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
 import { ThreadCredentialStore } from "../core/auth/credential-store.js";
 import { loadThreadConfig } from "../app/config/thread-config.js";
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
       const remembered = await loadThreadState();
       if (remembered) {
         const agents = structuredClone(remembered.agents ?? {});
-        for (const id of [IMPLEMENTATION_WORKER_PROFILE_ID, DREAMER_PROFILE_ID] as const) {
+        for (const id of [WORKER_PROFILE_ID, DREAMER_PROFILE_ID] as const) {
           const agent = agents[id];
           if (agent?.model?.provider === command.providerId) agents[id] = { ...agent, enabled: false };
         }
@@ -163,9 +163,9 @@ async function main(): Promise<void> {
     message,
   }));
   const workerConfig = loadedConfig?.source === "thread"
-    ? loadedConfig.config.agents[IMPLEMENTATION_WORKER_PROFILE_ID]
+    ? loadedConfig.config.agents[WORKER_PROFILE_ID]
     : undefined;
-  const workerState = state?.agents?.[IMPLEMENTATION_WORKER_PROFILE_ID];
+  const workerState = state?.agents?.[WORKER_PROFILE_ID];
   const workerSelection = workerState?.model ?? workerConfig?.model;
   let workerModel: ReturnType<typeof modelCatalog.createClient> | undefined;
   if (workerState?.enabled && workerSelection) {
@@ -173,16 +173,16 @@ async function main(): Promise<void> {
       workerModel = modelCatalog.createClient(workerSelection.provider, workerSelection.id);
     } catch (error) {
       agentProfileDiagnostics.push({
-        profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+        profileId: WORKER_PROFILE_ID,
         level: "error",
         message: error instanceof Error ? error.message : String(error),
       });
     }
   } else if (workerState?.enabled) {
     agentProfileDiagnostics.push({
-      profileId: IMPLEMENTATION_WORKER_PROFILE_ID,
+      profileId: WORKER_PROFILE_ID,
       level: "error",
-      message: "Subagent was enabled without a worker model; use /agent implementation-worker model to choose one.",
+      message: "Worker was enabled without a worker model; use /agent worker model to choose one.",
     });
   }
   const dreamerConfig = loadedConfig?.source === "thread"
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     ...(loadedConfig?.config.attribution ? { commitAttribution: loadedConfig.config.attribution.commit } : {}),
     ...(model ? { model } : {}),
     modelCatalog,
-    implementationWorker: {
+    worker: {
       enabled: workerState?.enabled === true,
       ...(workerModel ? { model: workerModel } : {}),
       ...(workerConfig?.model ? { defaultModel: workerConfig.model } : {}),

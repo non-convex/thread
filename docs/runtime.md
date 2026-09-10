@@ -8,7 +8,7 @@
 
 `src/app/` 持有 coding 默认提示词、命令、应用扩展、配置文件加载与用户选择的保存；`src/cli/` 和 `src/ui/` 负责启动和展示。核心保留模型配置类型、状态回调的数据结构及共用能力，不能导入应用代码，类型依赖也遵守同一方向。
 
-`scripts/verify-runtime.ts` 检查整个 `src/core/`（包括 worker 和原生资源入口）的依赖方向，以及构建后的 runtime 不加载 TUI。仓库仍是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`；本次目录分层不改变安装依赖，也不增加独立发布流程。MCP 实现后同样归入核心。
+仓库是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`，共用安装依赖与发布流程。MCP 实现后同样归入核心。
 
 ## 运行离线示例
 
@@ -20,8 +20,6 @@ bun examples/runtime.ts
 ```
 
 [完整示例](../examples/runtime.ts) 从构建后的 `thread/runtime` 导入，声明内置 `read` 工具、自定义 `add` 工具和 `./skills` 加载路径。脚本模型依次调用 `skill`、`read`、`add`，输出 `The answer is 42.`，不需要 API key。它创建独立的临时工作区和数据目录，运行后关闭 runtime 并清理目录。
-
-`bun run test:runtime` 另外在独立宿主目录验证包导出，并检查导入不会加载终端前端或写入默认 `THREAD_HOME`。
 
 ## 创建与执行
 
@@ -76,7 +74,7 @@ try {
 
 `ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回原有的不可用结果；TUI 为同一个工具绑定问题面板。
 
-coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共享给主 agent 和 implementation worker；`projectInstructions: false` 可关闭读取。只读取根目录这一份文件，不遍历祖先、子目录或全局指令目录。缺失或空文件不追加内容；文件须为项目内的 UTF-8 普通文件，上限 32 KiB，超限或无法读取时报错，不截断规则。修改文件后重新打开应用才会生效，同一实例内新建会话或重新启用 worker 仍使用启动快照。
+coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共享给主 agent 和 worker；`projectInstructions: false` 可关闭读取。只读取根目录这一份文件，不遍历祖先、子目录或全局指令目录。缺失或空文件不追加内容；文件须为项目内的 UTF-8 普通文件，上限 32 KiB，超限或无法读取时报错，不截断规则。修改文件后重新打开应用才会生效，同一实例内新建会话或重新启用 worker 仍使用启动快照。
 
 创建实例时会复制配置数据。之后修改原始 options 中的提示词、工具定义、Skill 路径、已加载 Skill 或 worker 限制，不会悄悄重配正在使用的实例；明确的模型切换使用 `setModel()` 等操作。工具的执行函数仍绑定宿主提供的原始实例，支持带内部状态的类实现。注入的模型客户端、工具资源、交互服务及嵌入客户端仍由宿主负责其生命周期；关闭 runtime 不会关闭共享模型客户端。
 
@@ -96,17 +94,19 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 有可供模型调用的 Skill 时，runtime 自动加入 `skill` 工具；无需在 `tools` 中重复声明。系统提示词只包含这些 Skill 的目录和加载说明，正文由工具按需返回。带 `disable-model-invocation: true` 的 Skill 不进入模型目录，也不能由模型的 `skill` 工具加载；宿主仍可使用 `invokeSkill()` 显式调用。`runtime.skills` 和 `runtime.skillDiagnostics` 返回独立副本。
 
-宿主的 `systemPrompt` 保留原文，`appendSystemPrompt` 用于主 agent 的追加指令；`sharedInstructions` 用于主 agent 和 implementation worker 共用的指令。worker 保留自己的角色提示词，不继承主 agent 的角色；Dreamer 也不继承项目执行指令。核心不查找 `AGENTS.md`，嵌入宿主可自行读取指令并传入 `sharedInstructions`。
+宿主的 `systemPrompt` 保留原文，`appendSystemPrompt` 用于主 agent 的追加指令；`sharedInstructions` 用于主 agent 和 worker 共用的指令。worker 保留自己的角色提示词，不继承主 agent 的角色；Dreamer 也不继承项目执行指令。核心不查找 `AGENTS.md`，嵌入宿主可自行读取指令并传入 `sharedInstructions`。
 
 加载 Skill 后会追加对应能力说明，核心不会自动加入 coding 角色、文件编辑约定或 Git 提交署名。显式启用 `search`（会话 Recall）、`globalMemoryPath`、交互或 worker 时，还会装配这些能力对应的工具或说明；`search` 与基础工具 `websearch` 是不同功能。
 
 MCP 属于未来的核心能力，将通过同一工具注册、策略、执行与取消机制接入。当前尚未实现 MCP 客户端或配置项。
 
+通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。执行边界见 [Worker 架构](./worker-architecture.md)。
+
 ## 文件 checkpoint 与会话回退
 
 `fileCheckpoints` 默认 `false`。关闭时，内置 `write` 和 `edit` 仍可工作，但不保存文件备份或追加 `file_edit` 记录；路径检查、取消处理、主 agent 与 worker 的同路径写入协调仍然生效。Session Tree 的会话和工具执行记录继续持久化，因此关闭文件 checkpoint 不等于使用内存会话。
 
-worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeScope`，拒绝修改范围外的实际路径；检查发生在文件备份和修改之前，进入同路径写入队列后再次确认目标。文件范围只允许该文件，目录范围允许其后代，符号链接不能扩大范围；返工沿用原任务范围。宿主策略放行不会跳过这项检查。它不限制任意 bash 命令或自定义工具的文件副作用，也不是操作系统沙箱。详见 [Subagent 架构](./subagent-architecture.md)。
+worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeScope`，拒绝修改范围外的实际路径；检查发生在文件备份和修改之前，进入同路径写入队列后再次确认目标。文件范围只允许该文件，目录范围允许其后代，符号链接不能扩大范围；返工沿用原任务范围。宿主策略放行不会跳过这项检查。它不限制任意 bash 命令或自定义工具的文件副作用，也不是操作系统沙箱。详见 [Worker 架构](./worker-architecture.md)。
 
 开启 `fileCheckpoints: true` 后，内置文件编辑工具会保存每轮首次修改前的文件内容。worker 的记录归属于主 agent 的父 turn；bash、脚本和自定义工具的任意文件修改不会因此自动获得 checkpoint。
 

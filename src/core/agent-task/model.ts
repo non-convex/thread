@@ -11,7 +11,7 @@ export const AGENT_TASK_TOOL_NAMES = new Set([
   "cancel_task",
 ]);
 
-export interface ImplementationTaskSpec {
+export interface WorkerTaskSpec {
   title: string;
   objective: string;
   guidance: string[];
@@ -42,7 +42,7 @@ export interface AgentTask {
   profileId: string;
   providerId: string;
   modelId: string;
-  spec: ImplementationTaskSpec;
+  spec: WorkerTaskSpec;
   status: AgentTaskStatus;
   createdAt: number;
   updatedAt: number;

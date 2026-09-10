@@ -1,6 +1,6 @@
-# Thread 的 Subagent 架构
+# Thread 的 Worker 架构
 
-Thread 的 subagent 是主回合内临时运行的实现 worker。它不是另一棵 Session Tree，也不拥有私有工作区。主 agent 和 worker 直接共享当前项目目录，依靠清楚的任务边界协调并发。
+Thread 的 worker 在主回合内临时运行，负责主 agent 委派的实现任务。它不是另一棵 Session Tree，也不拥有私有工作区。主 agent 和 worker 直接共享当前项目目录，依靠清楚的任务边界协调并发。
 
 ## 设计目标
 
@@ -20,7 +20,9 @@ Thread 的 subagent 是主回合内临时运行的实现 worker。它不是另�
 
 ## 主 agent 的四个任务工具
 
-Subagent 开启后，Thread 只注册四个任务工具：
+CLI/TUI 使用 `/agent worker model <provider>/<model>` 选择模型并启用，`/agent worker on|off` 切换开关；配置文件使用 `agents.worker`。嵌入配置见 [runtime 指南](./runtime.md)。
+
+Worker 开启后，Thread 只注册四个任务工具：
 
 | 工具 | 用途 |
 | --- | --- |

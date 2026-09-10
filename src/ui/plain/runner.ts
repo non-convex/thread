@@ -15,7 +15,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
         : "no model configured; use /model to select one"
     }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
-  output.write(`implementation-worker ${app.runtime.subagentEnabled ? `on · ${app.runtime.subagentModel?.provider}/${app.runtime.subagentModel?.id}` : "off · use /agent to configure"}\n`);
+  output.write(`worker ${app.runtime.workerEnabled ? `on · ${app.runtime.workerModel?.provider}/${app.runtime.workerModel?.id}` : "off · use /agent to configure"}\n`);
   output.write(`dreamer ${app.runtime.dreamerEnabled ? `on · ${app.runtime.dreamerModel?.provider}/${app.runtime.dreamerModel?.id}` : "off · use /agent to configure"}\n`);
   for (const diagnostic of app.runtime.agentProfileDiagnostics) {
     output.write(`[agent ${diagnostic.level}] ${diagnostic.profileId}: ${diagnostic.message}\n`);

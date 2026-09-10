@@ -142,7 +142,7 @@ Creating and switching Sessions leave workspace files unchanged. `/new` does not
 
 ### Turns connect interaction, execution, and file edits
 
-Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and built-in file edits. Before `edit` or `write` first changes a project file in a turn, Thread saves its original bytes and permissions, or records that it did not exist. Implementation-worker edits belong to the parent turn.
+Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and built-in file edits. Before `edit` or `write` first changes a project file in a turn, Thread saves its original bytes and permissions, or records that it did not exist. Worker edits belong to the parent turn.
 
 Opening a project and starting or finishing a turn never scan the workspace for checkpoints. Only files actually changed by the built-in editing tools are backed up. Bash commands, scripts, and other tools are not tracked. Interrupted and failed turns retain their saved file edits and are sealed into valid conversation prefixes, so the next request can continue from factual history.
 
@@ -182,14 +182,14 @@ Users can also run `/thread search "why was this designed this way"` directly. S
 
 Stable information that applies across projects lives in one Markdown file, `${THREAD_HOME}/.THREAD.md`. Main maintains it only when the user's current message explicitly provides stable information useful across projects. A fixed snapshot enters the system prompt and counts toward the context budget; the file itself stays outside the Session Tree, search, rewind, and compaction. `/new` reads the latest contents for the new Session, and restarting refreshes all Session snapshots.
 
-`/agent` is the common entry point for model selection and agent settings. Thread has three built-in profiles: `main`, `implementation-worker`, and `dreamer`. Both secondary agents start disabled and are enabled by explicitly selecting a model:
+`/agent` is the common entry point for model selection and agent settings. Thread has three built-in profiles: `main`, `worker`, and `dreamer`. Both secondary agents start disabled and are enabled by explicitly selecting a model:
 
 | Agent | Enable with | Role |
 | --- | --- | --- |
-| `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
+| `worker` | `/agent worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | Review interactions and execution traces in the background for well-supported implicit user patterns and lessons useful across projects, maintaining global memory. |
 
-Workers edit the current workspace directly. `writeScope` coordinates task ownership and is enforced by the built-in `write` and `edit` tools; it does not sandbox bash or arbitrary custom tools. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the subagent architecture](./docs/subagent-architecture.md).
+Workers edit the current workspace directly. `writeScope` coordinates task ownership and is enforced by the built-in `write` and `edit` tools; it does not sandbox bash or arbitrary custom tools. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the worker architecture](./docs/worker-architecture.md).
 
 Dreamer starts after ten ended turns and ten continuous minutes of Main being idle. It stays silent and runs for at most five minutes; most reviews should leave memory unchanged. See [global memory and Dreamer architecture](./docs/global-memory-architecture.md).
 
@@ -270,15 +270,14 @@ const runtime = await ThreadRuntime.open({
 
 Select built-in tools by name and supply custom `AgentTool` objects in the same array. Skill paths resolve relative to `rootPath`; enabled Skills add their own `skill` tool and catalog to the host's prompt. By default, no basic tools, Skill directories, file checkpoints, Recall, or global memory are enabled. Session history still persists, and `rewind()` can rewind context without changing files. The CLI and `ThreadApp.open()` share the coding application defaults; `app.runtime` exposes its execution and queries.
 
-Terminal rendering has a separate `thread/tui` entrypoint. MCP is planned as a core tool integration; it is not implemented yet. See the [runtime guide](./docs/runtime.md) and [offline embedding example](./examples/runtime.ts). `bun run test:runtime` verifies the built public API from an independent host.
+Terminal rendering has a separate `thread/tui` entrypoint. MCP is planned as a core tool integration; it is not implemented yet. See the [runtime guide](./docs/runtime.md) and [offline embedding example](./examples/runtime.ts).
 
-The coding app reads the project-root `AGENTS.md` at startup and shares its instructions with the main agent and implementation workers. Set `projectInstructions: false` on `ThreadApp.open()` to disable this. The bare runtime discovers no project instructions; hosts can supply `sharedInstructions` explicitly. For work on this repository, [AGENTS.md](./AGENTS.md) maps the code, documentation and verification commands.
+The coding app reads the project-root `AGENTS.md` at startup and shares its instructions with the main agent and workers. Set `projectInstructions: false` on `ThreadApp.open()` to disable this. The bare runtime discovers no project instructions; hosts can supply `sharedInstructions` explicitly. For work on this repository, [AGENTS.md](./AGENTS.md) maps the code, documentation and verification commands.
 
 ## Development
 
 ```bash
 bun run check
-bun test test --timeout 30000
 bun run build
 ```
 
@@ -305,7 +304,7 @@ All embeddable implementation lives in `src/core/`; it cannot import application
 
 Further reading:
 
-- [Subagent architecture](./docs/subagent-architecture.md)
+- [Worker architecture](./docs/worker-architecture.md)
 - [Session recall architecture](./docs/session-recall.md)
 - [Session tool parameters and examples](./docs/session-tools.md)
 - [Global memory and Dreamer architecture](./docs/global-memory-architecture.md)

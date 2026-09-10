@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ModelCatalog, ModelClient } from "../agent/model-client.js";
 import type { AgentProfileDiagnostic } from "../agent/profile.js";
 import type { RunTurnOptions } from "../agent/turn-runner.js";
-import type { ImplementationWorkerProfileSettings } from "../agent-task/profile.js";
+import type { WorkerProfileSettings } from "../agent-task/profile.js";
 import type { ModelSelectionConfig } from "../config/model-config.js";
 import type { ThreadState } from "./state.js";
 import type { SessionRecallOptions } from "../session-recall/service.js";
@@ -24,7 +24,7 @@ export interface ThreadRuntimeOptions {
   /** Base instructions. A bare runtime adds no coding or global-memory defaults. */
   systemPrompt?: string;
   appendSystemPrompt?: string;
-  /** Host-provided instructions shared by the main agent and implementation workers. No file discovery. */
+  /** Host-provided instructions shared by the main agent and workers. No file discovery. */
   sharedInstructions?: string;
   /** Selected basic tools and host tools. Omitted: no basic tools. */
   tools?: readonly (BuiltinToolName | AgentTool)[];
@@ -40,11 +40,11 @@ export interface ThreadRuntimeOptions {
   askPresenter?: AskPresenter;
   toolPolicy?: HostToolPolicy;
   writableExternalPaths?: readonly string[];
-  implementationWorker?: {
+  worker?: {
     enabled: boolean;
     model?: ModelClient;
     defaultModel?: ModelSelectionConfig;
-    settings?: ImplementationWorkerProfileSettings;
+    settings?: WorkerProfileSettings;
   };
   dreamer?: {
     enabled: boolean;
@@ -110,10 +110,10 @@ export function snapshotRuntimeOptions(options: ThreadRuntimeOptions): RuntimeOp
     ...(options.writableExternalPaths ? { writableExternalPaths: options.writableExternalPaths.map((item) => path.resolve(item)) } : {}),
     ...(options.state ? { state: structuredClone(options.state) } : {}),
     ...(options.agentProfileDiagnostics ? { agentProfileDiagnostics: structuredClone(options.agentProfileDiagnostics) } : {}),
-    ...(options.implementationWorker ? { implementationWorker: {
-      ...options.implementationWorker,
-      ...(options.implementationWorker.settings ? { settings: structuredClone(options.implementationWorker.settings) } : {}),
-      ...(options.implementationWorker.defaultModel ? { defaultModel: { ...options.implementationWorker.defaultModel } } : {}),
+    ...(options.worker ? { worker: {
+      ...options.worker,
+      ...(options.worker.settings ? { settings: structuredClone(options.worker.settings) } : {}),
+      ...(options.worker.defaultModel ? { defaultModel: { ...options.worker.defaultModel } } : {}),
     } } : {}),
     ...(options.dreamer ? { dreamer: { ...options.dreamer,
       ...(options.dreamer.defaultModel ? { defaultModel: { ...options.dreamer.defaultModel } } : {}),

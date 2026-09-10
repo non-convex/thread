@@ -1,5 +1,5 @@
 import type { CacheRetention, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
-import type { AttributionConfig, DreamerConfig, ImplementationWorkerConfig, ThreadConfig } from "./thread-config.js";
+import type { AttributionConfig, DreamerConfig, WorkerConfig, ThreadConfig } from "./thread-config.js";
 import type { CustomModelConfig, CustomProviderConfig, ModelOverrideConfig, ModelSelectionConfig } from "../../core/config/model-config.js";
 
 export function object(value: unknown, label: string): Record<string, unknown> {
@@ -172,7 +172,7 @@ export function parseProvider(providerId: string, value: unknown, source: "threa
   };
 }
 
-function parseImplementationWorker(value: unknown, label: string): ImplementationWorkerConfig {
+function parseWorker(value: unknown, label: string): WorkerConfig {
   const input = object(value, label);
   const selected = object(input.model, `${label}.model`);
   return {
@@ -231,16 +231,11 @@ export function parseConfig(value: unknown): { config: ThreadConfig; agentDiagno
     try {
       const configuredAgents = object(input.agents, "agents");
       for (const key of Object.keys(configuredAgents)) {
-        if (key !== "implementation-worker" && key !== "dreamer") {
+        if (key !== "worker" && key !== "dreamer") {
           agentDiagnostics.push(`Unknown agent profile: ${key}`);
         }
       }
-      if (configuredAgents["implementation-worker"] !== undefined) {
-        agents["implementation-worker"] = parseImplementationWorker(
-          configuredAgents["implementation-worker"],
-          "agents.implementation-worker",
-        );
-      }
+      if (configuredAgents.worker !== undefined) agents.worker = parseWorker(configuredAgents.worker, "agents.worker");
       if (configuredAgents.dreamer !== undefined) {
         agents.dreamer = parseDreamer(configuredAgents.dreamer, "agents.dreamer");
       }

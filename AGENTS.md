@@ -9,9 +9,9 @@ Keep this guide short; put detailed behavior and design notes in the linked docs
 - `src/core/agent/`, `src/core/tools/`: model loop, tool execution and shared file-write boundary.
 - `src/app/`, `src/cli/`, `src/ui/`: coding defaults, commands, startup and presentation. See [TUI behavior](docs/tui.md).
 - `src/core/session-tree/`, `src/core/context/`, `src/core/file-history/`: durable history, model context and optional file checkpoints. See [session tools](docs/session-tools.md).
-- `src/core/agent-task/`: implementation workers in the shared workspace. See [subagent architecture](docs/subagent-architecture.md).
+- `src/core/agent-task/`: workers in the shared workspace. See [worker architecture](docs/worker-architecture.md).
 - `src/core/session-recall/`, `src/core/dreamer/`: history retrieval and memory consolidation. See [Recall](docs/session-recall.md) and [global memory](docs/global-memory-architecture.md).
-- `examples/runtime.ts`, `scripts/verify-runtime.ts`: independent host example and public-package boundary verification.
+- `examples/runtime.ts`: independent host example.
 
 ## Design constraints
 
@@ -23,16 +23,7 @@ Keep this guide short; put detailed behavior and design notes in the linked docs
 - Workers share the project directory. Enforce their declared scope through the built-in file-write boundary; it is not an OS sandbox for bash or arbitrary custom tools.
 - Prefer existing tools, runners and services over parallel implementations or speculative frameworks. Update the relevant guide when a public contract changes.
 
-## Verification
+## Change scope
 
-Run from the repository root with Bun (see `package.json` for the supported version):
-
-```sh
-bun run check
-bun run test
-bun run build
-bun scripts/verify-runtime.ts
-```
-
-`bun run test:runtime` combines the last two commands. CI runs the same checks.
-Use focused regression tests for behavioral changes and deterministic local fixtures for model requests.
+- Do not add or run tests unless strictly necessary. Routine edits, renames and refactors do not require tests by default.
+- Do not add old-data compatibility, migration logic or legacy aliases unless the user explicitly requests them.

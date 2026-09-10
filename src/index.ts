@@ -27,10 +27,10 @@ export {
 export { AgentTaskOrchestrator, type AgentTaskOutcome } from "./core/agent-task/orchestrator.js";
 export { AgentTaskRepository } from "./core/agent-task/repository.js";
 export {
-  createImplementationWorkerProfile,
-  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
-  IMPLEMENTATION_WORKER_PROFILE_ID,
-  type ImplementationWorkerProfileSettings,
+  createWorkerProfile,
+  DEFAULT_WORKER_SETTINGS,
+  WORKER_PROFILE_ID,
+  type WorkerProfileSettings,
 } from "./core/agent-task/profile.js";
 export {
   DEFAULT_AUTH_FILE,
@@ -45,7 +45,7 @@ export {
   loadThreadConfig,
   type ThreadConfig,
   type AttributionConfig,
-  type ImplementationWorkerConfig,
+  type WorkerConfig,
   type DreamerConfig,
   type LoadedThreadConfig,
 } from "./app/config/thread-config.js";
@@ -64,7 +64,7 @@ export {
   saveThreadState,
   type ResolvedMainModelSelection,
 } from "./app/config/thread-state.js";
-export type { ImplementationWorkerState, DreamerState, ThreadState } from "./core/runtime/state.js";
+export type { WorkerState, DreamerState, ThreadState } from "./core/runtime/state.js";
 export {
   createDreamerProfile,
   DEFAULT_DREAMER_THINKING_LEVEL,

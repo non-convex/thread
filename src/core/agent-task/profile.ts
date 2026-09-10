@@ -1,25 +1,25 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../agent/model-client.js";
 import type { AgentProfile } from "../agent/profile.js";
-import { registerImplementationWorkerTools } from "../tools/builtins.js";
+import { registerWorkerTools } from "../tools/builtins.js";
 import { ToolRegistry } from "../tools/types.js";
-import { implementationWorkerSystemPrompt } from "./prompt.js";
+import { workerSystemPrompt } from "./prompt.js";
 
-export const IMPLEMENTATION_WORKER_PROFILE_ID = "implementation-worker";
+export const WORKER_PROFILE_ID = "worker";
 
-export interface ImplementationWorkerProfileSettings {
+export interface WorkerProfileSettings {
   thinkingLevel: ModelThinkingLevel;
-  limits: ImplementationWorkerLimits;
+  limits: WorkerLimits;
 }
 
-export interface ImplementationWorkerLimits {
+export interface WorkerLimits {
   maxConcurrent: number;
   maxSteps: number;
   maxRuntimeMs: number;
   maxRevisions: number;
 }
 
-export const DEFAULT_IMPLEMENTATION_WORKER_SETTINGS: ImplementationWorkerProfileSettings = {
+export const DEFAULT_WORKER_SETTINGS: WorkerProfileSettings = {
   thinkingLevel: "xhigh",
   limits: {
     maxConcurrent: 2,
@@ -39,18 +39,18 @@ function resolveWorkerThinkingLevel(
   return supported?.length && !supported.includes("xhigh") ? "high" : "xhigh";
 }
 
-export function createImplementationWorkerProfile(
+export function createWorkerProfile(
   model: ModelClient,
-  settings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+  settings: WorkerProfileSettings = DEFAULT_WORKER_SETTINGS,
   fileCheckpoints = true,
 ): AgentProfile {
   const tools = new ToolRegistry();
-  registerImplementationWorkerTools(tools);
+  registerWorkerTools(tools);
   return {
-    id: IMPLEMENTATION_WORKER_PROFILE_ID,
+    id: WORKER_PROFILE_ID,
     model,
     thinkingLevel: resolveWorkerThinkingLevel(model, settings.thinkingLevel),
     tools,
-    systemPrompt: implementationWorkerSystemPrompt(fileCheckpoints),
+    systemPrompt: workerSystemPrompt(fileCheckpoints),
   };
 }

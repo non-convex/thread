@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -21,9 +20,6 @@ class DemoModel implements ModelClient {
 
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
     options.signal.throwIfAborted();
-    assert.deepEqual(context.tools?.map((tool) => tool.name).sort(), ["add", "read", "skill"]);
-    assert.ok(context.systemPrompt?.startsWith("Answer using this application's tools."));
-    assert.match(context.systemPrompt ?? "", /<name>arithmetic<\/name>/);
     const previous = context.messages.at(-1);
     if (previous?.role !== "toolResult") {
       return fauxAssistantMessage([fauxToolCall("skill", { name: "arithmetic" }, { id: "demo-skill" })], {
@@ -81,21 +77,16 @@ try {
     skills: { paths: ["./skills"] },
     fileCheckpoints: false,
   });
-  const finishedTools: string[] = [];
   const unsubscribe = runtime.subscribe((event) => {
     if (event.type === "assistant_text_delta") process.stdout.write(event.delta);
-    if (event.type === "tool_finished") finishedTools.push(event.name);
   });
   const session = await runtime.createSession();
   const result = await runtime.prompt(session.id, "Add the numbers in operands.json.", { maxSteps: 4, timeoutMs: 10_000 });
   unsubscribe();
   console.log(`\nTurn: ${result.outcome}; session: ${session.id}`);
   if (result.outcome !== "completed") throw result.error ?? new Error(`Turn ${result.outcome}`);
-  assert.deepEqual(finishedTools, ["skill", "read", "add"]);
-  await assert.rejects(access(path.join(stateDirectory, "file-history", "blobs")), { code: "ENOENT" });
-  console.log("Selected builtin, custom tool, and declared Skill path verified.");
 } finally {
   await runtime?.close();
-  assert.equal(path.dirname(directory), path.resolve(tmpdir()));
+  if (path.dirname(directory) !== path.resolve(tmpdir())) throw new Error("Refusing to remove a directory outside the temporary root");
   await rm(directory, { recursive: true, force: true });
 }

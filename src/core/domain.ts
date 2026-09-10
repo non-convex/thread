@@ -20,7 +20,7 @@ export type {
   AgentTaskSummary,
   AgentTaskTraceEntry,
   AgentTaskWriteScope,
-  ImplementationTaskSpec,
+  WorkerTaskSpec,
 } from "./agent-task/model.js";
 export type { AgentProfile, AgentProfileDiagnostic } from "./agent/profile.js";
 export type { Project, ProjectManifest } from "./project/model.js";

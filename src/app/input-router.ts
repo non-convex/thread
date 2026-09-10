@@ -28,10 +28,6 @@ export interface InputRouteHandlers {
   turn(input: string, options: InputOptions): Promise<InputResult>;
 }
 
-const RETIRED_COMMANDS: Record<string, string> = {
-  subagent: "Unknown command: /subagent. Use /agent implementation-worker [on|off|model [all|list [provider]|<provider>/<model>]].",
-};
-
 function slashCommandName(trimmed: string): string | undefined {
   if (!trimmed.startsWith("/")) return undefined;
   const name = trimmed.slice(1).split(/\s/, 1)[0] ?? "";
@@ -80,7 +76,7 @@ export class InputRouter {
     }
     const command = slashCommandName(trimmed);
     if (command && command !== "exit") {
-      throw new Error(RETIRED_COMMANDS[command] ?? `Unknown command: /${command}`);
+      throw new Error(`Unknown command: /${command}`);
     }
     return this.handlers.turn(input, options);
   }

@@ -70,6 +70,6 @@ export function builtinTool(name: BuiltinToolName): AgentTool {
   return BUILTIN_TOOLS[name];
 }
 
-export function registerImplementationWorkerTools(registry: ToolRegistry): void {
+export function registerWorkerTools(registry: ToolRegistry): void {
   for (const tool of [readTool, listTool, grepTool, writeTool, editTool, bashTool]) registry.register(tool);
 }

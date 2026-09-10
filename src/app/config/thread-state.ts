@@ -52,7 +52,7 @@ export async function loadThreadState(statePath = getThreadStatePath()): Promise
 
   if (typeof input.agents === "object" && input.agents !== null && !Array.isArray(input.agents)) {
     const parsedAgents: NonNullable<ThreadState["agents"]> = {};
-    for (const id of ["implementation-worker", "dreamer"] as const) {
+    for (const id of ["worker", "dreamer"] as const) {
       const candidate = (input.agents as Record<string, unknown>)[id];
       if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) continue;
       const values = candidate as Record<string, unknown>;

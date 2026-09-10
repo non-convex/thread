@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { noResources, singletonResource } from "../tools/execution.js";
 import type { AgentTool, ToolContext, ToolResult } from "../tools/types.js";
-import type { ImplementationTaskSpec } from "./model.js";
+import type { WorkerTaskSpec } from "./model.js";
 import type { AgentTaskOrchestrator } from "./orchestrator.js";
 
 function ok(value: unknown): ToolResult {
@@ -31,7 +31,7 @@ const specSchema = Type.Object({
 });
 
 export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): AgentTool[] {
-  const delegate: AgentTool<{ tasks: ImplementationTaskSpec[] }> = {
+  const delegate: AgentTool<{ tasks: WorkerTaskSpec[] }> = {
     name: "delegate_tasks",
     description: "Delegate one or two independent implementation tasks with non-overlapping write scopes. Workers edit the current project workspace directly, so their changes are immediately visible.",
     parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 2 }) }),

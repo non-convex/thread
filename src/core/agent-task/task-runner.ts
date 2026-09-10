@@ -7,7 +7,7 @@ import { safeExecutionEvent, type AgentTaskLiveEvent, type ExecutionEvent, type 
 import { AgentTaskJournal } from "./journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import type { AgentTaskRun } from "./model.js";
-import type { ImplementationWorkerLimits } from "./profile.js";
+import type { WorkerLimits } from "./profile.js";
 import { taskSpecMessage } from "./prompt.js";
 import type { AgentTaskRepository } from "./repository.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
@@ -41,7 +41,7 @@ function childEvent(event: ExecutionEvent): AgentTaskLiveEvent | undefined {
   return undefined;
 }
 
-export class ImplementationTaskRunner {
+export class WorkerTaskRunner {
   constructor(
     private readonly repository: AgentTaskRepository,
     private readonly rootPath: string,
@@ -52,7 +52,7 @@ export class ImplementationTaskRunner {
   async run(
     taskId: string,
     profile: AgentProfile,
-    limits: ImplementationWorkerLimits,
+    limits: WorkerLimits,
     parentSignal: AbortSignal,
     ui?: ExecutionEventSink,
   ): Promise<void> {

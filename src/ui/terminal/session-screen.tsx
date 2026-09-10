@@ -109,7 +109,7 @@ export function SessionScreen(props: {
     if (!picker) return 0;
     return 2 + picker.agents.length + (picker.busy ? 1 : 0) + (picker.error ? 1 : 0) + 2;
   };
-  const subagentOverlayHeight = () => {
+  const agentSettingsOverlayHeight = () => {
     const settings = agentSettings();
     if (!settings) return 0;
     return 2 + 3 + (settings.busy ? 1 : 0) + (settings.error ? 1 : 0) + 2;
@@ -262,7 +262,7 @@ export function SessionScreen(props: {
           right={1}
           bottom={controlsHeight()}
           left={1}
-          height={subagentOverlayHeight()}
+          height={agentSettingsOverlayHeight()}
           zIndex={20}
           border={true}
           borderStyle="rounded"

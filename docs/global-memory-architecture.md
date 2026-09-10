@@ -26,10 +26,10 @@ ${THREAD_HOME}/.THREAD.md
 - `systemPrompt`
 - `tools`
 
-内置 Profile 是 `main`、`implementation-worker` 和 `dreamer`。Registry 只负责 Profile 的发现、替换与诊断，不承载具体 Agent 的生命周期策略：
+内置 Profile 是 `main`、`worker` 和 `dreamer`。Registry 只负责 Profile 的发现、替换与诊断，不承载具体 Agent 的生命周期策略：
 
 - Main 由前台 turn runtime 管理；
-- implementation-worker 由任务协调器管理并发、revision、step 与超时限制；
+- worker 由任务协调器管理并发、revision、step 与超时限制；
 - Dreamer 由独立调度器管理待审阅批次、取消、重试和空闲触发。
 
 这种边界让新 Agent 只复用模型执行所需的公共字段，同时避免把不同生命周期塞进一个通用基类。
@@ -42,7 +42,7 @@ ${THREAD_HOME}/.THREAD.md
 /agent <id> model [all]
 /agent <id> model list [provider]
 /agent <id> model <provider>/<model>
-/agent implementation-worker|dreamer on|off
+/agent worker|dreamer on|off
 ```
 
 为次级 Agent 选择模型时会同时启用它。两个次级 Agent 都默认关闭，且没有隐式模型回退。
@@ -69,7 +69,7 @@ System Prompt → Global Memory → Live Context
 
 Main 与 Dreamer 继续使用普通 `read`、`write`、`edit`。文件执行上下文允许它们额外写入 `.THREAD.md` 这一精确绝对路径，而不是整个 `THREAD_HOME`。外部目录、相邻文件、目录后代和符号链接仍被拒绝。
 
-Implementation worker 没有此外部写入例外，只能遵循原有项目工作区边界。
+Worker 没有此外部写入例外，只能遵循原有项目工作区边界。
 
 Main 在用户明确要求记住与当前项目无关、且在其他项目中仍然有用的信息时主动写入，也执行用户明确提出的纠正或遗忘请求。仅表达偏好或给出任务指令，不视为要求保存记忆。写入前必须重新读取磁盘，文件不存在时才创建。项目决策、临时要求、秘密、敏感个人数据、从文件或工具输出中推断出的事实，以及 Agent 自己未经确认的猜测，都不能由 Main 写入全局记忆；写入时应保留用户要求的适用范围，不把情境性表述扩大为普遍偏好。
 

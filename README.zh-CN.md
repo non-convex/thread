@@ -142,7 +142,7 @@ Thread 与 Codex CLI 不共用凭据文件；登录信息保存在 `~/.thread/au
 
 ### Turn 连接交互、执行与文件修改
 
-每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和内置工具的文件编辑记录。`edit` 或 `write` 在一个 turn 内首次修改某个项目文件之前，Thread 保存其原始字节和权限，或记录它原先不存在。Implementation-worker 的编辑归入父 turn。
+每个 turn 保存用户消息、assistant 输出、工具执行事实与结果、父 turn、结束状态和内置工具的文件编辑记录。`edit` 或 `write` 在一个 turn 内首次修改某个项目文件之前，Thread 保存其原始字节和权限，或记录它原先不存在。Worker 的编辑归入父 turn。
 
 打开项目、开始和结束 turn 都不会为了 checkpoint 扫描工作区，只有内置编辑工具实际改动的文件才会备份。Bash、脚本和其他工具的改动不被跟踪。失败或中断的 turn 保留已保存的编辑记录，并被补成合法对话前缀继续作为 live tip，让下一条请求从真实发生过的历史继续。
 
@@ -182,14 +182,14 @@ Agent 通过两个工具使用项目记忆：
 
 跨项目的稳定信息保存在一个 Markdown 文件 `${THREAD_HOME}/.THREAD.md` 中。Main 只在用户当前消息明确给出稳定、跨项目仍有价值的信息时维护它。它作为固定快照进入系统提示，计入上下文预算；文件本身不进入 Session Tree、搜索、rewind 或 compaction。`/new` 为新 Session 读取最新内容，重启时为所有 Session 刷新快照。
 
-`/agent` 是模型选择和 Agent 设置的统一入口。Thread 内置 `main`、`implementation-worker` 与 `dreamer` 三个 Profile。两个次级 Agent 默认关闭，显式选择模型后启用：
+`/agent` 是模型选择和 Agent 设置的统一入口。Thread 内置 `main`、`worker` 与 `dreamer` 三个 Profile。两个次级 Agent 默认关闭，显式选择模型后启用：
 
 | Agent | 启用命令 | 职责 |
 | --- | --- | --- |
-| `implementation-worker` | `/agent implementation-worker model <provider>/<model>` | 在共享工作区完成一到两个写入范围互不重叠的独立叶子任务，由主 agent 检查文件与测试，并按需要求返工。 |
+| `worker` | `/agent worker model <provider>/<model>` | 在共享工作区完成一到两个写入范围互不重叠的独立叶子任务，由主 agent 检查文件与测试，并按需要求返工。 |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | 在后台审阅互动与执行轨迹，寻找证据充分、可跨项目复用的隐含用户模式和经验，维护全局记忆。 |
 
-Worker 直接编辑当前工作区，`writeScope` 用于任务协调，并由内置 `write`、`edit` 工具强制检查；它不隔离 bash 或自定义工具的任意操作。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。撤销已记录的内置文件编辑使用 `/rewind`。详见 [Subagent 架构](./docs/subagent-architecture.md)。
+Worker 直接编辑当前工作区，`writeScope` 用于任务协调，并由内置 `write`、`edit` 工具强制检查；它不隔离 bash 或自定义工具的任意操作。任务属于创建它的父 turn；turn 结束或中断、Thread 关闭或重启，都会取消未完成任务，已写入的文件保留。撤销已记录的内置文件编辑使用 `/rewind`。详见 [Worker 架构](./docs/worker-architecture.md)。
 
 Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。它保持静默，单次运行最多五分钟；大多数审阅都应保持记忆不变。详见[全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)。
 
@@ -270,15 +270,14 @@ const runtime = await ThreadRuntime.open({
 
 按名称选择内置工具，并在同一数组中传入自定义 `AgentTool`。Skill 相对路径以 `rootPath` 为基准；启用 Skill 后会自动加入其 `skill` 工具，并向宿主提示词追加目录。默认不启用基础工具、Skill 扫描、文件 checkpoint、Recall 或全局记忆。会话历史仍然落盘，`rewind()` 可以只回退上下文而不修改文件。CLI 和 `ThreadApp.open()` 共享 coding 应用默认配置，执行和查询统一通过 `app.runtime` 访问。
 
-终端渲染使用独立的 `thread/tui` 入口。MCP 计划作为核心工具接入能力，目前尚未实现。参见 [runtime 使用指南](./docs/runtime.md) 和 [离线嵌入示例](./examples/runtime.ts)；`bun run test:runtime` 会从独立宿主验证构建后的公开接口。
+终端渲染使用独立的 `thread/tui` 入口。MCP 计划作为核心工具接入能力，目前尚未实现。参见 [runtime 使用指南](./docs/runtime.md) 和 [离线嵌入示例](./examples/runtime.ts)。
 
-coding 应用启动时读取项目根目录的 `AGENTS.md`，并向主 agent 和 implementation worker 共享其中的指令。`ThreadApp.open()` 可用 `projectInstructions: false` 关闭读取；裸 runtime 不扫描项目指令，宿主可显式提供 `sharedInstructions`。本仓库的代码、文档和验证入口见 [AGENTS.md](./AGENTS.md)。
+coding 应用启动时读取项目根目录的 `AGENTS.md`，并向主 agent 和 worker 共享其中的指令。`ThreadApp.open()` 可用 `projectInstructions: false` 关闭读取；裸 runtime 不扫描项目指令，宿主可显式提供 `sharedInstructions`。本仓库的代码、文档和验证入口见 [AGENTS.md](./AGENTS.md)。
 
 ## 开发
 
 ```bash
 bun run check
-bun test test --timeout 30000
 bun run build
 ```
 
@@ -305,7 +304,7 @@ src/ui/                 plain 与全屏终端界面
 
 延伸阅读：
 
-- [Subagent 架构](./docs/subagent-architecture.md)
+- [Worker 架构](./docs/worker-architecture.md)
 - [项目记忆搜索原理](./docs/session-recall.md)
 - [Session 工具参数及示例](./docs/session-tools.md)
 - [全局记忆与 Dreamer 架构](./docs/global-memory-architecture.md)

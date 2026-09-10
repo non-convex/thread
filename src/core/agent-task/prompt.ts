@@ -1,8 +1,8 @@
 import { fileEditingPrompt } from "../tools/file-editing-prompt.js";
-import type { ImplementationTaskSpec } from "./model.js";
+import type { WorkerTaskSpec } from "./model.js";
 
-export function implementationWorkerSystemPrompt(fileCheckpoints = true): string {
-  return `You are an implementation worker sharing the current project workspace with the main agent and other workers.
+export function workerSystemPrompt(fileCheckpoints = true): string {
+  return `You are a worker sharing the current project workspace with the main agent and other workers.
 
 ${fileEditingPrompt(fileCheckpoints)}
 
@@ -11,13 +11,13 @@ Implement only the assigned task. Your file changes are immediately visible to e
 In your final response, list the files you changed and the verification you ran.`;
 }
 
-export const IMPLEMENTATION_WORKER_SYSTEM_PROMPT = implementationWorkerSystemPrompt();
+export const WORKER_SYSTEM_PROMPT = workerSystemPrompt();
 
-export const AGENT_TASK_ORCHESTRATION_PROMPT = `You can delegate leaf implementation tasks to implementation-worker agents. Delegate only work with a clear independent boundary, non-overlapping write scopes, detailed guidance, and checkable acceptance criteria. Establish shared architecture and public interfaces yourself before delegating. Workers edit the current project workspace directly. While they run, do not edit paths inside their write scopes.
+export const AGENT_TASK_ORCHESTRATION_PROMPT = `You can delegate leaf implementation tasks to workers. Delegate only work with a clear independent boundary, non-overlapping write scopes, detailed guidance, and checkable acceptance criteria. Establish shared architecture and public interfaces yourself before delegating. Workers edit the current project workspace directly. While they run, do not edit paths inside their write scopes.
 
 Wait only when you need a result. There is no apply step: completed worker changes are already present. Review the current files with your normal read, search, diff, and test tools; worker claims are not review evidence. Request a concrete revision when needed. A cancelled or failed worker may have left partial changes that you must inspect. Create dependent tasks only after their dependency completes. Before ending the turn, wait for or cancel every running task.`;
 
-export function taskSpecMessage(spec: ImplementationTaskSpec, rootPath: string): string {
+export function taskSpecMessage(spec: WorkerTaskSpec, rootPath: string): string {
   const lines = [
     `Task: ${spec.title}`,
     "",

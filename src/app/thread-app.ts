@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ModelDescriptor, ModelCatalog } from "../core/agent/model-client.js";
 import { MAIN_AGENT_PROFILE_ID } from "../core/agent/profile.js";
-import { IMPLEMENTATION_WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
+import { WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
 import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
 import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
 import { ThreadCommandRouter } from "./commands/registry.js";
@@ -89,14 +89,14 @@ export class ThreadApp {
     return session;
   }
 
-  private disableSubagent(): CommandResult {
-    this.runtime.configureAgent(IMPLEMENTATION_WORKER_PROFILE_ID, false);
-    return ephemeral("Subagent: Off", true);
+  private disableWorker(): CommandResult {
+    this.runtime.configureAgent(WORKER_PROFILE_ID, false);
+    return ephemeral("Worker: Off", true);
   }
-  private enableSubagent(providerId: string, modelId: string): CommandResult {
+  private enableWorker(providerId: string, modelId: string): CommandResult {
     if (!providerId || !modelId || !this.modelCatalog) throw new Error("Worker model selection is unavailable");
-    this.runtime.configureAgent(IMPLEMENTATION_WORKER_PROFILE_ID, true, this.modelCatalog.createClient(providerId, modelId));
-    return ephemeral(`Subagent: On · worker ${providerId}/${modelId}`, true);
+    this.runtime.configureAgent(WORKER_PROFILE_ID, true, this.modelCatalog.createClient(providerId, modelId));
+    return ephemeral(`Worker: On · ${providerId}/${modelId}`, true);
   }
   private disableDreamer(): CommandResult {
     this.runtime.configureAgent(DREAMER_PROFILE_ID, false);
@@ -130,31 +130,31 @@ export class ThreadApp {
     });
   }
 
-  private subagentStatus(): CommandResult {
-    const selected = this.runtime.subagentModel;
-    const content = this.runtime.subagentEnabled
-      ? `Subagent: On\nWorker model: ${selected?.provider}/${selected?.id}`
-      : `Subagent: Off${selected ? `\nLast worker model: ${selected.provider}/${selected.id}` : ""}`;
+  private workerStatus(): CommandResult {
+    const selected = this.runtime.workerModel;
+    const content = this.runtime.workerEnabled
+      ? `Worker: On\nWorker model: ${selected?.provider}/${selected?.id}`
+      : `Worker: Off${selected ? `\nLast worker model: ${selected.provider}/${selected.id}` : ""}`;
     return viewResult(content, {
       type: "agent_settings",
-      agentId: IMPLEMENTATION_WORKER_PROFILE_ID,
-      label: "Implementation worker",
-      enabled: this.runtime.subagentEnabled,
+      agentId: WORKER_PROFILE_ID,
+      label: "Worker",
+      enabled: this.runtime.workerEnabled,
     });
   }
 
   private workerModelPicker(scope: "configured" | "all" = "configured"): CommandResult {
     if (!this.modelCatalog) throw new Error("Worker model selection is unavailable");
-    const selected = this.runtime.subagentModel;
+    const selected = this.runtime.workerModel;
     const models = this.modelPickerModels(scope);
     const choices = models.map((model) => `${model.providerId}/${model.modelId}`).join("\n");
     return viewResult(
       models.length
-        ? `Choose the implementation-worker model to enable subagents.\nPlain mode: /agent implementation-worker model <provider>/<model>\n${choices}`
+        ? `Choose a model to enable worker.\nPlain mode: /agent worker model <provider>/<model>\n${choices}`
         : "No worker models are available. Configure a provider or log in first.",
       {
         type: "model_picker",
-        agentId: IMPLEMENTATION_WORKER_PROFILE_ID,
+        agentId: WORKER_PROFILE_ID,
         models,
         currentProviderId: selected?.provider,
         currentModelId: selected?.id,
@@ -200,16 +200,16 @@ export class ThreadApp {
 
   private agentOverview(): CommandResult {
     const main = this.runtime.model ? `${this.runtime.model.providerId}/${this.runtime.model.modelId}` : "not selected";
-    const worker = this.runtime.subagentModel;
+    const worker = this.runtime.workerModel;
     const dreamer = this.runtime.dreamerModel;
     const workerDetail = worker ? `${worker.provider}/${worker.id}` : "not selected";
     const dreamerDetail = dreamer ? `${dreamer.provider}/${dreamer.id}` : "not selected";
     const agents = [
       { id: MAIN_AGENT_PROFILE_ID, label: "Main", enabled: true, detail: main },
       {
-        id: IMPLEMENTATION_WORKER_PROFILE_ID,
-        label: "Implementation worker",
-        enabled: this.runtime.subagentEnabled,
+        id: WORKER_PROFILE_ID,
+        label: "Worker",
+        enabled: this.runtime.workerEnabled,
         detail: workerDetail,
       },
       {
@@ -221,7 +221,7 @@ export class ThreadApp {
     ];
     const content = [
       `main: on · ${main}`,
-      `implementation-worker: ${this.runtime.subagentEnabled ? "on" : "off"} · ${workerDetail}`,
+      `worker: ${this.runtime.workerEnabled ? "on" : "off"} · ${workerDetail}`,
       `dreamer: ${this.runtime.dreamerEnabled ? "on" : "off"} · ${dreamerDetail}`,
       ...(this.runtime.dreamerLastError ? [`dreamer last error: ${this.runtime.dreamerLastError}`] : []),
       ...this.runtime.agentProfileDiagnostics.map((diagnostic) =>
@@ -239,7 +239,7 @@ export class ThreadApp {
     const content = models.map((item) =>
       `${item.providerId}/${item.modelId} — ${item.name}, ${item.contextWindow.toLocaleString("en-US")} context${item.acceptsImages ? ", vision" : ""}`
     ).join("\n") || "(no models)";
-    const selected = agentId === IMPLEMENTATION_WORKER_PROFILE_ID ? this.runtime.subagentModel
+    const selected = agentId === WORKER_PROFILE_ID ? this.runtime.workerModel
       : agentId === DREAMER_PROFILE_ID ? this.runtime.dreamerModel
       : this.runtime.model ? { provider: this.runtime.model.providerId, id: this.runtime.model.modelId } : undefined;
     const scope = args[0] ? "all" : "configured";
@@ -255,11 +255,11 @@ export class ThreadApp {
   }
 
   private handleSecondaryModelCommand(
-    id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID,
+    id: typeof WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID,
     args: string[],
   ): CommandResult {
     const picker = (scope: "configured" | "all" = "configured") =>
-      id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.workerModelPicker(scope) : this.dreamerModelPicker(scope);
+      id === WORKER_PROFILE_ID ? this.workerModelPicker(scope) : this.dreamerModelPicker(scope);
     if (args.length === 0) return picker();
     if (args.length === 1 && args[0] === "all") return picker("all");
     if (args[0] === "list") return this.listModels(args.slice(1), `Usage: /agent ${id} model list [provider]`, id);
@@ -267,8 +267,8 @@ export class ThreadApp {
       const separator = args[0]!.indexOf("/");
       const providerId = args[0]!.slice(0, separator);
       const modelId = args[0]!.slice(separator + 1);
-      return id === IMPLEMENTATION_WORKER_PROFILE_ID
-        ? this.enableSubagent(providerId, modelId)
+      return id === WORKER_PROFILE_ID
+        ? this.enableWorker(providerId, modelId)
         : this.enableDreamer(providerId, modelId);
     }
     throw new Error(`Usage: /agent ${id} model [all|list [provider]|<provider>/<model>]`);
@@ -277,30 +277,30 @@ export class ThreadApp {
   private handleAgentCommand(args: string[]): CommandResult {
     if (args.length === 0) return this.agentOverview();
     const [id, action, ...rest] = args;
-    if (id !== MAIN_AGENT_PROFILE_ID && id !== IMPLEMENTATION_WORKER_PROFILE_ID && id !== DREAMER_PROFILE_ID) {
+    if (id !== MAIN_AGENT_PROFILE_ID && id !== WORKER_PROFILE_ID && id !== DREAMER_PROFILE_ID) {
       throw new Error(`Unknown agent: ${id}`);
     }
     if (!action) {
       if (id === MAIN_AGENT_PROFILE_ID) return this.modelStatus();
-      return id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.subagentStatus() : this.dreamerStatus();
+      return id === WORKER_PROFILE_ID ? this.workerStatus() : this.dreamerStatus();
     }
     if (action === "model") {
       if (id === MAIN_AGENT_PROFILE_ID) return this.handleModelCommand(rest);
       return this.handleSecondaryModelCommand(id, rest);
     }
     if ((action === "on" || action === "off") && id !== MAIN_AGENT_PROFILE_ID && rest.length === 0) {
-      if (action === "off") return id === IMPLEMENTATION_WORKER_PROFILE_ID
-        ? this.disableSubagent()
+      if (action === "off") return id === WORKER_PROFILE_ID
+        ? this.disableWorker()
         : this.disableDreamer();
-      const selected = id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.runtime.subagentModel : this.runtime.dreamerModel;
-      if (!selected) return id === IMPLEMENTATION_WORKER_PROFILE_ID
+      const selected = id === WORKER_PROFILE_ID ? this.runtime.workerModel : this.runtime.dreamerModel;
+      if (!selected) return id === WORKER_PROFILE_ID
         ? this.workerModelPicker()
         : this.dreamerModelPicker();
-      return id === IMPLEMENTATION_WORKER_PROFILE_ID
-        ? this.enableSubagent(selected.provider, selected.id)
+      return id === WORKER_PROFILE_ID
+        ? this.enableWorker(selected.provider, selected.id)
         : this.enableDreamer(selected.provider, selected.id);
     }
-    throw new Error("Usage: /agent [main|implementation-worker|dreamer] [model [all|list [provider]|<provider>/<model>]|on|off]");
+    throw new Error("Usage: /agent [main|worker|dreamer] [model [all|list [provider]|<provider>/<model>]|on|off]");
   }
 
   private handleModelCommand(args: string[]): CommandResult {

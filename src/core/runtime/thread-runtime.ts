@@ -5,7 +5,7 @@ import type { ModelCatalog, ModelClient } from "../agent/model-client.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
 import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import { AgentTaskRepository } from "../agent-task/repository.js";
-import { createImplementationWorkerProfile, DEFAULT_IMPLEMENTATION_WORKER_SETTINGS, IMPLEMENTATION_WORKER_PROFILE_ID, type ImplementationWorkerProfileSettings } from "../agent-task/profile.js";
+import { createWorkerProfile, DEFAULT_WORKER_SETTINGS, WORKER_PROFILE_ID, type WorkerProfileSettings } from "../agent-task/profile.js";
 import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
 import { createAgentRuntime } from "./create-agent-runtime.js";
@@ -72,7 +72,7 @@ export class ThreadRuntime {
   private readonly dreamer: DreamerScheduler | undefined;
   private readonly options: RuntimeOptionsSnapshot;
   private readonly loadedSkills: LoadedSkills;
-  private readonly workerSettings: ImplementationWorkerProfileSettings;
+  private readonly workerSettings: WorkerProfileSettings;
   private readonly listeners = new Set<RuntimeEventSink>();
   private state: ThreadState;
   private askPresenter: AskPresenter | undefined;
@@ -95,11 +95,11 @@ export class ThreadRuntime {
     this.modelCatalog = options.modelCatalog;
     this.loadedSkills = values.skills;
     this.state = structuredClone(options.state ?? {});
-    this.workerSettings = options.implementationWorker?.settings ?? DEFAULT_IMPLEMENTATION_WORKER_SETTINGS;
+    this.workerSettings = options.worker?.settings ?? DEFAULT_WORKER_SETTINGS;
     this.modelSelection = new ModelSelection(this.tree.tree.id, options.cacheRetention,
       options.thinkingLevel ?? "medium", (state) => this.remember({ ...this.state, ...state }));
-    const worker = options.implementationWorker?.enabled && options.implementationWorker.model
-      ? this.bindProfile(createImplementationWorkerProfile(options.implementationWorker.model, this.workerSettings, this.fileCheckpoints)) : undefined;
+    const worker = options.worker?.enabled && options.worker.model
+      ? this.bindProfile(createWorkerProfile(options.worker.model, this.workerSettings, this.fileCheckpoints)) : undefined;
     const dreamer = options.dreamer?.enabled && options.dreamer.model
       ? this.bindProfile(createDreamerProfile(options.dreamer.model, options.dreamer.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL)) : undefined;
     if (dreamer && !this.memory) throw new Error("Dreamer requires globalMemoryPath");
@@ -162,10 +162,10 @@ export class ThreadRuntime {
   get fileCheckpoints() { return this.files.captureEnabled; }
   get recallEnabled() { return !!this.recallService; }
   get treeId() { return this.tree.tree.id; }
-  get subagentEnabled() { return this.tasks.enabled; }
+  get workerEnabled() { return this.tasks.enabled; }
   get dreamerEnabled() { return this.dreamer?.enabled ?? false; }
   get dreamerLastError() { return this.dreamer?.lastError; }
-  get subagentModel() { return this.secondaryModel(IMPLEMENTATION_WORKER_PROFILE_ID); }
+  get workerModel() { return this.secondaryModel(WORKER_PROFILE_ID); }
   get dreamerModel() { return this.secondaryModel(DREAMER_PROFILE_ID); }
   get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
     return [...this.profiles.diagnostics, ...(this.memory?.diagnostic
@@ -361,14 +361,15 @@ export class ThreadRuntime {
     return this.modelSelection.cycleThinkingLevel();
   }
 
-  configureAgent(id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID, enabled: boolean, model?: ModelClient): void {
+  configureAgent(id: typeof WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID, enabled: boolean, model?: ModelClient): void {
     this.assertIdle();
+    if (id !== WORKER_PROFILE_ID && id !== DREAMER_PROFILE_ID) throw new Error(`Unknown agent: ${id}`);
     const previous = this.secondaryModel(id);
     if (enabled) {
       if (!model) throw new Error("An enabled agent requires a model");
       if (id === DREAMER_PROFILE_ID && !this.dreamer) throw new Error("Dreamer requires globalMemoryPath");
-      const profile = this.bindProfile(id === IMPLEMENTATION_WORKER_PROFILE_ID
-        ? createImplementationWorkerProfile(model, this.workerSettings, this.fileCheckpoints)
+      const profile = this.bindProfile(id === WORKER_PROFILE_ID
+        ? createWorkerProfile(model, this.workerSettings, this.fileCheckpoints)
         : createDreamerProfile(model, this.options.dreamer?.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL));
       const old = this.profiles.get(id);
       this.profiles.set(profile);
@@ -489,11 +490,11 @@ export class ThreadRuntime {
     this.options.onStateChange?.(structuredClone(state));
   }
 
-  private secondaryModel(id: typeof IMPLEMENTATION_WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID) {
+  private secondaryModel(id: typeof WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID) {
     const profile = this.profiles.get(id);
     if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
-    return this.state.agents?.[id]?.model ?? (id === IMPLEMENTATION_WORKER_PROFILE_ID
-      ? this.options.implementationWorker?.defaultModel : this.options.dreamer?.defaultModel);
+    return this.state.agents?.[id]?.model ?? (id === WORKER_PROFILE_ID
+      ? this.options.worker?.defaultModel : this.options.dreamer?.defaultModel);
   }
 
   private syncTaskTools(): void {
@@ -501,14 +502,14 @@ export class ThreadRuntime {
     if (this.taskToolDisposers.length) return;
     const tools = createAgentTaskTools(this.tasks);
     const conflict = tools.find((tool) => this.toolRegistry.get(tool.name));
-    if (conflict) throw new Error(`Cannot enable subagents because tool ${conflict.name} is already registered`);
+    if (conflict) throw new Error(`Cannot enable workers because tool ${conflict.name} is already registered`);
     this.taskToolDisposers = tools.map((tool) => this.toolRegistry.register(tool));
   }
 
   private bindProfile(profile: AgentProfile): AgentProfile {
     const model = bindModel(profile.model, `${this.tree.tree.id}:${profile.id}`, this.options.cacheRetention);
     return { ...profile, model, systemPrompt: [profile.systemPrompt,
-      profile.id === IMPLEMENTATION_WORKER_PROFILE_ID ? this.options.sharedInstructions : undefined].filter(Boolean).join("\n\n") };
+      profile.id === WORKER_PROFILE_ID ? this.options.sharedInstructions : undefined].filter(Boolean).join("\n\n") };
   }
 
   private createAgentRuntime(sessionId: string): AgentRuntime {

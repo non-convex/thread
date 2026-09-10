@@ -8,7 +8,7 @@ import { object, parseConfig, parsePiModelOverrides, parseProvider, thinkingLeve
 
 export const DEFAULT_THREAD_CONFIG_FILE = "config.json";
 
-export interface ImplementationWorkerConfig {
+export interface WorkerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;
   maxConcurrent: number;
@@ -31,7 +31,7 @@ export interface ThreadConfig {
   search?: { semantic: boolean };
   model?: ModelSelectionConfig;
   agents: {
-    "implementation-worker"?: ImplementationWorkerConfig;
+    worker?: WorkerConfig;
     dreamer?: DreamerConfig;
   };
   defaultThinkingLevel?: ModelThinkingLevel;

@@ -5,14 +5,14 @@ import type { ExecutionEventSink } from "../runtime/events.js";
 import { safeExecutionEvent } from "../runtime/events.js";
 import { createId } from "../utils/id.js";
 import { AgentTaskJournal } from "./journal.js";
-import type { AgentTask, AgentTaskSummary, AgentTaskWriteScope, ImplementationTaskSpec } from "./model.js";
+import type { AgentTask, AgentTaskSummary, AgentTaskWriteScope, WorkerTaskSpec } from "./model.js";
 import {
-  DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
-  IMPLEMENTATION_WORKER_PROFILE_ID,
-  type ImplementationWorkerProfileSettings,
+  DEFAULT_WORKER_SETTINGS,
+  WORKER_PROFILE_ID,
+  type WorkerProfileSettings,
 } from "./profile.js";
 import type { AgentTaskRepository } from "./repository.js";
-import { ImplementationTaskRunner } from "./task-runner.js";
+import { WorkerTaskRunner } from "./task-runner.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
 
 export interface DelegateTaskContext {
@@ -28,7 +28,7 @@ export interface AgentTaskOutcome {
 }
 
 export class AgentTaskOrchestrator {
-  private readonly runner: ImplementationTaskRunner;
+  private readonly runner: WorkerTaskRunner;
   private readonly controllers = new Map<string, AbortController>();
   private readonly runs = new Map<string, Promise<void>>();
   private readonly turnTasks = new Map<string, Set<string>>();
@@ -38,15 +38,15 @@ export class AgentTaskOrchestrator {
     readonly repository: AgentTaskRepository,
     readonly profiles: AgentProfileRegistry,
     rootPath: string,
-    private readonly workerSettings: ImplementationWorkerProfileSettings = DEFAULT_IMPLEMENTATION_WORKER_SETTINGS,
+    private readonly workerSettings: WorkerProfileSettings = DEFAULT_WORKER_SETTINGS,
     fileHistory?: FileHistoryService,
     executionOptions: HostExecutionOptions = {},
   ) {
-    this.runner = new ImplementationTaskRunner(repository, rootPath, fileHistory, executionOptions);
+    this.runner = new WorkerTaskRunner(repository, rootPath, fileHistory, executionOptions);
   }
 
   get enabled(): boolean {
-    return this.profiles.get(IMPLEMENTATION_WORKER_PROFILE_ID) !== undefined && !this.closing;
+    return this.profiles.get(WORKER_PROFILE_ID) !== undefined && !this.closing;
   }
 
   async initialize(): Promise<void> {
@@ -61,9 +61,9 @@ export class AgentTaskOrchestrator {
     }
   }
 
-  async delegate(specs: readonly ImplementationTaskSpec[], context: DelegateTaskContext): Promise<AgentTaskSummary[]> {
+  async delegate(specs: readonly WorkerTaskSpec[], context: DelegateTaskContext): Promise<AgentTaskSummary[]> {
     if (this.closing) throw new Error("Agent Task orchestrator is closing");
-    const profile = this.profiles.require(IMPLEMENTATION_WORKER_PROFILE_ID);
+    const profile = this.profiles.require(WORKER_PROFILE_ID);
     const normalized = specs.map((spec, index) => this.validateSpec(spec, index));
     if (normalized.length < 1 || normalized.length > 2) throw new Error("delegate_tasks accepts one or two tasks");
     for (let left = 0; left < normalized.length; left++) {
@@ -80,7 +80,7 @@ export class AgentTaskOrchestrator {
     }
     const active = running.filter((task) => task.profileId === profile.id).length;
     if (active + normalized.length > this.workerSettings.limits.maxConcurrent) {
-      throw new Error(`implementation-worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before delegating more`);
+      throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before delegating more`);
     }
 
     const tasks: AgentTask[] = [];
@@ -134,7 +134,7 @@ export class AgentTaskOrchestrator {
     if (!feedback.trim()) throw new Error("Revision feedback cannot be empty");
     const running = [...this.repository.projection.tasks.values()].filter((candidate) => candidate.status === "running");
     if (running.filter((candidate) => candidate.profileId === profile.id).length >= this.workerSettings.limits.maxConcurrent) {
-      throw new Error(`implementation-worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait before requesting a revision`);
+      throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait before requesting a revision`);
     }
     const overlap = running.find((candidate) => candidate.id !== taskId && scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
     if (overlap) throw new Error(`Task ${taskId} overlaps running task ${overlap.id} (${overlap.spec.title})`);
@@ -221,7 +221,7 @@ export class AgentTaskOrchestrator {
     };
   }
 
-  private validateSpec(spec: ImplementationTaskSpec, index: number): ImplementationTaskSpec {
+  private validateSpec(spec: WorkerTaskSpec, index: number): WorkerTaskSpec {
     const label = `tasks[${index}]`;
     const title = spec.title?.trim();
     const objective = spec.objective?.trim();
