@@ -25,7 +25,7 @@ const scopeSchema = Type.Object({
 const specSchema = Type.Object({
   title: Type.String(),
   objective: Type.String(),
-  guidance: Type.Array(Type.String(), { minItems: 1 }),
+  guidance: Type.Array(Type.String(), { minItems: 1, description: "Known file locations, agreed interfaces and design decisions, current user constraints, and the remaining work. The worker cannot see the main conversation." }),
   acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }),
   writeScope: Type.Array(scopeSchema, { minItems: 1 }),
 });
@@ -50,19 +50,20 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     },
   };
 
-  const wait: AgentTool<{ taskIds: string[]; returnWhen: "first" | "all" }> = {
+  const wait: AgentTool<{ taskIds: string[]; returnWhen: "first" | "all"; timeoutMs?: number }> = {
     name: "wait_tasks",
-    description: "Wait for the first or all delegated tasks to finish, returning status, resource usage, and each worker's final response.",
+    description: "Wait for the first or all delegated tasks to finish. Returns { tasks, timedOut } with status, usage, and final responses. A timeout leaves workers running. To wait for further progress, pass only running task IDs.",
     parameters: Type.Object({
       taskIds: Type.Array(Type.String(), { minItems: 1 }),
       returnWhen: Type.Union([Type.Literal("first"), Type.Literal("all")]),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Maximum time to wait in milliseconds. Default: 60000. Does not change worker runtime limits." })),
     }),
     replay: "never",
     execution: { effect: "process", mode: "sequential", resources: () => noResources() },
     async execute(args, context) {
       try {
         for (const id of args.taskIds) ownTask(orchestrator, id, context);
-        return ok(await orchestrator.waitTasks(args.taskIds, args.returnWhen, context.signal));
+        return ok(await orchestrator.waitTasks(args.taskIds, args.returnWhen, context.signal, args.timeoutMs));
       } catch (error) { return fail(error); }
     },
   };
@@ -90,7 +91,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     async execute(args, context) {
       try {
         ownTask(orchestrator, args.taskId, context);
-        const summary = await orchestrator.cancelTask(args.taskId, args.reason, context.onUiEvent);
+        const summary = await orchestrator.cancelTask(args.taskId, args.reason);
         return ok({ task: summary, note: "The worker was interrupted. Existing workspace changes were preserved and must be reviewed." });
       } catch (error) { return fail(error); }
     },

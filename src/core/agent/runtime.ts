@@ -74,7 +74,6 @@ export class AgentRuntime {
       await this.agentTasks?.finishParentTurn(
         turn.id,
         outcome === "completed" ? "Parent turn ended" : `Parent turn ${outcome}`,
-        options.onUiEvent,
       );
     } catch (cause) {
       error ??= cause instanceof Error ? cause : new Error(String(cause));

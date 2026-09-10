@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { FileHistoryService } from "../file-history/service.js";
 import type { AgentProfile, AgentProfileRegistry } from "../agent/profile.js";
 import type { ExecutionEventSink } from "../runtime/events.js";
@@ -14,6 +15,7 @@ import {
 import type { AgentTaskRepository } from "./repository.js";
 import { WorkerTaskRunner } from "./task-runner.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
+import { validateExecutionLimits } from "../runtime/limits.js";
 
 export interface DelegateTaskContext {
   parentTurnId: string;
@@ -29,9 +31,7 @@ export interface AgentTaskOutcome {
 
 export class AgentTaskOrchestrator {
   private readonly runner: WorkerTaskRunner;
-  private readonly controllers = new Map<string, AbortController>();
-  private readonly runs = new Map<string, Promise<void>>();
-  private readonly turnTasks = new Map<string, Set<string>>();
+  private readonly runs = new Map<string, { parentTurnId: string; controller: AbortController; done: Promise<void> }>();
   private closing = false;
 
   constructor(
@@ -104,26 +104,36 @@ export class AgentTaskOrchestrator {
       };
       await this.repository.append({ type: "task_created", task }, true);
       tasks.push(task);
-      const ids = this.turnTasks.get(context.parentTurnId) ?? new Set<string>();
-      ids.add(task.id);
-      this.turnTasks.set(context.parentTurnId, ids);
       safeExecutionEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
       this.launch(task.id, profile, context.signal, context.ui);
     }
     return tasks.map((task) => this.repository.projection.summary(task.id));
   }
 
-  async waitTasks(taskIds: readonly string[], returnWhen: "first" | "all", signal: AbortSignal): Promise<AgentTaskOutcome[]> {
+  async waitTasks(taskIds: readonly string[], returnWhen: "first" | "all", signal: AbortSignal, timeoutMs = 60_000): Promise<{ tasks: AgentTaskOutcome[]; timedOut: boolean }> {
+    validateExecutionLimits({ timeoutMs });
+    signal.throwIfAborted();
     const unique = [...new Set(taskIds)];
     if (unique.length === 0) throw new Error("wait_tasks requires at least one task id");
     for (const id of unique) this.repository.projection.require(id);
-    const pending = unique.filter((id) => this.repository.projection.require(id).status === "running");
-    if (returnWhen === "first" && pending.length < unique.length) return unique.map((id) => this.outcome(id));
-    if (pending.length > 0) {
-      const waits = pending.map((id) => this.runs.get(id) ?? Promise.resolve());
-      await abortable(returnWhen === "first" ? Promise.race(waits) : Promise.all(waits).then(() => undefined), signal);
+    const pending = unique.flatMap((id) => this.runs.get(id)?.done ?? []);
+    let timedOut = false;
+    if (pending.length > 0 && (returnWhen === "all" || pending.length === unique.length)) {
+      const timer = new AbortController();
+      try {
+        timedOut = await Promise.race([
+          (returnWhen === "first" ? Promise.race(pending) : Promise.all(pending)).then(() => false),
+          delay(timeoutMs, true, { signal: AbortSignal.any([signal, timer.signal]) }),
+        ]);
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
+      } finally {
+        timer.abort();
+      }
     }
-    return unique.map((id) => this.outcome(id));
+    signal.throwIfAborted();
+    return { tasks: unique.map((id) => this.outcome(id)), timedOut };
   }
 
   async requestRevision(taskId: string, feedback: string, signal: AbortSignal, ui?: ExecutionEventSink): Promise<AgentTaskSummary> {
@@ -145,16 +155,13 @@ export class AgentTaskOrchestrator {
     return this.repository.projection.summary(taskId);
   }
 
-  async cancelTask(taskId: string, reason: string, ui?: ExecutionEventSink): Promise<AgentTaskSummary> {
+  async cancelTask(taskId: string, reason: string): Promise<AgentTaskSummary> {
     const task = this.repository.projection.require(taskId);
     if (task.status !== "running") {
       throw new Error(`Task ${taskId} is not running; cancellation does not revert workspace changes`);
     }
-    this.controllers.get(taskId)?.abort(new DOMException(reason, "AbortError"));
-    await this.runs.get(taskId);
-    const summary = this.repository.projection.summary(taskId);
-    safeExecutionEvent(ui, { type: "agent_task_updated", summary });
-    return summary;
+    await this.cancelRuns([taskId], reason);
+    return this.repository.projection.summary(taskId);
   }
 
   summariesForTurn(turnId: string): AgentTaskSummary[] {
@@ -164,30 +171,32 @@ export class AgentTaskOrchestrator {
       .map((task) => this.repository.projection.summary(task.id));
   }
 
-  async finishParentTurn(turnId: string, reason: string, ui?: ExecutionEventSink): Promise<void> {
-    const taskIds = [...(this.turnTasks.get(turnId) ?? [])];
-    for (const taskId of taskIds) {
-      if (this.repository.projection.require(taskId).status === "running") {
-        await this.cancelTask(taskId, reason, ui);
-      }
-    }
-    this.turnTasks.delete(turnId);
+  finishParentTurn(turnId: string, reason: string): Promise<void> {
+    const taskIds = [...this.runs].filter(([, run]) => run.parentTurnId === turnId).map(([id]) => id);
+    return this.cancelRuns(taskIds, reason);
   }
 
   async close(): Promise<void> {
     this.closing = true;
-    for (const controller of this.controllers.values()) {
-      controller.abort(new DOMException("Thread application closed; workspace changes were preserved", "AbortError"));
+    try {
+      await this.cancelRuns([...this.runs.keys()], "Thread application closed; workspace changes were preserved");
+    } finally {
+      await this.repository.close();
     }
-    await Promise.allSettled(this.runs.values());
-    await this.repository.close();
+  }
+
+  private async cancelRuns(taskIds: readonly string[], reason: string): Promise<void> {
+    const runs = taskIds.flatMap((id) => this.runs.get(id) ?? []);
+    for (const run of runs) run.controller.abort(new DOMException(reason, "AbortError"));
+    const settled = await Promise.allSettled(runs.map((run) => run.done));
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
   }
 
   private launch(taskId: string, profile: AgentProfile, signal: AbortSignal, ui?: ExecutionEventSink): void {
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    this.controllers.set(taskId, controller);
-    const run = (async () => {
+    const done = Promise.resolve().then(async () => {
       try {
         combined.throwIfAborted();
         await this.runner.run(taskId, profile, this.workerSettings.limits, combined, ui);
@@ -204,12 +213,12 @@ export class AgentTaskOrchestrator {
           }, true);
         }
       } finally {
-        this.controllers.delete(taskId);
+        if (this.runs.get(taskId)?.controller === controller) this.runs.delete(taskId);
         safeExecutionEvent(ui, { type: "agent_task_updated", summary: this.repository.projection.summary(taskId) });
       }
-    })();
-    this.runs.set(taskId, run);
-    void run.catch(() => undefined);
+    });
+    this.runs.set(taskId, { parentTurnId: this.repository.projection.require(taskId).parentTurnId, controller, done });
+    void done.catch(() => undefined);
   }
 
   private outcome(taskId: string): AgentTaskOutcome {
@@ -258,13 +267,4 @@ function scopeContains(container: AgentTaskWriteScope, candidate: AgentTaskWrite
 
 function comparableScopePath(value: string): string {
   return process.platform === "win32" ? value.toLowerCase() : value;
-}
-
-function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
 }
