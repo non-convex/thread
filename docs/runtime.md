@@ -102,6 +102,26 @@ MCP 属于未来的核心能力，将通过同一工具注册、策略、执行�
 
 通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。执行边界见 [Worker 架构](./worker-architecture.md)。
 
+## 内置文件编辑
+
+`edit` 只编辑已有的 UTF-8 文件，参数统一为 `path` 和非空的 `edits` 数组；单处修改也使用数组：
+
+```json
+{
+  "path": "src/config.ts",
+  "edits": [
+    { "oldText": "timeout: 1000", "newText": "timeout: 5000" },
+    { "oldText": "retries: 1", "newText": "retries: 3" }
+  ]
+}
+```
+
+每个非空 `oldText` 必须在同一份原始文件中唯一匹配，各项不能重叠或嵌套；后面的项不能依赖前面替换后的内容。工具先检查全部修改，再一次写入；匹配失败、重复或重叠时不修改文件，也不创建 checkpoint。错误会指出对应的 `edits[i]`。`newText` 为空表示删除匹配内容。创建或完整覆盖文件使用 `write`。
+
+匹配只容忍 LF、CRLF、CR 的表示差异，不忽略缩进、空白或 Unicode 字符。匹配区间外保留原始内容，包括 BOM、混合换行和末尾换行状态。替换文本使用匹配区间的首个换行风格；区间不含换行时采用文件首个换行风格，无换行文件采用 LF。无效 UTF-8 或含 NUL 的文件拒绝编辑。
+
+主 agent 和 worker 使用相同工具与共享写入入口，继续执行路径检查、写入范围检查、同路径协调、取消处理和可选 checkpoint。
+
 ## 文件 checkpoint 与会话回退
 
 `fileCheckpoints` 默认 `false`。关闭时，内置 `write` 和 `edit` 仍可工作，但不保存文件备份或追加 `file_edit` 记录；路径检查、取消处理、主 agent 与 worker 的同路径写入协调仍然生效。Session Tree 的会话和工具执行记录继续持久化，因此关闭文件 checkpoint 不等于使用内存会话。

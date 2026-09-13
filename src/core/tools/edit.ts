@@ -1,62 +1,31 @@
 import { Type } from "@earendil-works/pi-ai";
 import { prepareFilePath, workspacePathClaim } from "./execution.js";
 import { updateFile } from "./file-write.js";
-import type { AgentTool, ToolResult } from "./types.js";
+import type { AgentTool } from "./types.js";
 
-export type EditArgs = {
+type EditArgs = {
   path: string;
-  oldText: string;
-  newText: string;
+  edits: { oldText: string; newText: string }[];
 };
 
-function ok(content: string): ToolResult {
-  return { content, isError: false };
-}
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
-
-export function splitBom(text: string): { bom: string; text: string } {
-  if (text.charCodeAt(0) === 0xfeff) return { bom: "\uFEFF", text: text.slice(1) };
-  return { bom: "", text };
-}
-
-export function detectLineEnding(text: string): "\r\n" | "\n" | "\r" {
-  if (text.includes("\r\n")) return "\r\n";
-  if (text.includes("\r")) return "\r";
-  return "\n";
-}
-
-export function normalizeToLF(text: string): string {
+function normalizeToLF(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n" | "\r"): string {
-  if (ending === "\n") return text;
-  return text.replace(/\n/g, ending);
-}
-
-export function countOccurrences(content: string, needle: string): number {
-  let count = 0;
-  let from = 0;
-  while (true) {
-    const at = content.indexOf(needle, from);
-    if (at < 0) return count;
-    count++;
-    from = at + needle.length;
-  }
 }
 
 export const editTool: AgentTool<EditArgs> = {
   name: "edit",
   description:
-    "Replace one exact, unique text occurrence in an existing workspace file. oldText must match the file exactly once; copy it from read (line endings are matched even if the file uses CRLF). Prefer this over write for partial changes. Does not create files.",
+    "Edit an existing UTF-8 workspace file with one or more exact text replacements. Use one edits array for separate changes in the same file. Every oldText must match a unique, non-overlapping region of the original file, not the result of earlier edits. Copy only enough context from read to make each match unique. Line ending differences are tolerated; other whitespace and characters must match. All edits are checked before writing. Content outside the matched regions is preserved. Prefer this over write for partial changes. Does not create files.",
   parameters: Type.Object({
-    path: Type.String({ description: "Existing file to edit." }),
-    oldText: Type.String({ description: "Exact text to replace; must occur once in the file." }),
-    newText: Type.String({ description: "Replacement text. Empty string deletes the match." }),
-  }),
+    path: Type.String({ minLength: 1, description: "Existing file to edit." }),
+    edits: Type.Array(Type.Object({
+      oldText: Type.String({ minLength: 1, description: "Exact text to replace; must occur once in the original file." }),
+      newText: Type.String({ description: "Replacement text. Empty string deletes the match." }),
+    }, { additionalProperties: false }), {
+      minItems: 1,
+      description: "Non-overlapping replacements in one file. Merge overlapping or nested changes into one edit.",
+    }),
+  }, { additionalProperties: false }),
   replay: "never",
   prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
   execution: {
@@ -76,37 +45,49 @@ export const editTool: AgentTool<EditArgs> = {
       context.signal.throwIfAborted();
       const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
-      const oldText = normalizeToLF(args.oldText);
-      const newText = normalizeToLF(args.newText);
-      if (!oldText) throw new Error("oldText cannot be empty");
-      if (oldText === newText) throw new Error("oldText and newText are identical; nothing to change");
+      if (!Array.isArray(args.edits) || args.edits.length === 0) throw new Error("edits must contain at least one replacement");
 
       await updateFile(context, inputPath, (before) => {
         if (!before) throw new Error(`File not found: ${inputPath}`);
         const buffer = before.content;
         if (buffer.includes(0)) throw new Error(`Binary file (${buffer.length} bytes): ${inputPath}`);
 
-        const { bom, text } = splitBom(buffer.toString("utf8"));
-        const ending = detectLineEnding(text);
-        const content = normalizeToLF(text);
-        const first = content.indexOf(oldText);
-        if (first < 0) {
-          throw new Error(
-            "oldText was not found. Re-read the file and copy the exact text; whitespace must match.",
-          );
-        }
-        if (content.indexOf(oldText, first + oldText.length) >= 0) {
-          throw new Error(
-            `oldText occurs ${countOccurrences(content, oldText)} times; include more surrounding lines to make it unique`,
-          );
-        }
+        const source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+        const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
+        const content = source.slice(bom.length);
+        const defaultEnding = content.match(/\r\n|\r|\n/)?.[0] ?? "\n";
+        const replacements = args.edits.map((edit, index) => {
+          const oldText = normalizeToLF(edit.oldText);
+          const newText = normalizeToLF(edit.newText);
+          if (!oldText) throw new Error(`edits[${index}].oldText cannot be empty`);
+          if (oldText === newText) throw new Error(`edits[${index}] has identical oldText and newText; nothing to change`);
 
-        const next = `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`;
-        return Buffer.from(`${bom}${restoreLineEndings(next, ending)}`, "utf8");
+          const pattern = oldText.split("\n")
+            .map((line) => line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("(?:\\r\\n|\\r(?!\\n)|(?<!\\r)\\n)");
+          // Lookahead detects overlapping matches; newline alternatives keep CRLF indivisible.
+          const matches = content.matchAll(new RegExp(`(?=(${pattern}))`, "gu"));
+          const first = matches.next().value;
+          if (!first) throw new Error(`edits[${index}].oldText was not found. Re-read the file and copy the exact text; whitespace must match except for line endings.`);
+          if (!matches.next().done) throw new Error(`edits[${index}].oldText matches multiple locations; include more surrounding text to make it unique.`);
+          const matched = first[1]!;
+          const ending = matched.match(/\r\n|\r|\n/)?.[0] ?? defaultEnding;
+          return { index, start: first.index, end: first.index + matched.length, text: newText.replace(/\n/g, ending) };
+        }).sort((left, right) => left.start - right.start);
+
+        const parts = [bom];
+        let end = 0;
+        for (const [index, replacement] of replacements.entries()) {
+          if (replacement.start < end) throw new Error(`edits[${replacements[index - 1]!.index}] and edits[${replacement.index}] overlap. Merge them into one edit.`);
+          parts.push(content.slice(end, replacement.start), replacement.text);
+          end = replacement.end;
+        }
+        parts.push(content.slice(end));
+        return Buffer.from(parts.join(""), "utf8");
       });
-      return ok(`Replaced 1 occurrence in ${inputPath}`);
+      return { content: `Applied ${args.edits.length} edit(s) to ${inputPath}`, isError: false };
     } catch (error) {
-      return fail(error);
+      return { content: error instanceof Error ? error.message : String(error), isError: true };
     }
   },
 };

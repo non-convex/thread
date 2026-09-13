@@ -142,6 +142,8 @@ Creating and switching Sessions leave workspace files unchanged. `/new` does not
 
 ### Turns connect interaction, execution, and file edits
 
+The `edit` tool accepts `{ path, edits: [{ oldText, newText }] }` for one or more changes in a file. Replacements must uniquely match non-overlapping regions of the original content and are all checked before writing. Content outside those regions is preserved, including mixed line endings. Use `write` to create or fully replace a file; see [file editing](./docs/runtime.md#内置文件编辑).
+
 Each turn records the user message, assistant output, tool execution facts and results, parent turn, final status, and built-in file edits. Before `edit` or `write` first changes a project file in a turn, Thread saves its original bytes and permissions, or records that it did not exist. Worker edits belong to the parent turn.
 
 Opening a project and starting or finishing a turn never scan the workspace for checkpoints. Only files actually changed by the built-in editing tools are backed up. Bash commands, scripts, and other tools are not tracked. Interrupted and failed turns retain their saved file edits and are sealed into valid conversation prefixes, so the next request can continue from factual history.
