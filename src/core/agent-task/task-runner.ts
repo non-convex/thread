@@ -3,7 +3,7 @@ import { AgentStepRunner } from "../agent/step-runner.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
-import { safeExecutionEvent, type AgentTaskLiveEvent, type ExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
+import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import { AgentTaskJournal } from "./journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import type { AgentTaskRun } from "./model.js";
@@ -35,12 +35,6 @@ function responseText(response: AssistantMessage): string {
   return response.content.filter((content) => content.type === "text").map((content) => content.text).join("\n").trim();
 }
 
-function childEvent(event: ExecutionEvent): AgentTaskLiveEvent | undefined {
-  if (event.type === "assistant_started" || event.type === "assistant_text_delta" || event.type === "assistant_thinking_delta" ||
-      event.type === "tool_started" || event.type === "tool_finished") return event;
-  return undefined;
-}
-
 export class WorkerTaskRunner {
   constructor(
     private readonly repository: AgentTaskRepository,
@@ -66,6 +60,7 @@ export class WorkerTaskRunner {
     const timeout = AbortSignal.timeout(limits.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const journal = new AgentTaskJournal(this.repository, taskId, this.executionOptions.sessionIdForTurn?.(task.parentTurnId));
+    const taskUi = executionEventSink(journal.identity, ui);
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
     const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
       ...(this.fileHistory ? { fileHistory: () => this.fileHistory!.forTurn(task.parentTurnId) } : {}),
@@ -78,6 +73,7 @@ export class WorkerTaskRunner {
     const stepRunner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
     const usage = emptyUsage();
     let finalResponse = "";
+    safeExecutionEvent(taskUi, { type: "agent_run_started", input: taskSpecMessage(task.spec, this.rootPath), timestamp: startedAt });
     try {
       for (let step = 1; step <= limits.maxSteps; step++) {
         signal.throwIfAborted();
@@ -86,12 +82,6 @@ export class WorkerTaskRunner {
           messages: journal.messages,
           tools: profile.tools.modelDefinitions(),
         };
-        const taskUi: ExecutionEventSink | undefined = ui
-          ? (event) => {
-              const child = childEvent(event);
-              if (child) safeExecutionEvent(ui, { type: "agent_task_trace", taskId, event: child });
-            }
-          : undefined;
         const result = await stepRunner.run(context, journal, {
           signal,
           step,
@@ -140,6 +130,9 @@ export class WorkerTaskRunner {
         ...(cancelled ? { reason: String(parentSignal.reason ?? "Parent turn ended") } : {}),
       }, true);
     } finally {
+      const settled = this.repository.projection.require(taskId).runs.at(-1)!;
+      safeExecutionEvent(taskUi, { type: "agent_run_finished", outcome: settled.outcome ?? "failed", output: finalResponse,
+        ...(settled.error ? { error: settled.error } : {}), timestamp: settled.finishedAt ?? Date.now() });
       this.updated(taskId, ui);
     }
   }

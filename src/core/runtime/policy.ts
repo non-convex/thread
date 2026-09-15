@@ -7,6 +7,9 @@ export interface ExecutionIdentity {
   sessionId: string | null;
   turnId: string | null;
   taskId?: string;
+  revision?: number;
+  parentExecutionId?: string;
+  parentToolCallId?: string;
   agentId: string;
 }
 

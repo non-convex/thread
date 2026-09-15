@@ -1,5 +1,6 @@
+import { streamModel } from "./model-observation.js";
 import { isContextOverflow, type AssistantMessage, type Context, type Message } from "@earendil-works/pi-ai";
-import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
+import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import type { ModelClient } from "./model-client.js";
 import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch.js";
@@ -47,6 +48,7 @@ export class AgentStepRunner {
   ) {}
 
   async run(context: Context, journal: ExecutionJournal, options: AgentStepOptions): Promise<AgentStepResult> {
+    options = { ...options, onUiEvent: executionEventSink(journal.identity, options.onUiEvent) };
     let assistantEntryId = journal.planAssistantEntryId();
     safeExecutionEvent(options.onUiEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });
     const toolBatch = new ToolExecutionBatch({
@@ -57,7 +59,7 @@ export class AgentStepRunner {
       ...(options.onUiEvent ? { ui: options.onUiEvent } : {}),
     });
     try {
-      const response = await this.model.stream(context, {
+      const response = await streamModel(this.model, context, {
         signal: options.signal,
         maxTokens: this.maxOutputTokens,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
@@ -86,7 +88,7 @@ export class AgentStepRunner {
         onRetryAttemptStart: (attempt, maxAttempts) => {
           safeExecutionEvent(options.onUiEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts, entryId: assistantEntryId });
         },
-      });
+      }, options.onUiEvent, { purpose: "agent", entryId: () => assistantEntryId });
       const calls: IndexedToolCall[] = response.content.flatMap((content, contentIndex) =>
         content.type === "toolCall" ? [{ contentIndex, call: content }] : []
       );

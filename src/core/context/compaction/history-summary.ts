@@ -1,3 +1,4 @@
+import type { ExecutionEventSink } from "../../runtime/events.js";
 // Cross-turn cumulative project-state document.
 
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -41,10 +42,13 @@ export function generateHistorySummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
+  onUiEvent?: ExecutionEventSink;
   reasoning?: ThinkingLevel;
 }): Promise<string> {
   return requestSummary({
     model: options.model,
+    ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+    purpose: "history_summary",
     context: options.context,
     signal: options.signal,
     maxTokens: Math.min(COMPACTION_HISTORY_RESERVE_TOKENS, options.model.maxOutputTokens),

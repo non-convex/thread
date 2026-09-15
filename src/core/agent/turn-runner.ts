@@ -1,3 +1,4 @@
+import { createId } from "../utils/id.js";
 import { type AssistantMessage, type Context, type ImageContent, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
@@ -9,7 +10,7 @@ import type { ExtensionEvents } from "../extensions/events.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
-import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
+import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
 import type { RuntimeEventSink } from "../runtime/events.js";
 import { RuntimeLimitError, type ExecutionLimits } from "../runtime/limits.js";
@@ -22,6 +23,7 @@ export interface RunTurnOptions extends ExecutionLimits {
   signal: AbortSignal;
   sessionId?: string;
   onEvent?: RuntimeEventSink;
+  captureModelContent?: () => boolean;
   onTextDelta?: (delta: string) => void;
   onUiEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];
@@ -196,7 +198,13 @@ export class TurnRunner {
         !this.compaction.needsCompaction(assembled.built, budget.overheadTokens, invocation.turnId)) {
       return { compacted: false };
     }
-    safeExecutionEvent(options.onUiEvent, { type: "compaction_started", reason: invocation.reason });
+    const ui = executionEventSink({
+      executionId: createId("compaction"), agentId: "main",
+      sessionId: this.tree.projection.turns.get(invocation.turnId)?.sessionId ?? null,
+      turnId: invocation.turnId,
+      ...(invocation.reason !== "manual" ? { parentExecutionId: invocation.turnId } : {}),
+    }, options.onUiEvent);
+    safeExecutionEvent(ui, { type: "compaction_started", reason: invocation.reason });
     try {
       const result = await this.compaction.compact({
         built: assembled.built,
@@ -204,10 +212,11 @@ export class TurnRunner {
         turnId: invocation.turnId,
         reason: invocation.reason,
         signal: options.signal,
+        onUiEvent: ui,
         systemTokens: budget.overheadTokens,
         tokensBefore: budget.requestTokens,
       });
-      safeExecutionEvent(options.onUiEvent, {
+      safeExecutionEvent(ui, {
         type: "compaction_finished",
         reason: invocation.reason,
         ok: true,
@@ -222,7 +231,7 @@ export class TurnRunner {
       });
       return result;
     } catch (error) {
-      safeExecutionEvent(options.onUiEvent, { type: "compaction_finished", reason: invocation.reason, ok: false });
+      safeExecutionEvent(ui, { type: "compaction_finished", reason: invocation.reason, ok: false });
       throw error;
     }
   }

@@ -32,7 +32,7 @@ import { createSessionReadTool, createSessionSearchTool } from "../tools/session
 import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
 import { ToolRegistry, type AgentTool } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
-import { safeRuntimeEvent, type RuntimeEvent, type RuntimeEventSink } from "./events.js";
+import { runtimeEventSink, withoutModelContent, safeRuntimeEvent, type RuntimeSubscriptionOptions, type RuntimeEvent, type RuntimeEventSink } from "./events.js";
 
 interface RuntimeResources {
   project: Project;
@@ -73,7 +73,7 @@ export class ThreadRuntime {
   private readonly options: RuntimeOptionsSnapshot;
   private readonly loadedSkills: LoadedSkills;
   private readonly workerSettings: WorkerProfileSettings;
-  private readonly listeners = new Set<RuntimeEventSink>();
+  private readonly listeners = new Map<RuntimeEventSink, RuntimeSubscriptionOptions>();
   private state: ThreadState;
   private askPresenter: AskPresenter | undefined;
   private askDisposer: (() => void) | undefined;
@@ -109,6 +109,8 @@ export class ThreadRuntime {
       sessionIdForTurn: (turnId) => this.tree.projection.turns.get(turnId)?.sessionId,
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
+      onEvent: runtimeEventSink({ executionId: "dreamer", agentId: "dreamer", sessionId: null, turnId: null },
+        (event) => this.publish(event), () => this.captureModelContent()),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
     }) : undefined;
     for (const tool of options.tools) this.toolRegistry.register(tool);
@@ -208,7 +210,7 @@ export class ThreadRuntime {
       signal.throwIfAborted();
       const session = await this.tree.createSession();
       if (snapshot !== undefined) this.memory?.bind(session.id, snapshot);
-      this.publish({ type: "session_changed", sessionId: session.id, turnId: null, liveTipTurnId: null, reason: "new" });
+      this.publish({ executionId: session.id, agentId: "main", timestamp: Date.now(), type: "session_changed", sessionId: session.id, turnId: null, liveTipTurnId: null, reason: "new" });
       return session;
     });
   }
@@ -219,7 +221,7 @@ export class ThreadRuntime {
       signal.throwIfAborted();
       const session = await this.tree.openSession(sessionId);
       const liveTipTurnId = this.tree.projection.liveTips.get(session.id) ?? null;
-      this.publish({ type: "session_changed", sessionId: session.id, turnId: liveTipTurnId, liveTipTurnId, reason: "opened" });
+      this.publish({ executionId: session.id, agentId: "main", timestamp: Date.now(), type: "session_changed", sessionId: session.id, turnId: liveTipTurnId, liveTipTurnId, reason: "opened" });
       return session;
     });
   }
@@ -238,7 +240,8 @@ export class ThreadRuntime {
       if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
       const runner = this.createAgentRuntime(session.id);
       const result = await runner.run(input, { ...options, sessionId: session.id, signal,
-        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, event); } });
+        captureModelContent: () => this.captureModelContent(),
+        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
       this.dreamer?.recordTurn(this.tree.messagesForTurn(result.turn.id));
       return result;
     });
@@ -255,7 +258,8 @@ export class ThreadRuntime {
       const session = this.tree.resolveSession(sessionId);
       if (!this.model) throw new Error("Compaction requires a configured model");
       return this.createAgentRuntime(session.id).compactCurrent({ ...options, sessionId: session.id, signal,
-        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, event); } });
+        captureModelContent: () => this.captureModelContent(),
+        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
     });
   }
 
@@ -271,7 +275,7 @@ export class ThreadRuntime {
       }
       const turn = this.tree.projection.turns.get(candidate.turnId)!;
       await this.tree.moveLiveTipForRewind(turn.parentTurnId, session.id);
-      this.publish({ type: "session_changed", sessionId: session.id, turnId: turn.parentTurnId,
+      this.publish({ executionId: session.id, agentId: "main", timestamp: Date.now(), type: "session_changed", sessionId: session.id, turnId: turn.parentTurnId,
         liveTipTurnId: turn.parentTurnId, reason: "rewind" });
       return candidate;
     });
@@ -300,9 +304,9 @@ export class ThreadRuntime {
     return { requestTokens, contextWindow: this.model.contextWindow };
   }
 
-  subscribe(listener: RuntimeEventSink): () => void {
+  subscribe(listener: RuntimeEventSink, options: RuntimeSubscriptionOptions = {}): () => void {
     this.assertOpen();
-    this.listeners.add(listener);
+    this.listeners.set(listener, { ...options });
     return () => this.listeners.delete(listener);
   }
 
@@ -479,9 +483,13 @@ export class ThreadRuntime {
     });
   }
 
+  private captureModelContent(): boolean {
+    return [...this.listeners.values()].some((options) => options.captureModelContent);
+  }
+
   private publish(event: RuntimeEvent): void {
-    for (const listener of this.listeners) {
-      safeRuntimeEvent(listener, event);
+    for (const [listener, options] of this.listeners) {
+      safeRuntimeEvent(listener, options.captureModelContent ? event : withoutModelContent(event));
     }
   }
 

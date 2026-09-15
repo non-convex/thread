@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { contentText, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { CompactionResult } from "../context/compaction/index.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
@@ -54,6 +54,7 @@ export class AgentRuntime {
       type: "turn_started",
       turnId: turn.id,
       userEntryId: turn.userEntryId,
+      timestamp: turn.startedAt,
       input: display,
       sessionId: turn.sessionId,
     });
@@ -91,6 +92,8 @@ export class AgentRuntime {
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
     safeExecutionEvent(options.onUiEvent, {
       type: "turn_finished",
+      timestamp: settled.finishedAt ?? Date.now(),
+      output: contentText(this.tree.messagesForTurn(turn.id).findLast((message) => message.role === "assistant")?.content ?? [], ""),
       outcome,
       ...(outcome === "failed" && error ? { error: error.message } : {}),
       ...(error instanceof RuntimeLimitError ? { limit: error.limit } : {}),
@@ -122,11 +125,12 @@ export class AgentRuntime {
 
   private withEvents(options: RunTurnOptions, sessionId: string, turnId: string): RunTurnOptions {
     if (!options.onEvent && !options.onUiEvent) return options;
-    const domain = runtimeEventSink({ sessionId, turnId }, options.onEvent);
+    const domain = runtimeEventSink({ sessionId, turnId, executionId: turnId, agentId: "main" }, options.onEvent, options.captureModelContent);
     const onUiEvent: ExecutionEventSink = (event) => {
       domain(event);
       safeExecutionEvent(options.onUiEvent, event);
     };
+    onUiEvent.captureModelContent = () => options.captureModelContent?.() ?? false;
     return { ...options, onUiEvent };
   }
 }

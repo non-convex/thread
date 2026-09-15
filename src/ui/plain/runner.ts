@@ -28,7 +28,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
   const taskStatuses = new Map<string, string>();
   const detachRuntime = app.runtime.subscribe((event) => {
     if (event.sessionId !== app.selectedSessionId) return;
-    if (event.type === "assistant_text_delta") {
+    if (event.type === "assistant_text_delta" && event.agentId === "main") {
       streamed = true;
       output.write(event.delta);
       return;

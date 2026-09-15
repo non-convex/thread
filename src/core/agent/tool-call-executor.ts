@@ -1,5 +1,4 @@
-import type { Message, ToolCall } from "@earendil-works/pi-ai";
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import { contentText, validateToolArguments, type Message, type ToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionEvents } from "../extensions/events.js";
 import {
   validateToolResourceClaims,
@@ -25,6 +24,8 @@ export interface PreparedToolCall {
   resources: readonly ToolResourceClaim[];
   tool?: AgentTool;
   immediateResult?: ToolResult;
+  denied: boolean;
+  finished?: boolean;
 }
 
 const immediatePolicy: ToolExecutionPolicy<Record<string, unknown>> = {
@@ -74,6 +75,7 @@ export class ToolCallExecutor {
     const tool = this.tools.get(input.call.name);
     let args = input.call.arguments as Record<string, unknown>;
     let immediateResult: ToolResult | undefined;
+    let denied = false;
     let replay: AgentTool["replay"] = "never";
 
     if (!tool) {
@@ -96,6 +98,7 @@ export class ToolCallExecutor {
     });
     args = transformed.args;
     if (transformed.denied) {
+      denied = true;
       immediateResult = { content: transformed.denyReason ?? `Tool ${input.call.name} was denied`, isError: true };
     } else if (tool && !immediateResult) {
       try {
@@ -133,6 +136,7 @@ export class ToolCallExecutor {
             signal: input.signal,
           });
           if (!decision || decision.allow !== true) {
+            denied = true;
             immediateResult = { content: decision?.reason ?? `Host denied tool ${input.call.name}`, isError: true };
           }
         }
@@ -163,6 +167,7 @@ export class ToolCallExecutor {
       call: input.call,
       args,
       replay,
+      denied,
       policy,
       resources,
       ...(tool ? { tool } : {}),
@@ -171,14 +176,32 @@ export class ToolCallExecutor {
   }
 
   async execute(prepared: PreparedToolCall, signal: AbortSignal, ui?: ExecutionEventSink): Promise<Message> {
-    signal.throwIfAborted();
-    safeExecutionEvent(ui, {
-      type: "tool_started",
-      id: prepared.call.id,
-      name: prepared.call.name,
-      args: prepared.args,
-    });
+    const started = performance.now();
+    let result: Extract<Message, { role: "toolResult" }> | undefined;
+    let error: unknown;
+    try {
+      signal.throwIfAborted();
+      safeExecutionEvent(ui, { type: "tool_started", id: prepared.call.id, name: prepared.call.name,
+        assistantEntryId: prepared.assistantEntryId, args: prepared.args, phase: "running" });
+      result = await this.invoke(prepared, signal, ui);
+      return result;
+    } catch (cause) {
+      error = cause;
+      throw cause;
+    } finally {
+      prepared.finished = true;
+      const cancelled = !result && (signal.aborted || (error instanceof Error && error.name === "AbortError"));
+      const isError = cancelled || error !== undefined || result?.isError === true;
+      const content = result ? contentText(result.content, "") : String(error instanceof Error ? error.message : error ?? "Cancelled");
+      safeExecutionEvent(ui, { type: "tool_finished", id: prepared.call.id, name: prepared.call.name,
+        assistantEntryId: prepared.assistantEntryId, isError, content, durationMs: performance.now() - started,
+        outcome: cancelled ? "cancelled" : prepared.denied ? "denied" : isError ? "failed" : "completed",
+        ...(isError ? { error: content } : {}),
+      });
+    }
+  }
 
+  private async invoke(prepared: PreparedToolCall, signal: AbortSignal, ui?: ExecutionEventSink): Promise<Extract<Message, { role: "toolResult" }>> {
     let result = prepared.immediateResult;
     if (!result && prepared.tool) {
       const ask = this.options.askPresenter?.();
@@ -221,15 +244,6 @@ export class ToolCallExecutor {
         modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
       }
     }
-    safeExecutionEvent(ui, {
-      type: "tool_finished",
-      id: prepared.call.id,
-      name: prepared.call.name,
-      isError: settled.isError,
-      ...(settled.isError ? { error: settled.content } : {}),
-      content: modelContent,
-    });
-
     return {
       role: "toolResult",
       toolCallId: prepared.call.id,
@@ -243,11 +257,8 @@ export class ToolCallExecutor {
 
   private identity(journal: ExecutionJournal): ExecutionIdentity {
     return {
-      executionId: journal.executionId,
-      sessionId: journal.identity?.sessionId ?? null,
-      turnId: journal.identity?.turnId ?? null,
-      ...(journal.identity?.taskId ? { taskId: journal.identity.taskId } : {}),
-      agentId: this.options.agentId ?? journal.identity?.agentId ?? "main",
+      ...journal.identity,
+      agentId: this.options.agentId ?? journal.identity.agentId,
     };
   }
 }

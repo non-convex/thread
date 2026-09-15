@@ -1,3 +1,5 @@
+import { streamModel } from "../../agent/model-observation.js";
+import type { ExecutionEventSink } from "../../runtime/events.js";
 // Shared summary call: validate the response and retry silently on a bad one.
 
 import { contentText, type Context, type ThinkingLevel } from "@earendil-works/pi-ai";
@@ -9,19 +11,21 @@ export async function requestSummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
+  onUiEvent?: ExecutionEventSink;
   maxTokens: number;
   label: string;
+  purpose: "history_summary" | "progress_summary";
   reasoning?: ThinkingLevel;
 }): Promise<string> {
   let lastError: Error | undefined;
   for (let attempt = 1; attempt <= COMPACTION_SUMMARY_ATTEMPTS; attempt++) {
     options.signal.throwIfAborted();
     try {
-      const response = await options.model.stream(options.context, {
+      const response = await streamModel(options.model, options.context, {
         signal: options.signal,
         maxTokens: options.maxTokens,
         ...(options.reasoning ? { reasoning: options.reasoning } : {}),
-      });
+      }, options.onUiEvent, { purpose: options.purpose });
       if (response.stopReason === "aborted") {
         throw new DOMException(response.errorMessage ?? `${options.label} aborted`, "AbortError");
       }

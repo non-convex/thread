@@ -141,6 +141,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
             }],
           };
         }
+        if (child.type !== "tool_finished") return card;
         return {
           ...card,
           trace: card.trace.map((block) => block.tool?.id === child.id

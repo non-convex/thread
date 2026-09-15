@@ -84,6 +84,7 @@ export {
   formatGlobalMemoryPrompt,
   getGlobalMemoryPath,
 } from "./core/global-memory.js";
+export type { ExtensionActivator, ExtensionDisposer } from "./app/extensions/loader.js";
 export type { ExtensionAPI } from "./app/extensions/api.js";
 export type {
   ThreadCommand,

@@ -18,6 +18,9 @@ export class AgentTaskJournal implements ExecutionJournal {
       sessionId: this.sessionId ?? null,
       turnId: task.parentTurnId,
       taskId: task.id,
+      revision: task.revision,
+      parentExecutionId: task.parentTurnId,
+      parentToolCallId: task.toolCallId,
       agentId: task.profileId,
     };
   }

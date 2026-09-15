@@ -1,4 +1,5 @@
-import type { Message } from "@earendil-works/pi-ai";
+import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
+import { contentText, type Message } from "@earendil-works/pi-ai";
 import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import { AgentStepRunner } from "../agent/step-runner.js";
@@ -16,6 +17,7 @@ export interface DreamerSchedulerOptions {
   idleMs?: number;
   maxRuntimeMs?: number;
   toolPolicy?: HostToolPolicy;
+  onEvent?: ExecutionEventSink;
 }
 
 /** Reviews accumulated turns after the Main agent has remained idle long enough. */
@@ -42,7 +44,7 @@ export class DreamerScheduler {
     private readonly rootPath: string,
     private readonly memoryPath: string,
     profile?: AgentProfile,
-    options: DreamerSchedulerOptions = {},
+    private readonly options: DreamerSchedulerOptions = {},
   ) {
     this.profile = profile;
     this.idleTurns = options.idleTurns ?? DREAMER_IDLE_TURNS;
@@ -168,24 +170,37 @@ export class DreamerScheduler {
     const runner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
 
     for (const batch of batches) {
-      const journal = new EphemeralAgentJournal([batch.message]);
-      for (let step = 1; ; step++) {
+      const journal = new EphemeralAgentJournal([batch.message], profile.id);
+      const ui = executionEventSink(journal.identity, this.options.onEvent);
+      let output = "";
+      let error: unknown;
+      safeExecutionEvent(ui, { type: "agent_run_started", input: contentText(batch.message.content, "") });
+      try {
+        for (let step = 1; ; step++) {
+          signal.throwIfAborted();
+          const result = await runner.run({
+            systemPrompt: profile.systemPrompt,
+            messages: journal.conversationMessages(),
+            tools: profile.tools.modelDefinitions(),
+          }, journal, { signal, step, onUiEvent: ui });
+          output = contentText(result.response.content, "");
+          if (result.response.stopReason === "aborted") {
+            throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
+          }
+          if (result.response.stopReason === "error") throw new Error(result.response.errorMessage ?? "Dreamer model request failed");
+          if (result.calls.length === 0) break;
+        }
         signal.throwIfAborted();
-        const result = await runner.run({
-          systemPrompt: profile.systemPrompt,
-          messages: journal.conversationMessages(),
-          tools: profile.tools.modelDefinitions(),
-        }, journal, { signal, step });
-        if (result.response.stopReason === "aborted") {
-          throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
-        }
-        if (result.response.stopReason === "error") {
-          throw new Error(result.response.errorMessage ?? "Dreamer model request failed");
-        }
-        if (result.calls.length === 0) break;
+        onBatchReviewed(batch.turnCount);
+      } catch (cause) {
+        error = cause;
+        throw cause;
+      } finally {
+        safeExecutionEvent(ui, { type: "agent_run_finished", output,
+          outcome: signal.aborted ? "cancelled" : error !== undefined ? "failed" : "completed",
+          ...(error !== undefined ? { error: String(error instanceof Error ? error.message : error) } : {}),
+        });
       }
-      signal.throwIfAborted();
-      onBatchReviewed(batch.turnCount);
     }
   }
 

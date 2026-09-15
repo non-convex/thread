@@ -15,7 +15,7 @@ export interface ToolExecutionFact {
 /** Shared journal operations. The owning execution is admitted before the step runner starts. */
 export interface ExecutionJournal {
   readonly executionId: string;
-  readonly identity?: ExecutionIdentity;
+  readonly identity: ExecutionIdentity;
   conversationMessages(): Message[];
   planAssistantEntryId(): string;
   appendAssistant(message: Message, entryId: string): Promise<void>;

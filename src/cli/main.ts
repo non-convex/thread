@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { stderr as errorOutput, stdout as output } from "node:process";
+import { resolve } from "node:path";
 import { ThreadApp } from "../app/thread-app.js";
 import { createConfiguredModelCatalog } from "../core/agent/model-client.js";
 import type { AgentProfileDiagnostic } from "../core/agent/profile.js";
@@ -8,7 +9,6 @@ import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
 import { ThreadCredentialStore } from "../core/auth/credential-store.js";
 import { loadThreadConfig } from "../app/config/thread-config.js";
 import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../app/config/thread-state.js";
-import { loadExtension } from "../app/extensions/loader.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
 import { settlesWithin } from "../core/utils/async.js";
@@ -268,7 +268,7 @@ async function main(): Promise<void> {
     },
   });
   try {
-    for (const extension of options.extensions) await loadExtension(extension, app.extensionApi, process.cwd());
+    for (const extension of options.extensions) await app.loadExtension(extension.startsWith(".") ? resolve(extension) : extension);
     if (usePlain) {
       await runPlainCli(app, {
         ...(loadedConfig ? { configDescription: `${loadedConfig.source} ${loadedConfig.path}` } : {}),

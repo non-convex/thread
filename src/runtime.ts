@@ -2,7 +2,7 @@
 export { ThreadRuntime } from "./core/runtime/thread-runtime.js";
 export type { ThreadRuntimeOptions, PromptOptions, RewindOptions } from "./core/runtime/options.js";
 export type { BuiltinToolName } from "./core/tools/builtins.js";
-export type { RuntimeEvent, RuntimeEventSink, RuntimeScope } from "./core/runtime/events.js";
+export type { RuntimeEvent, RuntimeEventSink, RuntimeScope, RuntimeSubscriptionOptions, ModelEvent } from "./core/runtime/events.js";
 export type { ExecutionIdentity, HostToolCall, HostToolDecision, HostToolPolicy } from "./core/runtime/policy.js";
 export { RuntimeLimitError, type ExecutionLimits, type RuntimeLimit } from "./core/runtime/limits.js";
 export {
@@ -48,3 +48,6 @@ export type { ProjectSession, SessionEntry, Turn } from "./core/session-tree/mod
 export type { RewindCandidate } from "./core/session-tree/service.js";
 export type { CompactionResult } from "./core/context/compaction/index.js";
 export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./core/skills/loader.js";
+
+export type { ModelAttemptEvent } from "./core/agent/model-observation.js";
+export type { AgentTask, AgentTaskRun, AgentTaskSummary } from "./core/agent-task/model.js";

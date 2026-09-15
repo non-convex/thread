@@ -22,6 +22,7 @@ export interface IndexedToolCall {
  */
 export class ToolExecutionBatch {
   private scheduler: ToolScheduler<Message>;
+  private readonly queued = new Map<string, { name: string; assistantEntryId: string }>();
   private readonly prepared = new Map<string, PreparedToolCall>();
   private prepareTail: Promise<void> = Promise.resolve();
   private finalized: readonly PreparedToolCall[] | undefined;
@@ -41,13 +42,15 @@ export class ToolExecutionBatch {
 
   observe(call: ToolCall, contentIndex: number): Promise<void> {
     const stableCall = structuredClone(call);
-    if (!this.prepared.has(stableCall.id)) {
+    if (!this.queued.has(stableCall.id)) {
+      this.queued.set(stableCall.id, { name: stableCall.name, assistantEntryId: this.input.assistantEntryId });
       safeExecutionEvent(this.input.ui, {
         type: "tool_started",
         id: stableCall.id,
         name: stableCall.name,
         args: (stableCall.arguments ?? {}) as Record<string, unknown>,
         phase: "queued",
+        assistantEntryId: this.input.assistantEntryId,
       });
     }
     const operation = this.prepareTail.then(async () => {
@@ -125,7 +128,7 @@ export class ToolExecutionBatch {
 
   async restartForModelRetry(reason: unknown, nextAssistantEntryId: string): Promise<void> {
     await this.prepareTail;
-    await this.scheduler.cancel(reason);
+    await this.cancel(reason);
     this.input.assistantEntryId = nextAssistantEntryId;
     this.scheduler = new ToolScheduler<Message>(this.input.signal);
     this.prepared.clear();
@@ -137,6 +140,12 @@ export class ToolExecutionBatch {
   async cancel(reason?: unknown): Promise<void> {
     await this.prepareTail.catch(() => undefined);
     await this.scheduler.cancel(reason);
+    for (const [id, call] of this.queued) {
+      if (this.prepared.get(id)?.finished) continue;
+      safeExecutionEvent(this.input.ui, { type: "tool_finished", id, ...call, isError: true, outcome: "cancelled",
+        error: reason instanceof Error ? reason.message : INTERRUPTED_TOOL_RESULT, content: INTERRUPTED_TOOL_RESULT });
+    }
+    this.queued.clear();
   }
 
   /**
@@ -160,14 +169,6 @@ export class ToolExecutionBatch {
           // The call was cancelled or failed after it started; synthesize below.
         }
       }
-      safeExecutionEvent(this.input.ui, {
-        type: "tool_finished",
-        id: prepared.call.id,
-        name: prepared.call.name,
-        isError: true,
-        error: text,
-        content: text,
-      });
       results.push(abortedToolResult(prepared.call, text));
     }
     return results;

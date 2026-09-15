@@ -2,6 +2,7 @@ import type { ExecutionEvent } from "../core/runtime/events.js";
 
 /** Presentation events for TUI commands and execution progress. */
 export type UiEvent = ExecutionEvent
+  | { type: "agent_task_trace"; taskId: string; revision: number; event: ExecutionEvent }
   | { type: "command_started"; name: string }
   | { type: "command_finished"; name: string; ok: boolean };
 export type UiEventSink = (event: UiEvent) => void;

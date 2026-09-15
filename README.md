@@ -283,6 +283,8 @@ bun run check
 bun run build
 ```
 
+Optional observability integrations can use `runtime.subscribe(listener, { captureModelContent: true })` and public history queries. The same model and tool events cover the main agent, workers, compaction, and Dreamer. The coding app can load an adapter with `--extension`; its returned cleanup function runs after runtime shutdown. See [the event contract](docs/runtime.md#事件和扩展) and [the standalone usage extension](examples/observability.ts).
+
 Main code boundaries:
 
 ```text

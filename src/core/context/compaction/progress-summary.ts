@@ -1,3 +1,4 @@
+import type { ExecutionEventSink } from "../../runtime/events.js";
 // In-turn progress summary: continuity for a turn whose earlier steps were cut.
 
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -37,6 +38,7 @@ export function generateProgressSummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
+  onUiEvent?: ExecutionEventSink;
   previousSummary?: string;
   reasoning?: ThinkingLevel;
 }): Promise<string> {
@@ -45,6 +47,8 @@ export function generateProgressSummary(options: {
     : PROGRESS_REQUEST;
   return requestSummary({
     model: options.model,
+    ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+    purpose: "progress_summary",
     context: {
       ...options.context,
       messages: [

@@ -1,3 +1,4 @@
+import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
 import path from "node:path";
 import type { ModelDescriptor, ModelCatalog } from "../core/agent/model-client.js";
 import { MAIN_AGENT_PROFILE_ID } from "../core/agent/profile.js";
@@ -40,6 +41,8 @@ export class ThreadApp {
   private readonly modelCatalog: ModelCatalog | undefined;
   private readonly skillPaths: readonly string[];
   private inputOperation: { controller: AbortController; done: Promise<InputResult> } | undefined;
+  private readonly extensionDisposers: ExtensionDisposer[] = [];
+  private extensionLoading: Promise<void> = Promise.resolve();
   private appClosing: Promise<void> | undefined;
 
   private constructor(readonly runtime: ThreadRuntime, modelCatalog: ModelCatalog | undefined, skillPaths: readonly string[]) {
@@ -80,6 +83,16 @@ export class ThreadApp {
       await runtime.close();
       throw error;
     }
+  }
+
+  async loadExtension(specifier: string): Promise<void> {
+    this.assertOpen();
+    const loading = this.extensionLoading.then(async () => {
+      const dispose = await loadExtension(specifier, this.extensionApi, this.runtime.rootPath);
+      if (dispose) this.extensionDisposers.push(dispose);
+    });
+    this.extensionLoading = loading.catch(() => undefined);
+    return loading;
   }
 
   async openSession(sessionId: string, options: { signal?: AbortSignal } = {}) {
@@ -440,7 +453,12 @@ export class ThreadApp {
     const input = this.inputOperation;
     this.appClosing = Promise.resolve().then(async () => {
       await input?.done.catch(() => undefined);
-      await this.runtime.close();
+      await this.extensionLoading;
+      try {
+        await this.runtime.close();
+      } finally {
+        await Promise.allSettled(this.extensionDisposers.splice(0).map((dispose) => Promise.resolve().then(dispose)));
+      }
     });
     input?.controller.abort(new DOMException("Thread application closed", "AbortError"));
     return this.appClosing;

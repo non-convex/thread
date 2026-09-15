@@ -1,3 +1,4 @@
+import type { ExecutionEventSink } from "../../runtime/events.js";
 // Compaction orchestration: plan, summarize, verify, append one Session Tree entry.
 
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -45,6 +46,7 @@ export class ContextCompactionService {
     turnId: string;
     reason: CompactionReason;
     signal: AbortSignal;
+    onUiEvent?: ExecutionEventSink;
     systemTokens: number;
     tokensBefore: number;
   }): Promise<CompactionResult> {
@@ -69,6 +71,7 @@ export class ContextCompactionService {
       model: this.model,
       context: historySummaryContext(options.context, options.built.messages, plan.retainedUnits),
       signal: options.signal,
+      ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
     const progressTask = plan.partialTurnTrajectory && plan.partialTurnId
@@ -79,11 +82,16 @@ export class ContextCompactionService {
             plan.partialTurnTrajectory,
           ),
           signal: options.signal,
+          ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
           ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
           ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         })
       : Promise.resolve(undefined);
-    const [historySummary, progressSummary] = await Promise.all([historyTask, progressTask]);
+    const [history, progress] = await Promise.allSettled([historyTask, progressTask]);
+    if (history.status === "rejected") throw history.reason;
+    if (progress.status === "rejected") throw progress.reason;
+    const historySummary = history.value;
+    const progressSummary = progress.value;
 
     // Measured through the same projection the builder replays on every later
     // request, so the verified saving cannot drift from the real prompt.

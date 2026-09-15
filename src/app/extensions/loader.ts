@@ -2,9 +2,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "./api.js";
 
-export type ExtensionActivator = (api: ExtensionAPI) => void | Promise<void>;
+export type ExtensionDisposer = () => void | Promise<void>;
+export type ExtensionActivator = (api: ExtensionAPI) => void | ExtensionDisposer | Promise<void | ExtensionDisposer>;
 
-export async function loadExtension(specifier: string, api: ExtensionAPI, rootPath: string): Promise<void> {
+export async function loadExtension(specifier: string, api: ExtensionAPI, rootPath: string): Promise<void | ExtensionDisposer> {
   const resolved = specifier.startsWith(".") || path.isAbsolute(specifier)
     ? pathToFileURL(path.resolve(rootPath, specifier)).href
     : specifier;
@@ -14,5 +15,7 @@ export async function loadExtension(specifier: string, api: ExtensionAPI, rootPa
   };
   const activate = module.activate ?? module.default;
   if (typeof activate !== "function") throw new Error(`Extension ${specifier} does not export activate() or default`);
-  await activate(api);
+  const dispose = await activate(api);
+  if (dispose !== undefined && typeof dispose !== "function") throw new Error(`Extension ${specifier} returned an invalid cleanup function`);
+  return dispose;
 }

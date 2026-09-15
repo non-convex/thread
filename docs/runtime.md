@@ -186,7 +186,47 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 ## 事件和扩展
 
-`RuntimeEvent` 携带 `sessionId` 和 `turnId`；会话创建或回退到 Root 的 `session_changed` 事件允许 `turnId` 为 `null`。模型输出带 `entryId`，工具事件带 `toolCallId`。同步或异步观察者异常不改变任务结果；runtime 不等待异步观察者，取消订阅也不会取消任务。客户端可合并文本增量，状态快照从公共查询方法读取。
+`RuntimeEvent` 携带 `timestamp`（Unix 毫秒）、`executionId`、`agentId`、`sessionId` 和 `turnId`。自主后台运行的 session/turn 为 `null`。主 agent、worker、Dreamer 使用相同的平铺事件；worker 另外携带 `taskId`、`revision`、`parentExecutionId` 和 `parentToolCallId`。`executionId` 对主 agent 是 turn ID，对 worker 是 task ID（用 revision 区分修订），对 Dreamer 是本次批次的独立 ID。TUI 在展示入口转换 worker 事件。
+
+模型输出带 `entryId`，工具事件带 `toolCallId` 和发起调用的 `assistantEntryId`。同步或异步观察者异常不改变任务结果；runtime 不等待异步观察者，取消订阅也不会取消任务。事件数据是副本。观察者应立即记录必要数据，把网络发送放入自己的有界队列；耗时的同步回调仍会占用 JavaScript 线程。
+
+### 模型与工具观测
+
+| 事件 | 内容 |
+| --- | --- |
+| `model_call_started` / `model_call_finished` | 一次 `ModelClient.stream()` 逻辑调用；`callId`、模型、purpose、参数、结束状态、用量和时长 |
+| `model_attempt_started` / `model_attempt_finished` | 内置模型客户端的一次实际请求尝试，包括失败后将重试的响应；通过 callId 和 attempt 关联 |
+| `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
+| `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为工具返回的模型可见内容，取消时为诊断文本（会话封口可能另补中断结果） |
+| `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
+| `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
+
+模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
+
+`model_call_finished.usage` 来自最终模型响应，不能与 attempt 用量重复相加。`attemptsObserved > 0` 时按 attempt 统计；为 0 时按逻辑调用统计。自定义 ModelClient 可以通过 `ModelRequestOptions.onAttempt` 报告内部尝试；不提供时 runtime 不猜测其内部重试或费用。没有响应时 usage 缺失，不应解释为零。`firstOutputAt` 是首次可见文本/思考增量或完整工具调用的时间；durationMs 使用单调时钟，不保证等于底层 HTTP 请求耗时。
+
+完整模型输入、响应需显式订阅：
+
+```ts
+const unsubscribe = runtime.subscribe((event) => {
+  if (event.type === "model_call_started") {
+    // event.input: Context after runtime context processing, before provider serialization.
+  }
+  if (event.type === "model_call_finished") {
+    // event.response: complete AssistantMessage, including usage and stopReason.
+  }
+}, { captureModelContent: true });
+```
+
+`captureModelContent` 默认 false，在每次模型调用开始时决定是否捕获；未选择它的订阅者不会收到 input/response。已有工具参数、工具结果和文本增量仍可见，该选项不是权限隔离。导出器应自行决定内容采集、脱敏、截断、采样和保留策略。普通 `prompt({ onEvent })` 回调不包含完整模型 input/response。
+
+### 外部适配器与关闭
+
+外部适配器只需依赖 `thread/runtime` 的订阅和公共查询；Langfuse/OTel SDK、凭据、数据映射、网络队列和 flush 都由适配器管理。宿主应先等待 `runtime.close()` 收齐终态，再取消订阅并等待适配器 flush/close；runtime 不关闭宿主共享的遥测客户端。
+
+coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(specifier)`。ExtensionAPI 提供相同的 subscribe、listSessions、readSession、readHistory、agentTaskDetailsForTurn。CLI 相对路径仍以启动目录为基准；app.loadExtension 相对路径以 runtime.rootPath 为基准。扩展的 activate/default 函数可返回异步清理函数：应用在 runtime 收尾之后调用它，清理失败不改变任务结果，CLI 仍受原有 5 秒关闭期限约束。`on()` 是可干预执行的扩展钩子；观测使用 subscribe。
+
+[独立用量扩展示例](../examples/observability.ts) 同时可用于嵌入宿主与 `--extension`，只导入公共 runtime 类型，按 attempt 优先统计，避免重复计算。
 
 流式增量是临时进度，订阅不是持久化事件重放接口。`turn_started` 和 `turn_finished` 在相应持久化屏障后发布。需要网络重连时，适配层应协调状态快照和后续事件之间的衔接。
 

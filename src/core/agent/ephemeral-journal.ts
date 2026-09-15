@@ -7,8 +7,12 @@ export class EphemeralAgentJournal implements ExecutionJournal {
   readonly executionId = createId("agent-run");
   private readonly messages: Message[];
 
-  constructor(initialMessages: readonly Message[] = []) {
+  constructor(initialMessages: readonly Message[], private readonly agentId: string) {
     this.messages = initialMessages.map((message) => structuredClone(message));
+  }
+
+  get identity() {
+    return { executionId: this.executionId, agentId: this.agentId, sessionId: null, turnId: null };
   }
 
   conversationMessages(): Message[] {

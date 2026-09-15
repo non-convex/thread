@@ -1,3 +1,4 @@
+import { observeModelAttempt, type ModelAttemptEvent } from "./model-observation.js";
 import {
   type AuthInteraction,
   type Api,
@@ -36,6 +37,8 @@ export interface ModelRetryCallbacks {
 }
 
 export interface ModelRequestOptions {
+  /** Read-only attempt observations, including failed responses before retry. */
+  onAttempt?: (event: ModelAttemptEvent) => void | Promise<void>;
   signal: AbortSignal;
   maxTokens?: number;
   reasoning?: ThinkingLevel;
@@ -147,8 +150,9 @@ export class PiModelClient implements ModelClient {
     const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
     const cacheRetention = options.cacheRetention ?? this.cacheRetention;
     let scheduledAttempt = 0;
+    let attempt = 0;
     return retryAssistantCall(
-      async () => {
+      () => observeModelAttempt(++attempt, options, async (options) => {
         const stream = this.models.streamSimple(this.model, context, {
           signal: options.signal,
           ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
@@ -166,7 +170,7 @@ export class PiModelClient implements ModelClient {
           }
         }
         return stream.result();
-      },
+      }),
       { enabled: true, maxRetries, baseDelayMs },
       options.signal,
       {
