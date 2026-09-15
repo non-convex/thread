@@ -308,6 +308,7 @@ All embeddable implementation lives in `src/core/`; it cannot import application
 
 Further reading:
 
+- [Understanding extensible systems through Thread](./docs/extensible-systems.md) (Chinese, beginner-friendly)
 - [Worker architecture](./docs/worker-architecture.md)
 - [Session recall architecture](./docs/session-recall.md)
 - [Session tool parameters and examples](./docs/session-tools.md)
