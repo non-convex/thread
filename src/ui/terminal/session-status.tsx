@@ -1,5 +1,5 @@
 import { createMemo, Show, type Accessor } from "solid-js";
-import { statusLineParts, type UiState } from "../state.js";
+import { statusLineParts, turnChangeCounts, type UiState } from "../state.js";
 import type { TerminalMeta } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText, tuiAnimationTime } from "./spinner.js";
@@ -81,6 +81,8 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
     const running = snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined;
     return statusLineParts(snapshot, running ? tuiAnimationTime() : Date.now());
   });
+  const changes = createMemo(() => turnChangeCounts(state()));
+  const hasChanges = () => changes().additions > 0 || changes().deletions > 0;
   const noticeLevel = () => state().notice?.level;
   const color = () => state().busy
     ? theme().spark
@@ -91,19 +93,32 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
         : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <Show when={state().busy}>
-        <SpinnerText fg={theme().spark} />
-        <text width={1} height={1}> </text>
+      <box flexDirection="row" flexBasis={0} flexGrow={1} minWidth={0} height={1} overflow="hidden">
+        <Show when={state().busy}>
+          <SpinnerText fg={theme().spark} />
+          <text width={1} height={1}> </text>
+        </Show>
+        <Show when={parts().elapsed}>
+          <text height={1} wrapMode="none" fg={theme().faint}>{parts().elapsed} </text>
+        </Show>
+        <text flexBasis={0} flexGrow={1} flexShrink={1} minWidth={0} height={1} wrapMode="none" fg={color()} truncate={true}>
+          {parts().main}
+        </text>
+      </box>
+      <Show when={hasChanges()}>
+        <box id="turn-change-counts" flexDirection="row" flexShrink={0} height={1} marginX={1}>
+          <text height={1} wrapMode="none" fg={theme().diffAdded}>+{changes().additions}</text>
+          <text width={1} height={1}> </text>
+          <text height={1} wrapMode="none" fg={theme().diffRemoved}>−{changes().deletions}</text>
+        </box>
       </Show>
-      <Show when={parts().elapsed}>
-        <text height={1} wrapMode="none" fg={theme().faint}>{parts().elapsed} </text>
-      </Show>
-      <text flexGrow={1} height={1} wrapMode="none" fg={color()} truncate={true}>
-        {parts().main}
-      </text>
-      <Show when={state().busy}>
-        <text height={1} wrapMode="none" fg={theme().faint}>esc interrupt</text>
-      </Show>
+      {/* Equal side widths keep the counts centred regardless of status text length. */}
+      <box flexDirection="row" flexBasis={hasChanges() ? 0 : "auto"} flexGrow={hasChanges() ? 1 : 0}
+        minWidth={0} height={1} justifyContent="flex-end" overflow="hidden">
+        <Show when={state().busy}>
+          <text height={1} wrapMode="none" fg={theme().faint}>esc interrupt</text>
+        </Show>
+      </box>
     </box>
   );
 }

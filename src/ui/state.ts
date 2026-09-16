@@ -188,6 +188,35 @@ export function turnElapsedMs(state: Pick<UiState, "turnStartedAt" | "turnFinish
   return Math.max(0, (state.turnFinishedAt ?? now) - state.turnStartedAt);
 }
 
+/** Per-call additions/deletions for the active turn, or the selected session's live tip. */
+export function turnChangeCounts(
+  state: Pick<UiState, "sessionId" | "liveTurn" | "liveTipTurnId" | "transcript">,
+): { additions: number; deletions: number } {
+  const totals = { additions: 0, deletions: 0 };
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const collect = (items: readonly TranscriptItem[]): void => {
+    for (const item of items) {
+      if (item.kind === "user") break;
+      if (item.agentTask) collect(item.agentTask.trace);
+      const tool = item.tool;
+      if (!tool || tool.status !== "completed" || (tool.name !== "edit" && tool.name !== "write")) continue;
+      if (!tool.details || typeof tool.details !== "object") continue;
+      const details = tool.details as { additions?: unknown; deletions?: unknown };
+      totals.additions += count(details.additions);
+      totals.deletions += count(details.deletions);
+    }
+  };
+  if (state.liveTurn) {
+    if (state.liveTurn.sessionId === state.sessionId) collect(state.liveTurn.blocks);
+  } else if (state.liveTipTurnId) {
+    const userIndex = state.transcript.findLastIndex((item) =>
+      item.kind === "user" && item.id === `${state.liveTipTurnId}:user`
+    );
+    if (userIndex >= 0) collect(state.transcript.slice(userIndex + 1));
+  }
+  return totals;
+}
+
 export function statusLineParts(
   state: Pick<UiState, "busy" | "activity" | "notice" | "turnStartedAt" | "turnFinishedAt">,
   now: number,

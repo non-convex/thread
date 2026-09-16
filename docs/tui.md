@@ -41,7 +41,7 @@ border / borderStrong       轻边框只给卡片和浮层
 │                                          │
 │  ┌ 浮层（命令补全 / 模型 / rewind / ask）┐│
 │  └──────────────────────────────────────┘│
-│  status · 耗时 · esc interrupt            │
+│  status · 耗时     +N −N   esc interrupt  │
 │  ┌──────────────────────────────────────┐│
 │  │ image · 1280×720 png                 ││
 │  │ ❯ composer                           ││
@@ -49,6 +49,10 @@ border / borderStrong       轻边框只给卡片和浮层
 │  ⊙ session  ⎇ branch  █ meter  ⚡ cache   │
 └──────────────────────────────────────────┘
 ```
+
+输入框上方的状态行居中显示本轮修改统计 `+N −N`，分别使用 diff 的新增／删除文字色，不加标签。工具完成后实时更新；两项都为零时隐藏，Turn 结束后保留，下一轮开始时清零。左右状态区等宽，为统计保留居中位置，较长的状态文字截断显示，不增加输入区高度。
+
+统计累计本轮成功 `edit`／`write` 返回的实际增删行数，包含本轮 Worker 卡片中的修改；同一文件多次修改分别累计，并非整轮前后的净差异。结束后从对应 Turn 的已保存工具结果恢复，切换 Session 或 rewind 时跟随当前 live tip。这里只使用已有的 diff 元数据，不扫描 Git，也不估算 Bash、自定义工具或未生成 diff 的写入。
 
 欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」，以及两行项目定位文案「One project. One Session Tree.」「Your interactions are the project's memory.」。命令指引保留两行：第一行说明 `/session` 接续工作和 `/thread search <query>` 搜索历史；第二行说明 `/agent` 选择模型与启用 Agent。第三行单独提示 `Ctrl+V` / `Alt+V` 贴图和 `Shift+Tab` 切换 thinking level。
 
