@@ -2,16 +2,16 @@ import type { ModelDescriptor } from "../core/agent/model-client.js";
 import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../app/commands/types.js";
 import type { AskRequest } from "../core/runtime/interaction.js";
 import type { AgentTaskSummary } from "../core/agent-task/model.js";
+import type { ToolOutcome } from "../core/tools/types.js";
 
 export interface TranscriptItem {
   id: string;
   kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "agent_task" | "interrupted";
   content: string;
-  label?: string;
-  isError?: boolean;
-  name?: string;
-  args?: string;
-  elapsed?: string;
+  tool?: TranscriptTool;
+  streaming?: boolean;
+  startedAt?: number;
+  finishedAt?: number;
   agentTask?: AgentTaskCard;
   /** Full compaction summary; the collapsed row stays in `content`. */
   detail?: string;
@@ -22,28 +22,18 @@ export interface AgentTaskCard {
   trace: LiveBlock[];
 }
 
-export interface LiveTool {
+export interface TranscriptTool {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  status: "queued" | "running" | "completed" | "failed";
-  /** Truncated failure text. Successful results stay out of presentation state. */
-  error?: string;
-  startedAt: number;
-  finishedAt?: number;
+  status: "queued" | "running" | ToolOutcome;
+  details?: unknown;
+  durationMs?: number;
 }
 
-export interface LiveBlock {
-  id: string;
+export type LiveBlock = TranscriptItem & {
   kind: "thinking" | "assistant" | "tool" | "compaction" | "agent_task";
-  content: string;
-  streaming?: boolean;
-  tool?: LiveTool;
-  startedAt?: number;
-  finishedAt?: number;
-  agentTask?: AgentTaskCard;
-  detail?: string;
-}
+};
 
 export interface LiveTurn {
   id: string;

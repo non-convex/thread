@@ -1,8 +1,7 @@
 import { MouseButton } from "@opentui/core";
 import { createMemo, createSignal, Show } from "solid-js";
 import type { ThreadViewResources } from "./resources.js";
-import { SpinnerText } from "./spinner.js";
-import { bold, dimItalic, italic, STATUS_ICONS } from "./theme.js";
+import { dimItalic, italic, STATUS_ICONS } from "./theme.js";
 
 const FENCE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
   c: "c",
@@ -125,71 +124,6 @@ export function ThinkingView(props: {
             </text>
           </box>
         </Show>
-      </Show>
-    </box>
-  );
-}
-
-
-const TOOL_OUTPUT_PREVIEW_LINES = 5;
-
-function formatToolOutput(content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
-  try { return JSON.stringify(JSON.parse(trimmed), null, 2); }
-  catch { return trimmed; }
-}
-
-export function ToolOutputView(props: {
-  name: string;
-  args: string;
-  content: string;
-  elapsed?: string | undefined;
-  status: "queued" | "running" | "completed" | "failed";
-  resources: ThreadViewResources;
-}) {
-  const theme = props.resources.theme;
-  const running = () => props.status === "queued" || props.status === "running";
-  const failed = () => props.status === "failed";
-  const [expanded, setExpanded] = createSignal(false);
-  const lines = createMemo(() => formatToolOutput(props.content).split("\n"));
-  const collapsible = () => !running() && lines().length > TOOL_OUTPUT_PREVIEW_LINES;
-  const preview = () => (expanded() ? lines() : lines().slice(0, TOOL_OUTPUT_PREVIEW_LINES)).join("\n");
-  return (
-    <box
-      flexDirection="column"
-      width="100%"
-      marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && collapsible()) setExpanded((value) => !value);
-      }}
-    >
-      <box flexDirection="row" width="100%" height={1}>
-        <Show when={running()} fallback={
-          <text width={2} height={1} wrapMode="none" fg={failed() ? theme.error : theme.success}>
-            {failed() ? STATUS_ICONS.error : STATUS_ICONS.success}
-          </text>
-        }>
-          <SpinnerText fg={theme.spark} />
-          <text width={1} height={1}> </text>
-        </Show>
-        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold}>{props.name}</text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.text}>
-          {props.args ? `  ${props.args}` : ""}
-        </text>
-        <Show when={props.elapsed}>
-          <text width={6} flexShrink={0} height={1} wrapMode="none" truncate={true} fg={theme.faint}>{props.elapsed}</text>
-        </Show>
-        <Show when={collapsible()}>
-          <text width={2} height={1} wrapMode="none" fg={theme.muted}>
-            {expanded() ? ` ${STATUS_ICONS.expanded}` : ` ${STATUS_ICONS.collapsed}`}
-          </text>
-        </Show>
-      </box>
-      <Show when={!running() && preview()}>
-        <box flexDirection="column" width="100%" marginLeft={2} paddingLeft={1}>
-          <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{preview()}</text>
-        </box>
       </Show>
     </box>
   );

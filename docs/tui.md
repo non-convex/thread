@@ -65,18 +65,30 @@ border / borderStrong       轻边框只给卡片和浮层
 - Compaction / 中断是一行 `◇` 摘要；有 detail 时点击展开 Markdown。
 - Worker 任务是圆角卡片，边框颜色跟 `running` / `completed` / `failed` / `cancelled` 走。默认只显示标题和状态摘要，点击后在卡片内复用 live block 渲染 trace。
 
-`projectTranscript` 每次从 session log 重建 item。如果把新对象直接交给 Solid 的 `<For>`，已完成回合的 markdown 会在每个 delta flush 时卸掉重挂，表现为旧回复重新折行、sticky 滚动跳动。因此分组结果会和上一帧对身份：内容没变的 group 复用原对象。Live 块是追加式的，用 `<Index>` 保住每一块的 renderable。
+实时 Turn 与历史 Turn 进入同一个 transcript 组件。回合按 Turn 身份、工具按 tool call ID 保持组件身份，数据更新不依赖新对象的引用相等。`turn_finished` 到来时，历史快照和 live 状态一起更新；已显示的工具不会因为转成历史而卸载重建，也不会重新排序到工具结果落盘的位置。
 
 ## 工具输出
 
-工具执行器在 `tool_finished` 里带上模型可见的 `content`；失败时另外给截断后的 `error`。UI reducer 把 `content` 写进 `LiveBlock.content`，把状态写进 `LiveTool`。`LiveTool` 本身不保存成功结果，成功输出只活在 block 上。
+每次调用保留自己的工具块。标题显示状态、工具名、关键参数、完成后的耗时和展开箭头；等待、执行中、成功、失败、取消与拒绝分别展示。关键参数由工具类型决定：`grep` 同时显示搜索词和范围，`read` 显示文件与指定范围，`bash` 显示实际命令。长标题明确标出省略；Bash 命令最多预览三行，不用抽象描述替代命令。
 
-运行中只显示一行：spark spinner、accent 工具名、截断后的主要参数（`path` / `command` / `pattern` / `query`）。块在完成后才画出输出。历史项和 live 项用同一套视觉：
+结果在工具自身完成时补充，整个 Turn 结束时不再切换参数格式或折叠已展开的工具。默认的信息密度按工具区分：
 
-- 成功 `✓` + `success` 色；失败 `✗` + `error` 色。
-- 输出无边框、无底色，左缩进；成功用 `muted`，失败用 `error`。
-- 可解析的 JSON 会做 2 空格格式化；其它内容按原文显示。头部不标 `json` / `code`。
-- 超过 5 行默认折叠，左侧点击展开。未完成的 live 工具不能展开。
+| 工具 | 默认结果展示 |
+| --- | --- |
+| `read`、`list` | 实际读取范围或条目数，以及分页、截断提示；正文按需展开 |
+| `grep` | 匹配数、文件数和少量命中位置；扫描上限与后续页单独提示 |
+| `bash` | 退出码和最多五个屏幕行的输出；长输出取首尾，保留捕获上限与临时输出文件提示 |
+| `edit`、`write` | 修改结果、增删行数与短 diff；diff 来自本次实际写入前后的内容 |
+| 网页与历史读取 | 返回内容大小、检索覆盖或分页提示；正文按需展开 |
+| 其他工具 | 通用短输出预览 |
+
+失败原因直接显示，长诊断仍受预览高度限制。取消和权限拒绝不会显示成成功或普通执行失败。预览按终端列宽计算，中文、emoji 或单行长 JSON 不会绕过五行上限。输出继续使用无边框、无底色的缩进布局。
+
+点击工具标题可在等待、运行和结束阶段查看完整参数，并在有结果时查看已保存的结果正文。明确命名的密码、API key 等参数字段脱敏；这不是任意命令或输出中的秘密扫描。选择结果文字不会触发展开切换，Worker 卡片内的工具使用相同组件。展开状态在本次 Turn 转成历史时保留，不写入 Session Tree；离开会话或重启后使用默认折叠状态。
+
+界面的折叠不改变模型上下文，也不恢复工具本身已经截断的内容。完整已保存结果、后续分页和 Bash 的捕获限制是不同概念，界面分别提示。文件 diff 的计算有大小和时间预算，超过预算时保留修改成功结果，并明确提示没有生成 diff。
+
+工具执行器在 `tool_finished` 中提供 `content`、结构化 `details`、结束状态与执行耗时。相同信息随工具结果保存，历史投影与实时事件使用同一套 `TranscriptTool` 数据和格式化函数。没有记录的数据不从当前文件、时间差或文本猜测补齐。
 
 委派类工具（`delegate_tasks` 等）不进入普通工具行，而是变成上面的任务卡片。
 
@@ -133,7 +145,8 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。
 - `src/ui/images.ts`：图片限制、缩放、编码和路径附件。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。
-- `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`。
+- `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`，按原调用位置合并结果。
+- `src/ui/terminal/tool-presentation.ts` / `tool-output.tsx`：工具参数、结果摘要、预览与展开。
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。
 - `src/ui/terminal/spinner.tsx`：共享动画时钟。
 - `src/ui/events.ts` / `src/ui/state.ts`：展示事件、live 状态、`tool_finished.content`。

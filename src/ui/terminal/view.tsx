@@ -7,7 +7,7 @@ import type {
   ThemeMode,
 } from "@opentui/core";
 import { render, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid";
-import { Match, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Match, Switch, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import {
   isFloatingOverlay,
   moveSelection,
@@ -86,13 +86,10 @@ export function ThreadRoot(props: {
     COMPOSER_MIN_LINES,
     Math.min(COMPOSER_MAX_LINES, estimatedWrappedLines(composerText(), Math.max(12, dimensions().width - 8))),
   ));
-  const unsubscribe = props.controller.subscribe((kind) => {
-    if (kind === "live") setLiveRevision((value) => value + 1);
-    else {
-      setLiveRevision((value) => value + 1);
-      setFullRevision((value) => value + 1);
-    }
-  });
+  const unsubscribe = props.controller.subscribe((kind) => batch(() => {
+    setLiveRevision((value) => value + 1);
+    if (kind !== "live") setFullRevision((value) => value + 1);
+  }));
   onCleanup(unsubscribe);
 
   createEffect(() => {

@@ -7,7 +7,7 @@ import type { ComposerSuggestion } from "./completion.js";
 import type { TerminalMeta, ThreadTuiViewModel } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
-import { LiveTurnView, TranscriptTurnsView, WelcomeView } from "./transcript.js";
+import { TranscriptTurnsView, WelcomeView } from "./transcript.js";
 import { AgentPickerOverlay, AgentSettingsOverlay, ModelPickerOverlay, MODEL_OVERLAY_MAX_ROWS } from "./agent-overlays.js";
 import { AskOverlay, CommandPickerOverlay, ComposerSuggestions, RewindOverlay, ASK_OVERLAY_MAX_OPTIONS, COMMAND_OVERLAY_MAX_ITEMS, REWIND_OVERLAY_MAX_ROWS } from "./session-overlays.js";
 import { Footer, Status } from "./session-status.js";
@@ -158,12 +158,7 @@ export function SessionScreen(props: {
           verticalScrollbarOptions={{ visible: false }}
           paddingTop={1}
         >
-          <TranscriptTurnsView items={props.transcript()} resources={props.resources} />
-          <Show when={props.liveTurn()}>
-            {(live: Accessor<LiveTurn>) => (
-              <LiveTurnView turn={live} label="thread" resources={props.resources} />
-            )}
-          </Show>
+          <TranscriptTurnsView items={props.transcript()} liveTurn={props.liveTurn()} resources={props.resources} />
         </scrollbox>
       </Show>
       <Show when={state().screen.type === "session" && props.suggestions().length > 0}>

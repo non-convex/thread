@@ -122,7 +122,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
           const existing = card.trace.findIndex((block) => block.tool?.id === child.id);
           if (existing >= 0) {
             const current = card.trace[existing]!.tool!;
-            if (current.status === "completed" || current.status === "failed" ||
+            if ((current.status !== "queued" && current.status !== "running") ||
                 (phase === "queued" && current.status === "running")) return card;
             return {
               ...card,
@@ -137,7 +137,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
               id: `tool:${child.id}`,
               kind: "tool",
               content: "",
-              tool: { id: child.id, name: child.name, args: child.args, status: phase, startedAt: Date.now() },
+              tool: { id: child.id, name: child.name, args: child.args, status: phase },
             }],
           };
         }
@@ -150,9 +150,9 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
                 content: child.content ?? block.content,
                 tool: {
                   ...block.tool,
-                  status: child.isError ? "failed" : "completed",
-                  ...(child.error !== undefined ? { error: child.error } : {}),
-                  finishedAt: Date.now(),
+                  status: child.outcome,
+                  ...(child.details !== undefined ? { details: child.details } : {}),
+                  ...(child.durationMs !== undefined ? { durationMs: child.durationMs } : {}),
                 },
               }
             : block),
@@ -237,7 +237,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       const existing = state.liveTurn.blocks.findIndex((block) => block.tool?.id === event.id);
       if (existing >= 0) {
         const current = state.liveTurn.blocks[existing]!.tool!;
-        if (current.status === "completed" || current.status === "failed") return;
+        if (current.status !== "queued" && current.status !== "running") return;
         if (phase === "queued" && current.status === "running") return;
         state.liveTurn = {
           ...state.liveTurn,
@@ -253,7 +253,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
             id: `tool:${event.id}`,
             kind: "tool",
             content: "",
-            tool: { id: event.id, name: event.name, args: event.args, status: phase, startedAt: Date.now() },
+            tool: { id: event.id, name: event.name, args: event.args, status: phase },
           }],
         };
       }
@@ -270,9 +270,9 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
                 content: event.content ?? block.content,
                 tool: {
                   ...block.tool,
-                  status: event.isError ? "failed" : "completed",
-                  ...(event.error !== undefined ? { error: event.error } : {}),
-                  finishedAt: Date.now(),
+                  status: event.outcome,
+                  ...(event.details !== undefined ? { details: event.details } : {}),
+                  ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
                 },
               }
             : block),

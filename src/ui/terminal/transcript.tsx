@@ -1,20 +1,12 @@
 import { MouseButton } from "@opentui/core";
-import { createMemo, createSignal, For, Index, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
-import type { AgentTaskCard, LiveBlock, LiveTurn, TranscriptItem } from "../state.js";
+import { createMemo, createSignal, For, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
+import type { AgentTaskCard, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, italic, STATUS_ICONS } from "./theme.js";
-import { groupTranscriptTurns, projectLiveUser, reconcileTurnGroups, type TranscriptTurnGroup } from "./transcript-projection.js";
-import { normalizeMarkdownForTerminal, ThinkingView, ToolOutputView } from "./transcript-content.js";
+import { groupTranscriptTurns, projectLiveUser, type TranscriptTurnGroup } from "./transcript-projection.js";
+import { normalizeMarkdownForTerminal, ThinkingView } from "./transcript-content.js";
+import { ToolOutputView } from "./tool-output.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
-
-function toolArgs(args: Record<string, unknown>): string {
-  for (const key of ["path", "command", "pattern", "query"]) {
-    const value = args[key];
-    if (typeof value === "string") return value.replace(/\s+/g, " ").slice(0, 100);
-  }
-  const encoded = JSON.stringify(args);
-  return encoded === "{}" ? "" : encoded.slice(0, 100);
-}
 
 function elapsedLabel(startedAt: number | undefined, finishedAt: number | undefined): string | undefined {
   if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return undefined;
@@ -134,11 +126,10 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
       borderColor={status().color}
       paddingX={1}
       marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT) setExpanded((value) => !value);
-      }}
     >
-      <box flexDirection="row" width="100%" height={1}>
+      <box flexDirection="row" width="100%" height={1} onMouseUp={(event) => {
+        if (event.button === MouseButton.LEFT) setExpanded((value) => !value);
+      }}>
         <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
         <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.softText} attributes={bold}>
           {summary().title}
@@ -149,9 +140,7 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
       </box>
       <Show when={expanded()}>
         <box flexDirection="column" width="100%" paddingLeft={2} paddingTop={1}>
-          <Index each={props.card().trace}>
-            {(block) => <LiveBlockView block={block} resources={props.resources} />}
-          </Index>
+          <TranscriptItems items={props.card().trace} resources={props.resources} />
           <Show when={summary().error}>
             {(error: Accessor<string>) => <text fg={props.resources.theme.error} wrapMode="word">{error()}</text>}
           </Show>
@@ -161,42 +150,7 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
   );
 }
 
-function HistoryItemView(props: { item: TranscriptItem; resources: ThreadViewResources }) {
-  const item = () => props.item;
-  return (
-    <Switch fallback={
-      <box flexDirection="column" width="100%" marginBottom={1}>
-        <MarkdownReply id={`history-markdown-${item().id}`} content={item().content} resources={props.resources} />
-      </box>
-    }>
-      <Match when={item().kind === "tool"}>
-        <ToolOutputView
-          name={item().name ?? item().label ?? "tool"}
-          args={item().args ?? ""}
-          content={item().content === item().args ? "" : item().content}
-          elapsed={item().elapsed}
-          status={item().isError ? "failed" : "completed"}
-          resources={props.resources}
-        />
-      </Match>
-      <Match when={item().kind === "thinking"}>
-        <ThinkingView content={item().content} resources={props.resources} />
-      </Match>
-      <Match when={item().kind === "compaction"}>
-        <CompactionInfo content={item().content} detail={item().detail} resources={props.resources} />
-      </Match>
-      <Match when={item().kind === "interrupted"}>
-        <CompactionInfo content={item().content} resources={props.resources} />
-      </Match>
-      <Match when={item().kind === "agent_task" && item().agentTask !== undefined}>
-        <AgentTaskCardView card={() => item().agentTask!} resources={props.resources} />
-      </Match>
-    </Switch>
-  );
-}
-
-
-function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
+function LiveThinkingView(props: { block: Accessor<TranscriptItem>; resources: ThreadViewResources }) {
   const block = props.block;
   const theme = props.resources.theme;
   const duration = () => elapsedLabel(block().startedAt, block().finishedAt);
@@ -224,19 +178,19 @@ function LiveThinkingView(props: { block: Accessor<LiveBlock>; resources: Thread
   );
 }
 
-function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadViewResources }) {
+function TranscriptItemView(props: { block: Accessor<TranscriptItem>; resources: ThreadViewResources }) {
   const block = props.block;
   return (
     <Switch fallback={
       <box flexDirection="column" width="100%" marginBottom={1}>
         <markdown
-          id={`live-markdown-${block().id}`}
+          id={`transcript-markdown-${block().id}`}
           content={normalizeMarkdownForTerminal(block().content)}
           width="100%"
           syntaxStyle={props.resources.syntaxStyle}
           fg={props.resources.theme.text}
           conceal={true}
-          streaming={block().streaming ?? false}
+          streaming={true}
           internalBlockMode="top-level"
           maxWidth={180}
         />
@@ -246,16 +200,9 @@ function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadVie
         <LiveThinkingView block={block} resources={props.resources} />
       </Match>
       <Match when={block().kind === "tool"}>
-        <ToolOutputView
-          name={block().tool?.name ?? "tool"}
-          args={block().tool ? toolArgs(block().tool!.args) : ""}
-          content={block().tool?.status === "failed" ? block().tool?.error ?? "" : block().content}
-          elapsed={elapsedLabel(block().tool?.startedAt, block().tool?.finishedAt)}
-          status={block().tool?.status ?? "completed"}
-          resources={props.resources}
-        />
+        <ToolOutputView tool={block().tool!} content={block().content} resources={props.resources} />
       </Match>
-      <Match when={block().kind === "compaction"}>
+      <Match when={block().kind === "compaction" || block().kind === "interrupted"}>
         <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} />
       </Match>
       <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
@@ -265,30 +212,13 @@ function LiveBlockView(props: { block: Accessor<LiveBlock>; resources: ThreadVie
   );
 }
 
-export function LiveTurnView(props: {
-  turn: Accessor<LiveTurn>;
-  label: string;
-  resources: ThreadViewResources;
-}) {
-  return (
-    <>
-      <UserMessageCard
-        item={projectLiveUser(props.turn())}
-        resources={props.resources}
-      />
-      <Show when={props.turn().blocks.length > 0}>
-        <TurnBlock label={props.label} resources={props.resources}>
-          {/* Live blocks are append-only. Index keeps each renderable alive while
-              immutable block snapshots replace its value during streaming. */}
-          <Index each={props.turn().blocks}>
-            {(block) => <LiveBlockView block={block} resources={props.resources} />}
-          </Index>
-        </TurnBlock>
-      </Show>
-    </>
-  );
+function TranscriptItems(props: { items: readonly TranscriptItem[]; resources: ThreadViewResources }) {
+  const byId = createMemo(() => new Map(props.items.map((item) => [item.id, item])));
+  return <For each={[...byId().keys()]}>{(id) => {
+    const block = createMemo(() => byId().get(id)!);
+    return <TranscriptItemView block={block} resources={props.resources} />;
+  }}</For>;
 }
-
 
 function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources: ThreadViewResources }) {
   return (
@@ -298,26 +228,34 @@ function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources:
       </Show>
       <Show when={props.group.items.length > 0}>
         <TurnBlock label="thread" resources={props.resources}>
-          <For each={props.group.items}>
-            {(item) => <HistoryItemView item={item} resources={props.resources} />}
-          </For>
+          <TranscriptItems items={props.group.items} resources={props.resources} />
         </TurnBlock>
       </Show>
     </>
   );
 }
 
-export function TranscriptTurnsView(props: { items: readonly TranscriptItem[]; resources: ThreadViewResources }) {
-  let previous: TranscriptTurnGroup[] = [];
+export function TranscriptTurnsView(props: {
+  items: readonly TranscriptItem[];
+  liveTurn?: LiveTurn | undefined;
+  resources: ThreadViewResources;
+}) {
+  const history = createMemo(() => groupTranscriptTurns(props.items));
   const groups = createMemo(() => {
-    previous = reconcileTurnGroups(groupTranscriptTurns(props.items), previous);
-    return previous;
+    const byId = new Map(history().map((group) => [group.id, group]));
+    const live = props.liveTurn;
+    if (live) {
+      const user = projectLiveUser(live);
+      byId.set(user.id, { id: user.id, user, items: live.blocks });
+    }
+    return byId;
   });
-  return (
-    <For each={groups()}>
-      {(group) => <TranscriptTurnGroupView group={group} resources={props.resources} />}
-    </For>
-  );
+  // The same turn and tool keys survive the live-to-history handoff. Keep their
+  // components mounted, including user-controlled expansion and text selection.
+  return <For each={[...groups().keys()]}>{(id) => {
+    const group = createMemo(() => groups().get(id)!);
+    return <TranscriptTurnGroupView group={group()} resources={props.resources} />;
+  }}</For>;
 }
 
 
