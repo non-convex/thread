@@ -11,6 +11,7 @@ export const WEB_SEARCH_MAX_CONTEXT_CHARACTERS = 50_000;
 export const WEB_SEARCH_RESPONSE_LIMIT_BYTES = 256 * 1024;
 export const WEB_SEARCH_TIMEOUT_MS = 25_000;
 export const WEB_FETCH_RESPONSE_LIMIT_BYTES = 5 * 1024 * 1024;
+export const WEB_FETCH_DEFAULT_CHARACTERS = 32_000;
 export const WEB_FETCH_OUTPUT_LIMIT_CHARACTERS = 200_000;
 export const WEB_FETCH_DEFAULT_TIMEOUT_SECONDS = 30;
 export const WEB_FETCH_MAX_TIMEOUT_SECONDS = 120;
@@ -36,6 +37,8 @@ type WebFetchArgs = {
   url: string;
   format?: WebFetchFormat;
   timeout?: number;
+  offset?: number;
+  limit?: number;
 }
 
 export type WebToolFetch = (
@@ -298,9 +301,26 @@ export function convertHtmlToMarkdown(html: string): string {
   return turndown.turndown(html);
 }
 
-function limitedCharacters(value: string, maximum: number): string {
-  if (value.length <= maximum) return value;
-  return `${value.slice(0, maximum)}\n[content truncated at ${maximum} characters]`;
+function pageContent(value: string, offset: number, limit: number) {
+  if (offset > 0 && offset >= value.length) throw new Error(`Offset ${offset} is beyond the response (${value.length} characters)`);
+  const splitsCharacter = (index: number) =>
+    value.charCodeAt(index - 1) >= 0xd800 && value.charCodeAt(index - 1) <= 0xdbff &&
+    value.charCodeAt(index) >= 0xdc00 && value.charCodeAt(index) <= 0xdfff;
+  if (splitsCharacter(offset)) throw new Error("Offset splits a character; use the continuation offset from the previous result");
+  let end = Math.min(value.length, offset + limit);
+  if (splitsCharacter(end)) end--;
+  if (end === offset && end < value.length) throw new Error("Page limit cannot fit the next character; use limit >= 2");
+  const more = end < value.length;
+  const notice = offset > 0 || more
+    ? `\n\n[Showing character offsets ${offset}–${end} of ${value.length} (end exclusive). ${more
+      ? `Use offset=${end} with the same URL and format only if more content is needed. Each call fetches the URL again.`
+      : "End of response."}]`
+    : "";
+  return {
+    content: value.slice(offset, end) + notice,
+    offset, shown: end - offset, totalCharacters: value.length,
+    ...(more ? { nextOffset: end } : {}),
+  };
 }
 
 export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebFetchArgs> {
@@ -308,7 +328,7 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
   return {
     name: "webfetch",
     description:
-      "Fetch an HTTP(S) URL and return text, Markdown, or HTML. Prefer websearch first when the URL is unknown.",
+      `Fetch an HTTP(S) URL and return text, Markdown, or HTML in pages of ${WEB_FETCH_DEFAULT_CHARACTERS} characters by default. Use offset/limit for more content; each call fetches the URL again. Prefer websearch first when the URL is unknown.`,
     parameters: Type.Object({
       url: Type.String({ description: "Fully qualified HTTP(S) URL." }),
       format: Type.Optional(
@@ -323,6 +343,8 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
           description: "Request timeout in seconds; defaults to 30 and cannot exceed 120.",
         }),
       ),
+      offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Character offset from a previous response; default 0." })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: WEB_FETCH_OUTPUT_LIMIT_CHARACTERS, description: `Maximum page characters; default ${WEB_FETCH_DEFAULT_CHARACTERS}.` })),
     }),
     replay: "never",
     execution: {
@@ -377,10 +399,12 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
             signal.throwIfAborted();
           }
         }
-        return ok(limitedCharacters(output, WEB_FETCH_OUTPUT_LIMIT_CHARACTERS), {
+        const { content: page, ...range } = pageContent(output, args.offset ?? 0, args.limit ?? WEB_FETCH_DEFAULT_CHARACTERS);
+        return ok(page, {
           url: finalUrl.toString(),
           contentType,
           format,
+          ...range,
         });
       } catch (error) {
         return fail(error);

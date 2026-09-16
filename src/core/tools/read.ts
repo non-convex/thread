@@ -171,7 +171,7 @@ async function streamWindow(
 export const readTool: AgentTool<ReadArgs> = {
   name: "read",
   description:
-    "Read a UTF-8 text file. Absolute paths and paths outside the project are allowed. Large files are returned in line pages (default 2000 lines, 64KB) with a continuation offset. Binary files are rejected. Does not add line numbers.",
+    `Read a UTF-8 text file. Absolute paths and paths outside the project are allowed. Returns up to ${READ_DEFAULT_LIMIT} lines by default, capped at 64KB. Use offset/limit for a relevant range; follow the continuation offset only when more content is needed. Binary files are rejected. Does not add line numbers.`,
   parameters: Type.Object({
     path: Type.String({ description: "File to read." }),
     offset: Type.Optional(

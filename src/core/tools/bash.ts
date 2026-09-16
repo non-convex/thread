@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { runProcess, type ProcessResult } from "../utils/process.js";
@@ -8,6 +11,7 @@ import type { AgentTool, ToolResult } from "./types.js";
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 export const BASH_MAX_TIMEOUT_MS = 300_000;
 export const BASH_OUTPUT_LIMIT = 64 * 1024;
+const BASH_PREVIEW_BYTES = 16 * 1024;
 
 export interface ShellInvocation {
   command: string;
@@ -18,10 +22,6 @@ const GIT_BASH_RELATIVE_PATHS = [
   "Git\\bin\\bash.exe",
   "Git\\usr\\bin\\bash.exe",
 ] as const;
-
-function ok(content: string, details?: unknown): ToolResult {
-  return { content, isError: false, ...(details === undefined ? {} : { details }) };
-}
 
 function fail(error: unknown): ToolResult {
   return { content: error instanceof Error ? error.message : String(error), isError: true };
@@ -103,25 +103,36 @@ export function decodeUtf8Tail(buffer: Buffer): string {
   return buffer.subarray(start).toString("utf8");
 }
 
-export function presentBashOutput(result: ProcessResult): string {
-  const stdout = decodeUtf8Tail(result.stdout);
-  const stderr = decodeUtf8Tail(result.stderr);
-  const parts = [stdout, ...(stderr ? [`[stderr]\n${stderr}`] : [])].filter((part) => part.length > 0);
-  const body = parts.join("\n") || "Command completed with no output";
-  if (!result.truncated) return body;
-  return `${body}\n\n[Showing the last ${BASH_OUTPUT_LIMIT} bytes of output.]`;
-}
-
-function detailsFor(result: ProcessResult): { exitCode: number; truncated?: boolean } {
-  const details: { exitCode: number; truncated?: boolean } = { exitCode: result.code };
+async function presentBashOutput(result: ProcessResult): Promise<ToolResult> {
+  const format = (limit: number) => {
+    const stdout = decodeUtf8Tail(result.stdout.subarray(-limit));
+    const stderr = decodeUtf8Tail(result.stderr.subarray(-limit));
+    return [stdout, ...(stderr ? [`[stderr]\n${stderr}`] : [])].filter(Boolean).join("\n") || "Command completed with no output";
+  };
+  const captureNotice = result.truncated
+    ? `\n\n[Capture limit reached: only the last ${BASH_OUTPUT_LIMIT} bytes of each stream were retained; earlier output is unavailable.]`
+    : "";
+  const captured = format(BASH_OUTPUT_LIMIT) + captureNotice;
+  const details: { exitCode: number; truncated?: boolean; outputPath?: string } = { exitCode: result.code };
   if (result.truncated) details.truncated = true;
-  return details;
+  let content = captured;
+  if (result.stdout.length > BASH_PREVIEW_BYTES || result.stderr.length > BASH_PREVIEW_BYTES) {
+    const outputPath = path.join(tmpdir(), `thread-bash-${randomUUID()}.log`);
+    try {
+      await writeFile(outputPath, captured, { flag: "wx", mode: 0o600 });
+      details.outputPath = outputPath;
+      content = `${format(BASH_PREVIEW_BYTES)}\n\n[Showing up to ${BASH_PREVIEW_BYTES} trailing bytes per stream. Captured output saved to: ${outputPath}. Read or search that file for details; do not rerun the command just to retrieve output.]${captureNotice}`;
+    } catch (error) {
+      content += `\n\n[Could not save captured output: ${error instanceof Error ? error.message : String(error)}]`;
+    }
+  }
+  return { content, isError: result.code !== 0 || result.killedBySignal === true, details };
 }
 
 export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
   name: "bash",
   description:
-    "Run a foreground shell command in the workspace. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Output is truncated to the last 64KB.",
+    `Run a foreground shell command in the workspace. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Shows up to ${BASH_PREVIEW_BYTES / 1024} KiB from the end of stdout and stderr; longer captured output is saved to a temporary file. Capture is limited to the last 64KB per stream.`,
   parameters: Type.Object({
     command: Type.String(),
     timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: BASH_MAX_TIMEOUT_MS })),
@@ -153,24 +164,16 @@ export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
             maxOutputBytes: BASH_OUTPUT_LIMIT,
             overflow: "truncate",
           });
-          const output = presentBashOutput(result);
-          const details = detailsFor(result);
-          if (result.code === 0 && !result.killedBySignal) return ok(output, details);
+          const output = await presentBashOutput(result);
+          if (result.code === 0 && !result.killedBySignal) return output;
           if (timeout.aborted && !context.signal.aborted) {
-            return {
-              content: `${output}\n\nCommand timed out after ${Math.round(timeoutMs / 1000)}s`,
-              isError: true,
-              details,
-            };
+            output.content += `\n\nCommand timed out after ${Math.round(timeoutMs / 1000)}s`;
+          } else if (context.signal.aborted || result.killedBySignal) {
+            output.content += "\n\nCommand aborted";
+          } else {
+            output.content += `\n\nCommand exited with code ${result.code}`;
           }
-          if (context.signal.aborted || result.killedBySignal) {
-            return { content: `${output}\n\nCommand aborted`, isError: true, details };
-          }
-          return {
-            content: `${output}\n\nCommand exited with code ${result.code}`,
-            isError: true,
-            details,
-          };
+          return output;
         } catch (error) {
           if (!isWindows || !isShellLaunchFailure(error)) throw error;
           launchFailure = error;
