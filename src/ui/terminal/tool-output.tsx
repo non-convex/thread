@@ -29,7 +29,7 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
   const output = createMemo(() => presentation().diff ? body() : expanded() ? result() : preview().text);
   const diffLines = createMemo(() => {
     const lines = body().split("\n");
-    // Keep original lines so wrapped continuations retain their addition/removal colour.
+    // Colour original lines so wrapped continuations retain their addition/removal colour.
     return expanded() ? lines : lines.slice(0, previewRows());
   });
   const duration = () => props.tool.durationMs === undefined ? "" : `${(props.tool.durationMs / 1000).toFixed(1)}s`;
@@ -81,7 +81,7 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
               <text flexShrink={0} fg={failed() ? theme.error : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
             }>
               <For each={diffLines()}>
-                {(line) => <text flexShrink={0} wrapMode="char" fg={line.startsWith("+") ? theme.diffAdded : line.startsWith("-") ? theme.diffRemoved : theme.muted}>{line || " "}</text>}
+                {(line) => <text width="100%" flexShrink={0} wrapMode="char" fg={line.startsWith("+") ? theme.diffAdded : line.startsWith("-") ? theme.diffRemoved : theme.muted}>{line || " "}</text>}
               </For>
             </Show>
           </box>
