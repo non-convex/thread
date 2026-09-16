@@ -5,12 +5,13 @@ import {
   type ToolExecutionPolicy,
   type ToolResourceClaim,
 } from "../tools/execution.js";
-import type { AgentTool, ToolContext, ToolRegistry, ToolResult } from "../tools/types.js";
+import type { AgentTool, ToolContext, ToolRegistry, ToolResult, ToolResultMetadata } from "../tools/types.js";
 import type { AskPresenter } from "../runtime/interaction.js";
 import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { FileEditTracker } from "../file-history/service.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import type { ExecutionIdentity, HostToolPolicy } from "../runtime/policy.js";
+import { abortedToolResult } from "../session-tree/conversation-seal.js";
 
 export interface PreparedToolCall {
   journal: ExecutionJournal;
@@ -26,6 +27,7 @@ export interface PreparedToolCall {
   immediateResult?: ToolResult;
   denied: boolean;
   finished?: boolean;
+  cancelledResult?: Message;
 }
 
 const immediatePolicy: ToolExecutionPolicy<Record<string, unknown>> = {
@@ -184,6 +186,7 @@ export class ToolCallExecutor {
       safeExecutionEvent(ui, { type: "tool_started", id: prepared.call.id, name: prepared.call.name,
         assistantEntryId: prepared.assistantEntryId, args: prepared.args, phase: "running" });
       result = await this.invoke(prepared, signal, ui);
+      result.details = { ...result.details as ToolResultMetadata, durationMs: performance.now() - started };
       return result;
     } catch (cause) {
       error = cause;
@@ -193,8 +196,19 @@ export class ToolCallExecutor {
       const cancelled = !result && (signal.aborted || (error instanceof Error && error.name === "AbortError"));
       const isError = cancelled || error !== undefined || result?.isError === true;
       const content = result ? contentText(result.content, "") : String(error instanceof Error ? error.message : error ?? "Cancelled");
+      const metadata = result?.details as ToolResultMetadata | undefined;
+      const durationMs = metadata?.durationMs ?? performance.now() - started;
+      if (!result) {
+        const interrupted = abortedToolResult(prepared.call, content);
+        if (interrupted.role === "toolResult") {
+          interrupted.details = { raw: { content, isError: true }, outcome: cancelled ? "cancelled" : "failed", durationMs } satisfies ToolResultMetadata;
+        }
+        prepared.cancelledResult = interrupted;
+      }
       safeExecutionEvent(ui, { type: "tool_finished", id: prepared.call.id, name: prepared.call.name,
-        assistantEntryId: prepared.assistantEntryId, isError, content, durationMs: performance.now() - started,
+        assistantEntryId: prepared.assistantEntryId, isError, content,
+        durationMs,
+        ...(metadata?.raw.details !== undefined ? { details: metadata.raw.details } : {}),
         outcome: cancelled ? "cancelled" : prepared.denied ? "denied" : isError ? "failed" : "completed",
         ...(isError ? { error: content } : {}),
       });
@@ -249,7 +263,7 @@ export class ToolCallExecutor {
       toolCallId: prepared.call.id,
       toolName: prepared.call.name,
       content: [{ type: "text", text: modelContent }],
-      details: { raw: settled },
+      details: { raw: settled, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed" } satisfies ToolResultMetadata,
       isError: settled.isError,
       timestamp: Date.now(),
     };

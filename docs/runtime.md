@@ -207,11 +207,13 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 | `model_call_started` / `model_call_finished` | 一次 `ModelClient.stream()` 逻辑调用；`callId`、模型、purpose、参数、结束状态、用量和时长 |
 | `model_attempt_started` / `model_attempt_finished` | 内置模型客户端的一次实际请求尝试，包括失败后将重试的响应；通过 callId 和 attempt 关联 |
 | `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
-| `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为工具返回的模型可见内容，取消时为诊断文本（会话封口可能另补中断结果） |
+| `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为模型可见的工具结果，details 为工具返回的可选结构化元数据。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
+
+工具结果消息的 `details` 使用 `ToolResultMetadata`：`raw` 保存原始 `ToolResult`，`outcome` 保存结束状态，`durationMs` 保存执行边界内测得的耗时（不含排队等待）。工具自身的结构化数据位于 `raw.details`，也通过 `tool_finished.details` 提供；这些元数据不追加到模型可见的结果正文。`read`、`grep` 等提供数量和分页信息，`edit`、`write` 提供本次实际写入的 diff 与增删行数。Diff 只用于展示：前后内容总计超过 256 KiB、内容无法作为文本解码或计算超过 50ms 时，返回 `diffUnavailable` 原因，不因此阻止文件修改。UI 和宿主不应通过后续读取当前工作区重建当时的 diff。
 
 `model_call_finished.usage` 来自最终模型响应，不能与 attempt 用量重复相加。`attemptsObserved > 0` 时按 attempt 统计；为 0 时按逻辑调用统计。自定义 ModelClient 可以通过 `ModelRequestOptions.onAttempt` 报告内部尝试；不提供时 runtime 不猜测其内部重试或费用。没有响应时 usage 缺失，不应解释为零。`firstOutputAt` 是首次可见文本/思考增量或完整工具调用的时间；durationMs 使用单调时钟，不保证等于底层 HTTP 请求耗时。
 

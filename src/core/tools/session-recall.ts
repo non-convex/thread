@@ -11,10 +11,6 @@ export const SESSION_READ_MAX_BYTES = 64 * 1024;
 // Leave room for the range, staleness notice, and continuation instructions.
 const SESSION_READ_FOOTER_BYTES = 512;
 
-function ok(content: string): ToolResult {
-  return { content, isError: false };
-}
-
 function fail(error: unknown): ToolResult {
   return { content: error instanceof Error ? error.message : String(error), isError: true };
 }
@@ -99,7 +95,9 @@ export function createSessionSearchTool(recall: SessionRecallService): AgentTool
       try {
         context.signal.throwIfAborted();
         const limit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(args.limit ?? DEFAULT_LIMIT)));
-        return ok(formatSearch(await recall.search(args.queries, limit, context.signal)));
+        const result = await recall.search(args.queries, limit, context.signal);
+        return { content: formatSearch(result), isError: false,
+          details: { hits: result.hits.length, coverage: result.coverage, semantic: result.semantic, diagnostics: result.diagnostics } };
       } catch (error) {
         return fail(error);
       }

@@ -31,7 +31,7 @@ export {
 } from "./core/agent/model-client.js";
 export type { TurnResult } from "./core/agent/runtime.js";
 export type { AgentProfile } from "./core/agent/profile.js";
-export type { AgentTool, ToolContext, ToolResult } from "./core/tools/types.js";
+export type { AgentTool, ToolContext, ToolResult, ToolResultMetadata, ToolOutcome } from "./core/tools/types.js";
 export type { FileWriteScope } from "./core/tools/path-safety.js";
 export type {
   ToolEffect,

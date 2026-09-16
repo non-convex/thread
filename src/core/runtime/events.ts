@@ -20,7 +20,7 @@ export type ModelEvent = {
 type ToolEvent =
   | { type: "tool_started"; id: string; name: string; args: Record<string, unknown>; assistantEntryId: string; phase: "queued" | "running" }
   | { type: "tool_finished"; id: string; name: string; assistantEntryId: string; outcome: "completed" | "failed" | "cancelled" | "denied";
-      isError: boolean; error?: string; content?: string; durationMs?: number };
+      isError: boolean; error?: string; content?: string; durationMs?: number; details?: unknown };
 
 type AgentEvent = ModelEvent | ToolEvent
   | { type: "assistant_started"; step: number; entryId?: string }

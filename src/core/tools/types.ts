@@ -7,6 +7,15 @@ export interface ToolResult {
   details?: unknown;
 }
 
+export type ToolOutcome = "completed" | "failed" | "cancelled" | "denied";
+
+/** Saved with tool-result messages; presentation metadata is not model text. */
+export interface ToolResultMetadata {
+  raw: ToolResult;
+  outcome: ToolOutcome;
+  durationMs?: number;
+}
+
 export interface ToolContext {
   rootPath: string;
   /** Exact files outside rootPath that this agent may write. */

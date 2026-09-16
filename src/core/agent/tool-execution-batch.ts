@@ -142,8 +142,9 @@ export class ToolExecutionBatch {
     await this.scheduler.cancel(reason);
     for (const [id, call] of this.queued) {
       if (this.prepared.get(id)?.finished) continue;
+      const content = reason instanceof Error && reason.name !== "AbortError" ? reason.message : INTERRUPTED_TOOL_RESULT;
       safeExecutionEvent(this.input.ui, { type: "tool_finished", id, ...call, isError: true, outcome: "cancelled",
-        error: reason instanceof Error ? reason.message : INTERRUPTED_TOOL_RESULT, content: INTERRUPTED_TOOL_RESULT });
+        error: content, content });
     }
     this.queued.clear();
   }
@@ -169,7 +170,7 @@ export class ToolExecutionBatch {
           // The call was cancelled or failed after it started; synthesize below.
         }
       }
-      results.push(abortedToolResult(prepared.call, text));
+      results.push(prepared.cancelledResult ?? abortedToolResult(prepared.call, text));
     }
     return results;
   }

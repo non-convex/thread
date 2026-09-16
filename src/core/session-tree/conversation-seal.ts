@@ -40,7 +40,7 @@ export function abortedToolResult(call: Pick<ToolCall, "id" | "name">, text: str
     toolCallId: call.id,
     toolName: call.name,
     content: [{ type: "text", text }],
-    details: { raw: { content: text, isError: true } },
+    details: { raw: { content: text, isError: true }, outcome: "cancelled" },
     isError: true,
     timestamp: Date.now(),
   };

@@ -10,10 +10,12 @@
         "@opentui/core": "0.5.7",
         "@opentui/solid": "0.5.7",
         "@zvec/zvec": "0.7.1",
+        "diff": "9.0.0",
         "fs-native-extensions": "1.5.1",
         "htmlparser2": "^8.0.2",
         "onnxruntime-node": "1.24.3",
         "solid-js": "1.9.12",
+        "string-width": "7.2.0",
         "turndown": "^7.2.0",
       },
       "devDependencies": {

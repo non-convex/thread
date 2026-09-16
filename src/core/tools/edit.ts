@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { prepareFilePath, workspacePathClaim } from "./execution.js";
 import { updateFile } from "./file-write.js";
+import { fileDiff, type FileDiffDetails } from "./file-diff.js";
 import type { AgentTool } from "./types.js";
 
 type EditArgs = {
@@ -47,6 +48,7 @@ export const editTool: AgentTool<EditArgs> = {
       if (!inputPath) throw new Error("path cannot be empty");
       if (!Array.isArray(args.edits) || args.edits.length === 0) throw new Error("edits must contain at least one replacement");
 
+      let changes: FileDiffDetails = {};
       await updateFile(context, inputPath, (before) => {
         if (!before) throw new Error(`File not found: ${inputPath}`);
         const buffer = before.content;
@@ -83,9 +85,12 @@ export const editTool: AgentTool<EditArgs> = {
           end = replacement.end;
         }
         parts.push(content.slice(end));
-        return Buffer.from(parts.join(""), "utf8");
+        const updated = Buffer.from(parts.join(""), "utf8");
+        changes = fileDiff(inputPath, buffer, updated);
+        return updated;
       });
-      return { content: `Applied ${args.edits.length} edit(s) to ${inputPath}`, isError: false };
+      return { content: `Applied ${args.edits.length} edit(s) to ${inputPath}`, isError: false,
+        details: { edits: args.edits.length, ...changes } };
     } catch (error) {
       return { content: error instanceof Error ? error.message : String(error), isError: true };
     }

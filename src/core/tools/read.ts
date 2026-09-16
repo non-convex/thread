@@ -21,6 +21,8 @@ export interface ReadDetails {
   offset: number;
   shown: number;
   total?: number;
+  nextOffset?: number;
+  truncatedByBytes?: boolean;
 }
 
 interface ReadWindow {
@@ -67,6 +69,8 @@ export function presentRead(page: ReadWindow): { content: string; details: ReadD
   const end = page.offset + shown - 1;
   const range = page.total !== undefined ? `Showing lines ${start}–${end} of ${page.total}` : `Showing lines ${start}–${end}`;
   const reason = page.truncatedByBytes ? " (64KB limit)" : "";
+  details.nextOffset = end + 1;
+  if (page.truncatedByBytes) details.truncatedByBytes = true;
   return {
     content: `${body}\n\n[${range}${reason}. Use offset=${end + 1} to continue.]`,
     details,

@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { prepareFilePath, workspacePathClaim } from "./execution.js";
 import { updateFile } from "./file-write.js";
+import { fileDiff, type FileDiffDetails } from "./file-diff.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
@@ -44,8 +45,13 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
       context.signal.throwIfAborted();
       const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
-      const { existed, bytes } = await updateFile(context, inputPath, () => Buffer.from(args.content, "utf8"));
-      return ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`);
+      let changes: FileDiffDetails = {};
+      const { existed, bytes } = await updateFile(context, inputPath, (before) => {
+        const updated = Buffer.from(args.content, "utf8");
+        changes = fileDiff(inputPath, before?.content, updated);
+        return updated;
+      });
+      return ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`, { existed, bytes, ...changes });
     } catch (error) {
       return fail(error);
     }
