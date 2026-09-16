@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { prepareFilePath, workspacePathClaim } from "./execution.js";
+import { prepareFilePath, fileAccess } from "./execution.js";
 import { updateFile } from "./file-write.js";
 import { fileDiff, type FileDiffDetails } from "./file-diff.js";
 import { bashTool } from "./bash.js";
@@ -7,16 +7,9 @@ import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
 import { listTool } from "./list.js";
 import { readTool } from "./read.js";
-import type { ToolRegistry, AgentTool, ToolResult } from "./types.js";
+import type { ToolRegistry, AgentTool } from "./types.js";
+import { ok, fail } from "./results.js";
 import { webFetchTool, webSearchTool } from "./web.js";
-
-function ok(content: string, details?: unknown): ToolResult {
-  return { content, isError: false, ...(details === undefined ? {} : { details }) };
-}
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
 
 export const writeTool: AgentTool<{ path: string; content: string }> = {
   name: "write",
@@ -28,18 +21,7 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
   }),
   replay: "never",
   prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
-  execution: {
-    effect: "write",
-    mode: "parallel",
-    resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path, "write", {
-        forWrite: true,
-        ...(context.writableExternalPaths
-          ? { allowedOutsidePaths: context.writableExternalPaths }
-          : {}),
-      }),
-    ],
-  },
+  execution: fileAccess("write"),
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

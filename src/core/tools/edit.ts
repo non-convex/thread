@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { prepareFilePath, workspacePathClaim } from "./execution.js";
+import { prepareFilePath, fileAccess } from "./execution.js";
 import { updateFile } from "./file-write.js";
 import { fileDiff, type FileDiffDetails } from "./file-diff.js";
 import type { AgentTool } from "./types.js";
@@ -29,18 +29,7 @@ export const editTool: AgentTool<EditArgs> = {
   }, { additionalProperties: false }),
   replay: "never",
   prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
-  execution: {
-    effect: "write",
-    mode: "parallel",
-    resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path, "write", {
-        forWrite: true,
-        ...(context.writableExternalPaths
-          ? { allowedOutsidePaths: context.writableExternalPaths }
-          : {}),
-      }),
-    ],
-  },
+  execution: fileAccess("write"),
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

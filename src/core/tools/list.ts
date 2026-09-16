@@ -1,11 +1,11 @@
 import { readdir } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
-import { prepareFilePath, workspacePathClaim, resolveToolPath } from "./execution.js";
-import type { AgentTool, ToolResult } from "./types.js";
+import { prepareFilePath, fileAccess, resolveToolPath } from "./execution.js";
+import type { AgentTool } from "./types.js";
+import { ok, fail, limited, clampInt } from "./results.js";
 
 export const LIST_DEFAULT_LIMIT = 200;
 export const LIST_MAX_LIMIT = 1000;
-const MODEL_OUTPUT_LIMIT = 64 * 1024;
 
 export type ListKind = "d" | "l" | "f";
 
@@ -22,24 +22,6 @@ export interface ListEntry {
 export interface ListDetails {
   total: number;
   shown: number;
-}
-
-function ok(content: string, details?: ListDetails): ToolResult {
-  return { content, isError: false, ...(details === undefined ? {} : { details }) };
-}
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
-
-function limited(value: string, max = MODEL_OUTPUT_LIMIT): string {
-  if (Buffer.byteLength(value, "utf8") <= max) return value;
-  return `${Buffer.from(value, "utf8").subarray(0, max).toString("utf8")}\n[output truncated at ${max} bytes]`;
-}
-
-function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
 export function presentList(entries: ListEntry[], limit: number): { content: string; details: ListDetails } {
@@ -80,16 +62,7 @@ export const listTool: AgentTool<ListArgs> = {
   }),
   replay: "safe",
   prepare: (args, context) => prepareFilePath(args, context, { defaultPath: "." }),
-  execution: {
-    effect: "read",
-    mode: "parallel",
-    resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path ?? ".", "read", {
-        allowOutside: true,
-        scope: "subtree",
-      }),
-    ],
-  },
+  execution: fileAccess("read", "subtree"),
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

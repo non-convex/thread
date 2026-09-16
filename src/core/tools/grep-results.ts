@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolveToolPath } from "./execution.js";
 import type { ToolContext } from "./types.js";
+import { clampInt } from "./results.js";
 
 export const GREP_DEFAULT_LIMIT = 20;
 export const GREP_MAX_LIMIT = 100;
@@ -12,7 +13,6 @@ const CURSOR_PREFIX = "g1.";
 const SCAN_LIMIT_NOTICE = `scan capped at ${GREP_SCAN_CAP} matches or ${GREP_SCAN_BYTES / 1024 / 1024}MB of ripgrep output; refine the pattern or glob`;
 
 type GrepOutputMode = "content" | "files";
-
 export type GrepArgs = {
   pattern: string;
   path?: string;
@@ -24,23 +24,8 @@ export type GrepArgs = {
   outputMode?: GrepOutputMode;
   cursor?: string;
 };
-
-export type GrepSearch = {
-  pattern: string;
-  path: string;
-  glob?: string;
-  ignoreCase: boolean;
-  literal: boolean;
-  context: number;
-  outputMode: GrepOutputMode;
-};
-
-export interface GrepMatch {
-  file: string;
-  line: number;
-  text: string;
-}
-
+export type GrepSearch = Required<Omit<GrepArgs, "glob" | "limit" | "cursor">> & Pick<GrepArgs, "glob">;
+export interface GrepMatch { file: string; line: number; text: string }
 export interface GrepDetails {
   totalMatches: number;
   totalFiles: number;
@@ -49,91 +34,55 @@ export interface GrepDetails {
   scanCapped: boolean;
   nextCursor?: string;
 }
-
-interface GrepCursor {
-  v: 1;
-  search: GrepSearch;
+interface GrepCursor { v: 1; search: GrepSearch; offset: number }
+interface PageOptions {
+  ordered: GrepMatch[];
   offset: number;
-}
-
-export function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(value)));
+  limit: number;
+  search: GrepSearch;
+  scanCapped: boolean;
+  renderLine?: (match: GrepMatch) => string;
 }
 
 function clipLine(text: string): string {
   const cleaned = text.replace(/\r/g, "").replace(/\n$/, "");
-  if (cleaned.length <= GREP_MAX_LINE_CHARS) return cleaned;
-  return `${cleaned.slice(0, GREP_MAX_LINE_CHARS)}…`;
+  return cleaned.length <= GREP_MAX_LINE_CHARS ? cleaned : `${cleaned.slice(0, GREP_MAX_LINE_CHARS)}…`;
 }
 
 export function searchFromArgs(args: GrepArgs): GrepSearch {
   const glob = args.glob?.trim();
-  const search: GrepSearch = {
-    pattern: args.pattern,
-    path: args.path?.trim() ? args.path.trim() : ".",
-    ignoreCase: args.ignoreCase === true,
-    literal: args.literal === true,
-    context: clampInt(args.context, 0, GREP_MAX_CONTEXT, 0),
-    outputMode: args.outputMode === "files" ? "files" : "content",
+  return {
+    pattern: args.pattern, path: args.path?.trim() || ".", ignoreCase: args.ignoreCase === true,
+    literal: args.literal === true, context: clampInt(args.context, 0, GREP_MAX_CONTEXT, 0),
+    outputMode: args.outputMode === "files" ? "files" : "content", ...(glob ? { glob } : {}),
   };
-  if (glob) search.glob = glob;
-  return search;
 }
 
 export function assertCursorCompatible(args: GrepArgs, search: GrepSearch): void {
-  const mismatch = "cursor does not match this search; pass the same query fields and the cursor from the previous result";
-  if (args.pattern !== search.pattern) throw new Error(mismatch);
-  if (args.path !== undefined && args.path !== search.path) throw new Error(mismatch);
-  if (args.glob !== undefined && (args.glob.trim() || undefined) !== search.glob) throw new Error(mismatch);
-  if (args.ignoreCase !== undefined && args.ignoreCase !== search.ignoreCase) throw new Error(mismatch);
-  if (args.literal !== undefined && args.literal !== search.literal) throw new Error(mismatch);
-  if (args.context !== undefined && clampInt(args.context, 0, GREP_MAX_CONTEXT, 0) !== search.context) {
-    throw new Error(mismatch);
+  const normalized = searchFromArgs(args);
+  // Paths have already been canonicalized during preparation; preserve their literal spelling.
+  if (args.path !== undefined) normalized.path = args.path;
+  for (const key of ["pattern", "path", "glob", "ignoreCase", "literal", "context", "outputMode"] as const) {
+    if ((key === "pattern" || args[key] !== undefined) && normalized[key] !== search[key]) {
+      throw new Error("cursor does not match this search; pass the same query fields and the cursor from the previous result");
+    }
   }
-  if (args.outputMode !== undefined && (args.outputMode === "files" ? "files" : "content") !== search.outputMode) {
-    throw new Error(mismatch);
-  }
-}
-
-function encodeGrepCursor(cursor: GrepCursor): string {
-  return `${CURSOR_PREFIX}${Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")}`;
 }
 
 export function decodeGrepCursor(value: string): GrepCursor {
   if (!value.startsWith(CURSOR_PREFIX)) throw new Error("Invalid grep cursor");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(value.slice(CURSOR_PREFIX.length), "base64url").toString("utf8"));
-  } catch {
-    throw new Error("Invalid grep cursor");
-  }
-  if (typeof parsed !== "object" || parsed === null || (parsed as GrepCursor).v !== 1) {
-    throw new Error("Invalid grep cursor");
-  }
-  const cursor = parsed as GrepCursor;
-  const search = cursor.search;
-  if (!Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
+  let cursor: GrepCursor;
+  try { cursor = JSON.parse(Buffer.from(value.slice(CURSOR_PREFIX.length), "base64url").toString("utf8")); }
+  catch { throw new Error("Invalid grep cursor"); }
+  const search = cursor?.search;
+  if (cursor?.v !== 1 || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
       !search || typeof search.pattern !== "string" || !search.pattern.trim() ||
       typeof search.path !== "string" || !search.path ||
       (search.glob !== undefined && typeof search.glob !== "string") ||
       typeof search.ignoreCase !== "boolean" || typeof search.literal !== "boolean" ||
       !Number.isInteger(search.context) || search.context < 0 || search.context > GREP_MAX_CONTEXT ||
-      !["content", "files"].includes(search.outputMode)) {
-    throw new Error("Invalid grep cursor");
-  }
+      !["content", "files"].includes(search.outputMode)) throw new Error("Invalid grep cursor");
   return cursor;
-}
-
-function uniqueFiles(matches: GrepMatch[]): string[] {
-  const files: string[] = [];
-  const seen = new Set<string>();
-  for (const match of matches) {
-    if (seen.has(match.file)) continue;
-    seen.add(match.file);
-    files.push(match.file);
-  }
-  return files;
 }
 
 function fileTotals(matches: GrepMatch[]): Map<string, number> {
@@ -142,176 +91,73 @@ function fileTotals(matches: GrepMatch[]): Map<string, number> {
   return totals;
 }
 
-function detailsFor(options: {
-  totalMatches: number;
-  totalFiles: number;
-  offset: number;
-  shown: number;
-  scanCapped: boolean;
-  search: GrepSearch;
-  more: boolean;
-}): GrepDetails {
-  const details: GrepDetails = {
-    totalMatches: options.totalMatches,
-    totalFiles: options.totalFiles,
-    offset: options.offset,
-    shown: options.shown,
-    scanCapped: options.scanCapped,
-  };
-  if (options.more) {
-    details.nextCursor = encodeGrepCursor({ v: 1, search: options.search, offset: options.offset + options.shown });
+export function presentFilesPage(options: PageOptions) { return presentPage(options, true); }
+export function presentContentPage(options: PageOptions) { return presentPage(options, false); }
+
+function presentPage(options: PageOptions, filesMode: boolean): { content: string; details: GrepDetails } {
+  const { ordered, offset, limit, search, scanCapped } = options;
+  const totals = fileTotals(ordered);
+  const files = [...totals.keys()];
+  const total = filesMode ? files.length : ordered.length;
+  const shown = Math.max(0, Math.min(limit, total - offset));
+  const details: GrepDetails = { totalMatches: ordered.length, totalFiles: files.length, offset, shown, scanCapped };
+  if (offset + shown < total) {
+    details.nextCursor = CURSOR_PREFIX + Buffer.from(JSON.stringify({ v: 1, search, offset: offset + shown }), "utf8").toString("base64url");
   }
-  return details;
+  const blocks = filesMode
+    ? files.slice(offset, offset + limit).map((file) => `${file} (${totals.get(file)})`)
+    : contentBlocks(options, totals);
+  const header = ordered.length
+    ? `${ordered.length} matches in ${files.length} files. Showing ${filesMode ? "files " : ""}${offset + 1}–${offset + shown}, ranked by git changes then recency.`
+    : scanCapped ? "No complete matches collected before the scan limit." : "No matches found.";
+  return { content: [header, ...(ordered.length ? ["", ...blocks] : []),
+    ...(scanCapped ? [...(ordered.length ? [""] : []), SCAN_LIMIT_NOTICE] : []),
+    ...(details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : []),
+  ].join("\n"), details };
 }
 
-function emptyResult(details: GrepDetails, scanCapped: boolean): { content: string; details: GrepDetails } {
-  const notices = scanCapped ? [SCAN_LIMIT_NOTICE] : [];
-  return { content: [scanCapped ? "No complete matches collected before the scan limit." : "No matches found.", ...notices].join("\n"), details };
-}
-
-export function presentFilesPage(options: {
-  ordered: GrepMatch[];
-  offset: number;
-  limit: number;
-  search: GrepSearch;
-  scanCapped: boolean;
-}): { content: string; details: GrepDetails } {
-  const totals = fileTotals(options.ordered);
-  const files = uniqueFiles(options.ordered);
-  const page = files.slice(options.offset, options.offset + options.limit);
-  const details = detailsFor({
-    totalMatches: options.ordered.length,
-    totalFiles: files.length,
-    offset: options.offset,
-    shown: page.length,
-    scanCapped: options.scanCapped,
-    search: options.search,
-    more: options.offset + page.length < files.length,
-  });
-  if (options.ordered.length === 0) return emptyResult(details, options.scanCapped);
-  const header = `${details.totalMatches} matches in ${details.totalFiles} files. Showing files ${
-    options.offset + 1
-  }–${options.offset + page.length}, ranked by git changes then recency.`;
-  const body = page.map((file) => `${file} (${totals.get(file) ?? 0})`);
-  const extra = options.scanCapped ? ["", SCAN_LIMIT_NOTICE] : [];
-  const footer = details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : [];
-  return { content: [header, "", ...body, ...extra, ...footer].join("\n"), details };
-}
-
-export function presentContentPage(options: {
-  ordered: GrepMatch[];
-  offset: number;
-  limit: number;
-  search: GrepSearch;
-  scanCapped: boolean;
-  renderLine?: (match: GrepMatch) => string;
-}): { content: string; details: GrepDetails } {
-  const totals = fileTotals(options.ordered);
-  const files = uniqueFiles(options.ordered);
+function contentBlocks(options: PageOptions, totals: Map<string, number>): string[] {
   const page = options.ordered.slice(options.offset, options.offset + options.limit);
-  const details = detailsFor({
-    totalMatches: options.ordered.length,
-    totalFiles: files.length,
-    offset: options.offset,
-    shown: page.length,
-    scanCapped: options.scanCapped,
-    search: options.search,
-    more: options.offset + page.length < options.ordered.length,
-  });
-  if (options.ordered.length === 0) return emptyResult(details, options.scanCapped);
-
-  const prior = new Map<string, number>();
-  for (let index = 0; index < options.offset; index++) {
-    const file = options.ordered[index]!.file;
-    prior.set(file, (prior.get(file) ?? 0) + 1);
-  }
-  const header = `${details.totalMatches} matches in ${details.totalFiles} files. Showing ${options.offset + 1}–${
-    options.offset + page.length
-  }, ranked by git changes then recency.`;
+  const prior = fileTotals(options.ordered.slice(0, options.offset));
   const render = options.renderLine ?? defaultRender;
   const blocks: string[] = [];
-  let index = 0;
-  while (index < page.length) {
+  for (let index = 0; index < page.length;) {
     const file = page[index]!.file;
-    let count = 0;
-    while (index + count < page.length && page[index + count]!.file === file) count++;
+    let end = index + 1;
+    while (end < page.length && page[end]!.file === file) end++;
     const start = (prior.get(file) ?? 0) + 1;
-    const end = start + count - 1;
-    const total = totals.get(file) ?? count;
-    const noun = total === 1 ? "match" : "matches";
-    const range = start === 1 && end === total ? `${total} ${noun}` : `${total} ${noun}, showing ${start}–${end}`;
-    const chunk = page.slice(index, index + count);
-    blocks.push(`${file} (${range})`, ...groupRendered(chunk, render));
-    index += count;
+    const last = start + end - index - 1;
+    const total = totals.get(file)!;
+    const range = `${total} ${total === 1 ? "match" : "matches"}${start === 1 && last === total ? "" : `, showing ${start}–${last}`}`;
+    blocks.push(`${file} (${range})`, ...page.slice(index, end).flatMap((match) => render(match).split("\n").filter(Boolean)));
+    index = end;
   }
-  const extra = options.scanCapped ? ["", SCAN_LIMIT_NOTICE] : [];
-  const footer = details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : [];
-  return { content: [header, "", ...blocks, ...extra, ...footer].join("\n"), details };
+  return blocks;
 }
 
-function defaultRender(match: GrepMatch): string {
-  return `  ${match.line}: ${clipLine(match.text)}`;
-}
+function defaultRender(match: GrepMatch): string { return `  ${match.line}: ${clipLine(match.text)}`; }
 
-function groupRendered(chunk: GrepMatch[], renderLine: (match: GrepMatch) => string): string[] {
-  const lines: string[] = [];
-  for (const match of chunk) {
-    for (const line of renderLine(match).split("\n")) {
-      if (line.length > 0) lines.push(line);
-    }
-  }
-  return lines;
-}
-
-export async function renderMatchWithContext(
-  toolContext: ToolContext,
-  page: GrepMatch[],
-  context: number,
-): Promise<(match: GrepMatch) => string> {
+export async function renderMatchWithContext(toolContext: ToolContext, page: GrepMatch[], context: number): Promise<(match: GrepMatch) => string> {
   if (context <= 0) return defaultRender;
-  const read = async (file: string): Promise<string[]> => {
-    const target = await resolveToolPath(toolContext, file);
-    try {
-      const content = await readFile(target, { encoding: "utf8", signal: toolContext.signal });
-      const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-      return lines;
-    } catch {
-      toolContext.signal.throwIfAborted();
-      return [];
-    }
-  };
   const windows = new Map<string, string>();
-  const byFile = new Map<string, GrepMatch[]>();
-  for (const match of page) {
-    const list = byFile.get(match.file) ?? [];
-    list.push(match);
-    byFile.set(match.file, list);
-  }
-  for (const [file, hits] of byFile) {
-    const lines = await read(file);
+  for (const file of new Set(page.map((match) => match.file))) {
+    const target = await resolveToolPath(toolContext, file);
+    let lines: string[] = [];
+    try {
+      lines = (await readFile(target, { encoding: "utf8", signal: toolContext.signal })).replace(/\r\n?/g, "\n").split("\n");
+    } catch { toolContext.signal.throwIfAborted(); }
     const shown = new Map<number, { text: string; hit: boolean }>();
-    for (const hit of hits) {
-      if (lines.length === 0) {
-        shown.set(hit.line, { text: hit.text, hit: true });
-        continue;
-      }
-      const start = Math.max(1, hit.line - context);
-      const end = Math.min(lines.length, hit.line + context);
-      for (let line = start; line <= end; line++) {
-        const current = shown.get(line);
-        shown.set(line, {
-          text: lines[line - 1] ?? "",
-          hit: Boolean(current?.hit) || line === hit.line,
-        });
+    for (const hit of page.filter((match) => match.file === file)) {
+      if (!lines.length) { shown.set(hit.line, { text: hit.text, hit: true }); continue; }
+      for (let line = Math.max(1, hit.line - context); line <= Math.min(lines.length, hit.line + context); line++) {
+        shown.set(line, { text: lines[line - 1] ?? "", hit: Boolean(shown.get(line)?.hit) || line === hit.line });
       }
     }
-    const orderedLines = [...shown.entries()]
-      .sort((left, right) => left[0] - right[0])
-      .map(([line, value]) => `  ${line}${value.hit ? ":" : "-"} ${clipLine(value.text)}`);
-    windows.set(file, orderedLines.join("\n"));
+    windows.set(file, [...shown].sort(([a], [b]) => a - b)
+      .map(([line, value]) => `  ${line}${value.hit ? ":" : "-"} ${clipLine(value.text)}`).join("\n"));
   }
   const emitted = new Set<string>();
-  return (match: GrepMatch) => {
+  return (match) => {
     if (emitted.has(match.file)) return "";
     emitted.add(match.file);
     return windows.get(match.file) ?? defaultRender(match);
