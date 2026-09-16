@@ -23,7 +23,7 @@ export function ModelPickerOverlay(props: OverlayProps<ModelPickerScreen>) {
     props.screen().models.reduce((length, model) => Math.max(length, `${model.providerId}/${model.modelId}`.length), 8),
     Math.max(8, Math.floor(rowWidth() * 0.45)), Math.max(8, rowWidth() - 8),
   ));
-  const title = () => `${({ main: "Main", worker: "Worker", dreamer: "Dreamer" } as Record<string, string>)[props.screen().agentId] ?? "Worker"} model${props.screen().scope === "all" ? " · all" : ""}`;
+  const title = () => `${props.screen().agentId === "main" ? "Main" : props.screen().agentId === "dreamer" ? "Dreamer" : "Worker"} model${props.screen().scope === "all" ? " · all" : ""}`;
   return <Panel width={props.contentWidth()} resources={props.resources} title={title()}
     titleWidth={Math.max(8, props.contentWidth() - 23)}
     hint={props.screen().agentId === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
