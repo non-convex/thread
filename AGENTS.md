@@ -5,6 +5,8 @@ Keep this guide short; put detailed behavior and design notes in the linked docs
 
 ## Code and documentation map
 
+For the execution path and shared implementation boundaries, see the [code map](docs/code-map.md).
+
 - `src/runtime.ts`, `src/core/runtime/`: public runtime API, configuration, events and lifecycle. See [runtime usage](docs/runtime.md).
 - `src/core/agent/`, `src/core/tools/`: model loop, tool execution and shared file-write boundary.
 - `src/app/`, `src/cli/`, `src/ui/`: coding defaults, commands, startup and presentation. See [TUI behavior](docs/tui.md).

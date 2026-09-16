@@ -315,7 +315,8 @@ Thread 对路径的判断很保守：
 
 ## 12. 代码位置
 
-- `src/ui/terminal/view.tsx`：Ctrl+V、paste event、附件 signal、Backspace 删除
+- `src/ui/terminal/view.tsx`：键盘优先级、paste event 分派、Backspace 删除
+- `src/ui/terminal/composer-state.ts`：Ctrl+V / Alt+V、附件 signal、粘贴进度和草稿生命周期
 - `src/ui/terminal/clipboard.ts`：OpenTUI host clipboard 的创建、读取和释放
 - `src/ui/terminal/composer-paste.ts`：把各种粘贴来源收束成附件或文字
 - `src/ui/images.ts`：图片校验、缩放、编码、路径读取
