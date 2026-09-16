@@ -1,4 +1,4 @@
-import { MouseButton } from "@opentui/core";
+import { MouseButton, type TextRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { TranscriptTool } from "../state.js";
@@ -11,7 +11,8 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
   const theme = props.resources.theme;
   const renderer = useRenderer();
   const [expanded, setExpanded] = createSignal(false);
-  const [titleWidth, setTitleWidth] = createSignal(60);
+  const [titleClipped, setTitleClipped] = createSignal(false);
+  let titleText: TextRenderable | undefined;
   const [bodyWidth, setBodyWidth] = createSignal(70);
   const running = () => props.tool.status === "running";
   const waiting = () => props.tool.status === "queued";
@@ -21,7 +22,6 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
     : props.tool.status === "denied" ? "⊘" : waiting() ? "◷" : "−";
   const presentation = createMemo(() => presentTool(props.tool, props.content));
   const args = createMemo(() => cleanToolText(toolArguments(props.tool)));
-  const title = createMemo(() => toolPreview(args(), titleWidth() - 1, props.tool.name === "bash" ? 3 : 1));
   const body = createMemo(() => formatToolText(presentation().body));
   const preview = createMemo(() => toolPreview(body(), bodyWidth(), 5, props.tool.name === "bash"));
   const result = createMemo(() => formatToolText(props.content));
@@ -42,17 +42,19 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
           <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
-        <text height={1} fg={theme.accent} attributes={bold}>{props.tool.name}</text>
+        <text flexShrink={0} height={1} fg={theme.accent} attributes={bold}>{props.tool.name}</text>
         <text
-          marginLeft={2} flexGrow={1} flexShrink={1} minWidth={1}
-          height={Math.max(1, title().text.split("\n").length)} wrapMode="none" truncate={true}
-          fg={theme.text} onSizeChange={function () { setTitleWidth(this.width); }}
-        >{title().text}{title().clipped ? "…" : ""}</text>
+          marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
+          maxHeight={props.tool.name === "bash" ? 3 : 1} wrapMode="word" truncate={true}
+          fg={theme.text}
+          ref={(node) => { titleText = node; }}
+          on:line-info-change={() => setTitleClipped(!!titleText && titleText.virtualLineCount > titleText.height)}
+        >{args()}</text>
         <Show when={duration()}>
-          <text marginLeft={1} height={1} fg={theme.faint}>{duration()}</text>
+          <text marginLeft={1} flexShrink={0} height={1} fg={theme.faint}>{duration()}</text>
         </Show>
-        <text marginLeft={1} width={2} height={1} fg={theme.muted} selectable={false}>
-          {expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
+        <text marginLeft={1} flexShrink={0} width={4} height={1} fg={theme.muted} selectable={false}>
+          {titleClipped() ? "… " : "  "}{expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
         </text>
       </box>
       <box flexDirection="column" width="100%" paddingLeft={3}>
