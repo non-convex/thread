@@ -8,6 +8,8 @@ export interface ThreadTerminalTheme {
   softText: string;
   muted: string;
   faint: string;
+  diffAdded: string;
+  diffRemoved: string;
   thinking: string;
   thinkingDim: string;
   accent: string;
@@ -32,6 +34,8 @@ const darkTheme: ThreadTerminalTheme = {
   softText: "#8B93A0",
   muted: "#6B7280",
   faint: "#5B6369",
+  diffAdded: "#6FA377",
+  diffRemoved: "#B47A72",
   thinking: "#9B8FB8",
   thinkingDim: "#8578A8",
   accent: "#C8936D",
@@ -56,6 +60,8 @@ const lightTheme: ThreadTerminalTheme = {
   softText: "#57606A",
   muted: "#8C959F",
   faint: "#A8B1BC",
+  diffAdded: "#478556",
+  diffRemoved: "#A34E42",
   thinking: "#0969DA",
   thinkingDim: "#218BFF",
   accent: "#EA580C",
