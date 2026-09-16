@@ -1,8 +1,8 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadState } from "../../core/runtime/state.js";
-import { createId } from "../../core/utils/id.js";
+import { atomicJson } from "../../core/utils/atomic-json.js";
 import { getThreadHome } from "../../core/config/home.js";
 import type { ModelSelectionConfig } from "../../core/config/model-config.js";
 import type { ThreadConfig } from "./thread-config.js";
@@ -74,8 +74,8 @@ const writeQueues = new Map<string, Promise<void>>();
 /** Atomic, ordered last-writer-wins persistence for interactive state. */
 export async function saveThreadState(state: ThreadState, statePath = getThreadStatePath()): Promise<void> {
   const queued = (writeQueues.get(statePath) ?? Promise.resolve()).then(
-    () => writeThreadState(state, statePath),
-    () => writeThreadState(state, statePath),
+    () => atomicJson(statePath, state, { pretty: true }),
+    () => atomicJson(statePath, state, { pretty: true }),
   );
   const settled = queued.then(() => undefined, () => undefined);
   writeQueues.set(statePath, settled);
@@ -83,17 +83,6 @@ export async function saveThreadState(state: ThreadState, statePath = getThreadS
     await queued;
   } finally {
     if (writeQueues.get(statePath) === settled) writeQueues.delete(statePath);
-  }
-}
-
-async function writeThreadState(state: ThreadState, statePath: string): Promise<void> {
-  await mkdir(path.dirname(statePath), { recursive: true });
-  const temporary = `${statePath}.${createId("tmp")}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await rename(temporary, statePath);
-  } finally {
-    await rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 

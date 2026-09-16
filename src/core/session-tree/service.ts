@@ -56,10 +56,6 @@ export interface PlannedMessageEntry {
   turnId: string;
 }
 
-function messageText(message: UserMessage): string {
-  return userContentDisplay(message.content);
-}
-
 export class SessionTreeService {
   constructor(readonly repository: SessionTreeRepository) {}
 
@@ -102,7 +98,6 @@ export class SessionTreeService {
         { type: "session_created", session },
         { type: "active_session_changed", sessionId: session.id, reason: "created" },
       ], true);
-      await this.repository.writeManifest();
       created = true;
     } else if (this.tree.projectId !== this.repository.project.id ||
         this.tree.rootPath !== this.repository.project.rootPath) {
@@ -134,7 +129,7 @@ export class SessionTreeService {
 
   resolveSession(idOrPrefix: string): ProjectSession {
     const matches = [...this.projection.sessions.values()].filter((session) =>
-      session.id === idOrPrefix || session.id.startsWith(idOrPrefix)
+      session.id.startsWith(idOrPrefix)
     );
     if (matches.length !== 1) throw new Error(`Could not uniquely resolve session: ${idOrPrefix}`);
     return matches[0]!;
@@ -204,59 +199,20 @@ export class SessionTreeService {
     input: { turnId: string; message: Message; entryId?: string },
     flush = false,
   ): Promise<MessageEntry> {
-    const turn = this.runningTurn(input.turnId);
-    const entries = this.projection.entriesByTurn.get(turn.id)!;
-    const entry: MessageEntry = {
-      id: input.entryId ?? createId("entry"),
-      sessionId: turn.sessionId,
-      turnId: turn.id,
-      ordinal: entries.length,
-      timestamp: input.message.timestamp,
-      type: "message",
-      message: structuredClone(input.message),
-    };
-    await this.repository.append(() => {
-      entry.ordinal = this.projection.entriesByTurn.get(turn.id)!.length;
-      return { type: "entry_appended", entry };
+    return this.appendEntry<MessageEntry>(this.runningTurn(input.turnId), {
+      type: "message", message: input.message, timestamp: input.message.timestamp,
+      ...(input.entryId !== undefined ? { id: input.entryId } : {}),
     }, flush);
-    return structuredClone(entry);
   }
 
   async appendToolExecution(
     input: Omit<ToolExecutionEntry, "id" | "sessionId" | "ordinal" | "timestamp" | "type">,
   ): Promise<ToolExecutionEntry> {
-    const turn = this.runningTurn(input.turnId);
-    const entries = this.projection.entriesByTurn.get(turn.id)!;
-    const entry: ToolExecutionEntry = {
-      id: createId("entry"),
-      sessionId: turn.sessionId,
-      ordinal: entries.length,
-      timestamp: Date.now(),
-      type: "tool_execution",
-      ...structuredClone(input),
-    };
-    await this.repository.append(() => {
-      entry.ordinal = this.projection.entriesByTurn.get(turn.id)!.length;
-      return { type: "entry_appended", entry };
-    }, true);
-    return structuredClone(entry);
+    return this.appendEntry<ToolExecutionEntry>(this.runningTurn(input.turnId), { ...input, type: "tool_execution" }, true);
   }
 
   async appendFileEdit(input: Pick<FileEditEntry, "turnId" | "path" | "before">): Promise<void> {
-    const turn = this.runningTurn(input.turnId);
-    // The factory runs after the durability barrier, so concurrent file edits
-    // receive their ordinal from the latest projection.
-    await this.repository.append(() => ({
-      type: "entry_appended",
-      entry: {
-        ...input,
-        id: createId("entry"),
-        sessionId: turn.sessionId,
-        ordinal: this.projection.entriesByTurn.get(turn.id)!.length,
-        timestamp: Date.now(),
-        type: "file_edit",
-      },
-    }), true);
+    await this.appendEntry<FileEditEntry>(this.runningTurn(input.turnId), { ...input, type: "file_edit" }, true);
   }
 
   async appendCompaction(input: {
@@ -274,22 +230,25 @@ export class SessionTreeService {
     if (turn.status !== "running" && !appendsToLiveTip) {
       throw new Error(`Compaction target is not the running turn or current live tip: ${turn.id}`);
     }
-    const entries = this.projection.entriesByTurn.get(turn.id)!;
-    const entry: CompactionEntry = {
-      id: createId("entry"),
-      sessionId: turn.sessionId,
-      turnId: turn.id,
-      ordinal: entries.length,
-      timestamp: Date.now(),
-      type: "compaction",
-      summary: input.summary.trim(),
-      retainedTurns: structuredClone(input.retainedTurns),
-      tokensBefore: input.tokensBefore,
-      tokensAfter: input.tokensAfter,
-      reason: input.reason,
+    return this.appendEntry<CompactionEntry>(turn, {
+      type: "compaction", summary: input.summary.trim(), retainedTurns: input.retainedTurns,
+      tokensBefore: input.tokensBefore, tokensAfter: input.tokensAfter, reason: input.reason,
       ...(input.progressSummary ? { progressSummary: input.progressSummary.trim() } : {}),
-    };
-    await this.repository.append(() => ({ type: "entry_appended", entry }));
+    });
+  }
+
+  private async appendEntry<T extends SessionEntry>(
+    turn: Turn,
+    input: Omit<T, "id" | "sessionId" | "turnId" | "ordinal" | "timestamp"> & { id?: string; timestamp?: number },
+    flush = false,
+  ): Promise<T> {
+    const entry = { ...structuredClone(input), id: input.id ?? createId("entry"),
+      timestamp: input.timestamp ?? Date.now(), sessionId: turn.sessionId, turnId: turn.id, ordinal: 0 } as T;
+    await this.repository.append(() => {
+      // Assign after the durability barrier: concurrent edits must see the latest ordinal.
+      entry.ordinal = this.projection.entriesByTurn.get(turn.id)!.length;
+      return { type: "entry_appended", entry };
+    }, flush);
     return structuredClone(entry);
   }
 
@@ -333,7 +292,7 @@ export class SessionTreeService {
   }
 
   messagesForTurn(turnId: string): Message[] {
-    return this.entriesForTurn(turnId)
+    return (this.projection.entriesByTurn.get(turnId) ?? [])
       .filter((entry): entry is MessageEntry => entry.type === "message")
       .map((entry) => structuredClone(entry.message));
   }
@@ -344,7 +303,7 @@ export class SessionTreeService {
       if (!entry || entry.type !== "message" || entry.message.role !== "user") {
         throw new Error(`Turn ${turn.id} has no valid user entry`);
       }
-      const label = messageText(entry.message).replace(/\s+/g, " ").slice(0, 140) || "(empty user message)";
+      const label = userContentDisplay(entry.message.content).replace(/\s+/g, " ").slice(0, 140) || "(empty user message)";
       return {
         turnId: turn.id,
         userEntryId: turn.userEntryId,
@@ -357,7 +316,6 @@ export class SessionTreeService {
 
   resolveRewindCandidate(idOrPrefix: string, sessionId = this.activeSession.id): RewindCandidate {
     const matches = this.rewindCandidates(sessionId).filter((candidate) =>
-      candidate.turnId === idOrPrefix || candidate.userEntryId === idOrPrefix ||
       candidate.turnId.startsWith(idOrPrefix) || candidate.userEntryId.startsWith(idOrPrefix)
     );
     if (matches.length !== 1) throw new Error(`Could not uniquely resolve a current-path user turn: ${idOrPrefix}`);
@@ -365,7 +323,7 @@ export class SessionTreeService {
   }
 
   requireIdle(): void {
-    const running = [...this.projection.turns.values()].find((turn) => turn.status === "running");
+    const running = this.projection.runningTurnsBySession.values().next().value;
     if (running) throw new Error(`Turn ${running.id} is still running`);
   }
 

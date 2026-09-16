@@ -71,7 +71,7 @@ export class SessionTreeProjection {
         if (!["created", "new", "opened"].includes(event.reason)) {
           throw new SessionTreeCorruptionError(`Unknown active Session change reason: ${String(event.reason)}`);
         }
-        if ([...this.turns.values()].some((turn) => turn.status === "running")) {
+        if (this.runningTurnsBySession.size > 0) {
           throw new SessionTreeCorruptionError("Active Session changed while a turn was running");
         }
         this.activeSessionId = event.sessionId;
@@ -84,7 +84,7 @@ export class SessionTreeProjection {
         if (turn.fileCheckpoints !== undefined && typeof turn.fileCheckpoints !== "boolean") {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid file checkpoint setting`);
         }
-        if ([...this.turns.values()].some((item) => item.status === "running")) {
+        if (this.runningTurnsBySession.size > 0) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
         }
         if ((this.liveTips.get(turn.sessionId) ?? null) !== turn.parentTurnId) {

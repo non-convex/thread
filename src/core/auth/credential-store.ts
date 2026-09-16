@@ -1,6 +1,5 @@
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import type {
   AuthOperationOptions,
   Credential,
@@ -8,11 +7,11 @@ import type {
   CredentialStore,
 } from "@earendil-works/pi-ai";
 import { getThreadHome } from "../config/home.js";
-import { createId } from "../utils/id.js";
+import { atomicJson } from "../utils/atomic-json.js";
+import { lockFile } from "../utils/file-lock.js";
 
 export const DEFAULT_AUTH_FILE = "auth.json";
 const AUTH_FILE_FORMAT = 1;
-const STALE_LOCK_MS = 10 * 60 * 1_000;
 
 interface CredentialDocument {
   format: typeof AUTH_FILE_FORMAT;
@@ -159,72 +158,16 @@ export class ThreadCredentialStore implements CredentialStore {
     return parseDocument(source, this.filePath);
   }
 
-  private async writeDocument(document: CredentialDocument): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    const temporary = `${this.filePath}.${createId("tmp")}`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
-      await rename(temporary, this.filePath);
-      await chmod(this.filePath, 0o600).catch(() => undefined);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
+  private writeDocument(document: CredentialDocument): Promise<void> {
+    return atomicJson(this.filePath, document, { mode: 0o600, pretty: true });
   }
 
   private async withFileLock<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const handle = await this.acquireFileLock(signal);
+    const handle = await lockFile(this.lockPath, true, signal);
     try {
       return await task();
     } finally {
-      await handle.close().catch(() => undefined);
-      await rm(this.lockPath, { force: true }).catch(() => undefined);
-    }
-  }
-
-  private async acquireFileLock(signal?: AbortSignal): Promise<FileHandle> {
-    await mkdir(path.dirname(this.lockPath), { recursive: true });
-    for (;;) {
-      signal?.throwIfAborted();
-      try {
-        const handle = await open(this.lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
-          return handle;
-        } catch (error) {
-          await handle.close().catch(() => undefined);
-          await rm(this.lockPath, { force: true }).catch(() => undefined);
-          throw error;
-        }
-      } catch (error) {
-        if (!nodeError(error, "EEXIST")) throw error;
-        if (await this.lockIsStale()) {
-          await rm(this.lockPath, { force: true }).catch(() => undefined);
-          continue;
-        }
-        if (signal) await delay(50, undefined, { signal });
-        else await delay(50);
-      }
-    }
-  }
-
-  private async lockIsStale(): Promise<boolean> {
-    try {
-      const details = await stat(this.lockPath);
-      if (Date.now() - details.mtimeMs > STALE_LOCK_MS) return true;
-      const value = JSON.parse(await readFile(this.lockPath, "utf8")) as { pid?: unknown };
-      if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0) return true;
-      try {
-        process.kill(value.pid as number, 0);
-        return false;
-      } catch (error) {
-        return nodeError(error, "ESRCH");
-      }
-    } catch (error) {
-      return nodeError(error, "ENOENT");
+      await handle.close();
     }
   }
 }
