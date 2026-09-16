@@ -1,4 +1,4 @@
-import type { ModelDescriptor } from "../../core/agent/model-client.js";
+import type { ModelDescriptor } from "../../core/agent/model-catalog.js";
 import type { ThreadRuntime } from "../../core/runtime/thread-runtime.js";
 
 export interface HistoryViewItem {

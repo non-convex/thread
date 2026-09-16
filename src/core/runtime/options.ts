@@ -1,6 +1,7 @@
 import type { CacheRetention, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import path from "node:path";
-import type { ModelCatalog, ModelClient } from "../agent/model-client.js";
+import type { ModelClient } from "../agent/model-client.js";
+import type { ModelCatalog } from "../agent/model-catalog.js";
 import type { AgentProfileDiagnostic } from "../agent/profile.js";
 import type { RunTurnOptions } from "../agent/turn-runner.js";
 import type { WorkerProfileSettings } from "../agent-task/profile.js";

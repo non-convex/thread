@@ -1,5 +1,5 @@
-import type { ModelDescriptor } from "../core/agent/model-client.js";
-import type { AgentPickerItem, CommandPickerItem, EphemeralView, HistoryViewItem } from "../app/commands/types.js";
+import type { ModelDescriptor } from "../core/agent/model-catalog.js";
+import type { EphemeralView } from "../app/commands/types.js";
 import type { AskRequest } from "../core/runtime/interaction.js";
 import type { AgentTaskSummary } from "../core/agent-task/model.js";
 import type { ToolOutcome } from "../core/tools/types.js";
@@ -43,61 +43,24 @@ export interface LiveTurn {
   startedAt: number;
 }
 
-export interface ModelPickerScreen {
-  type: "model_picker";
-  agentId: string;
-  models: ModelDescriptor[];
-  currentProviderId: string | undefined;
-  currentModelId: string | undefined;
-  scope: "configured" | "all";
-  filter: string;
+type View<K extends EphemeralView["type"]> = Extract<EphemeralView, { type: K }>;
+interface SelectionState {
   selected: number;
   busy: boolean;
   error: string | undefined;
 }
-
-export interface AgentSettingsScreen {
-  type: "agent_settings";
-  agentId: string;
-  label: string;
-  enabled: boolean;
-  selected: number;
-  busy: boolean;
-  error: string | undefined;
-}
-
-export interface CommandPickerScreen {
-  type: "command_picker";
-  title: string;
-  items: CommandPickerItem[];
-  emptyText?: string;
-  selected: number;
-  busy: boolean;
-  error: string | undefined;
-}
-
-export interface AgentPickerScreen {
-  type: "agent_picker";
-  agents: AgentPickerItem[];
-  selected: number;
-  busy: boolean;
-  error: string | undefined;
-}
-
-export interface RewindScreen {
-  type: "rewind";
-  items: HistoryViewItem[];
-  selected: number;
-  confirm: boolean;
-  busy: boolean;
-  error: string | undefined;
-}
+export type ModelPickerScreen = View<"model_picker"> & SelectionState & { filter: string };
+export type AgentSettingsScreen = View<"agent_settings"> & SelectionState;
+export type CommandPickerScreen = View<"command_picker"> & SelectionState;
+export type AgentPickerScreen = View<"agent_picker"> & SelectionState;
+export type RewindScreen = View<"rewind"> & SelectionState & { confirm: boolean };
 
 export interface AskScreen {
   type: "ask";
   request: AskRequest;
   questionIndex: number;
   chosen: number[][];
+  answers: string[][];
   selected: number;
   customText: string | undefined;
 }
@@ -115,11 +78,7 @@ export type UiScreen =
 export type FloatingOverlayScreen = ModelPickerScreen | AgentSettingsScreen | AgentPickerScreen | RewindScreen | CommandPickerScreen;
 
 export function isFloatingOverlay(screen: UiScreen): screen is FloatingOverlayScreen {
-  return screen.type === "model_picker"
-    || screen.type === "agent_settings"
-    || screen.type === "agent_picker"
-    || screen.type === "command_picker"
-    || screen.type === "rewind";
+  return "busy" in screen;
 }
 
 export function filteredModels(screen: Pick<ModelPickerScreen, "models" | "filter">): ModelDescriptor[] {
@@ -233,59 +192,25 @@ export function statusLineParts(
 }
 
 export function openEphemeralView(state: UiState, view: EphemeralView): void {
-  if (view.type === "document") state.screen = { type: "document", title: view.title, content: view.content };
-  if (view.type === "command_picker") {
-    const current = view.items.findIndex((item) => item.current);
-    state.screen = { ...view, selected: current >= 0 ? current : 0, busy: false, error: undefined };
+  const selection: SelectionState = { selected: 0, busy: false, error: undefined };
+  switch (view.type) {
+    case "composer": return; // Consumed by the controller, not a screen.
+    case "document": state.screen = { ...view }; return;
+    case "model_picker": {
+      const filter = view.filter ?? "";
+      const current = filteredModels({ models: view.models, filter }).findIndex((model) =>
+        model.providerId === view.currentProviderId && model.modelId === view.currentModelId
+      );
+      state.screen = { ...view, ...selection, filter, selected: Math.max(0, current) };
+      return;
+    }
+    case "command_picker":
+      selection.selected = Math.max(0, view.items.findIndex((item) => item.current));
+      break;
+    case "agent_settings": selection.selected = Number(view.enabled); break;
+    case "rewind": state.screen = { ...view, ...selection, confirm: false }; return;
   }
-  if (view.type === "model_picker") {
-    const filter = view.filter ?? "";
-    const current = filteredModels({ models: view.models, filter }).findIndex((model) =>
-      model.providerId === view.currentProviderId && model.modelId === view.currentModelId
-    );
-    state.screen = {
-      type: "model_picker",
-      agentId: view.agentId,
-      models: view.models,
-      currentProviderId: view.currentProviderId,
-      currentModelId: view.currentModelId,
-      scope: view.scope,
-      filter,
-      selected: current >= 0 ? current : 0,
-      busy: false,
-      error: undefined,
-    };
-  }
-  if (view.type === "agent_settings") {
-    state.screen = {
-      type: "agent_settings",
-      agentId: view.agentId,
-      label: view.label,
-      enabled: view.enabled,
-      selected: view.enabled ? 1 : 0,
-      busy: false,
-      error: undefined,
-    };
-  }
-  if (view.type === "rewind") {
-    state.screen = {
-      type: "rewind",
-      items: view.items,
-      selected: 0,
-      confirm: false,
-      busy: false,
-      error: undefined,
-    };
-  }
-  if (view.type === "agent_picker") {
-    state.screen = {
-      type: "agent_picker",
-      agents: view.agents,
-      selected: 0,
-      busy: false,
-      error: undefined,
-    };
-  }
+  state.screen = { ...view, ...selection };
 }
 
 export function moveSelection(selected: number, delta: number, count: number): number {

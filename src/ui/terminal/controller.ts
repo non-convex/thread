@@ -12,13 +12,13 @@ import {
   filteredModels,
   isFloatingOverlay,
   openEphemeralView,
-  type AskScreen,
   type UiScreen,
   type UiState,
 } from "../state.js";
 import { reduceUiEvent } from "../reducer.js";
 import type { SlashSuggestion, TerminalKey, TerminalMeta, UiNotifyKind } from "./view-model.js";
 import { projectTranscript } from "./transcript-projection.js";
+import { handleAskKey, isEnter, printableKey } from "./ask-input.js";
 
 export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = false): SlashSuggestion[] {
   return [
@@ -33,12 +33,6 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
     { name: "rewind", description: fileCheckpoints ? "Undo built-in file edits and rewind the conversation" : "Rewind the conversation; keep workspace files" },
     { name: "exit", description: "Exit thread" },
   ];
-}
-
-function printableKey(key: TerminalKey): string | undefined {
-  if (key.ctrl || key.meta || !key.sequence || key.sequence.length !== 1) return undefined;
-  const code = key.sequence.codePointAt(0)!;
-  return code >= 0x20 && code !== 0x7f ? key.sequence : undefined;
 }
 
 type Listener = (kind: UiNotifyKind) => void;
@@ -68,7 +62,6 @@ export class ThreadTuiController {
   private idleExitTimer: NodeJS.Timeout | undefined;
   private gitGeneration = 0;
   private readonly ask = new AskService();
-  private askAnswers: string[][] = [];
   private readonly detachAsk: () => void;
   private readonly detachRuntime: () => void;
   private disposed = false;
@@ -97,10 +90,9 @@ export class ThreadTuiController {
     this.detachRuntime = app.runtime.subscribe((event) => this.receiveRuntimeEvent(event));
     this.ask.subscribe((request) => {
       if (this.stopped || this.disposed) return;
-      this.askAnswers = [];
       if (request) {
         this.state.screen = { type: "ask", request, questionIndex: 0,
-          chosen: request.questions.map(() => []), selected: 0, customText: undefined };
+          chosen: request.questions.map(() => []), answers: [], selected: 0, customText: undefined };
       } else if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
       this.notify();
     });
@@ -216,12 +208,12 @@ export class ThreadTuiController {
 
   handleScreenKey(key: TerminalKey): boolean {
     const screen = this.state.screen;
-    const enter = ["return", "kpenter", "linefeed"].includes(key.name);
-    if (screen.type === "ask") return this.handleAskKey(screen, key, {
-      up: key.name === "up",
-      down: key.name === "down",
-      enter,
-    });
+    const enter = isEnter(key);
+    if (screen.type === "ask") {
+      handleAskKey(screen, key, this.ask);
+      this.notify();
+      return true;
+    }
     if (!isFloatingOverlay(screen)) return false;
     if (screen.busy || this.active) return true;
     if (screen.type === "model_picker") {
@@ -424,57 +416,6 @@ export class ThreadTuiController {
         this.notify();
       }
     }
-  }
-
-  private handleAskKey(screen: AskScreen, key: TerminalKey, keys: { up: boolean; down: boolean; enter: boolean }): boolean {
-    const question = screen.request.questions[screen.questionIndex];
-    if (!question) return true;
-    const optionCount = question.options.length;
-    const typed = printableKey(key);
-    if (typed) {
-      if (screen.customText === undefined) screen.customText = "";
-      screen.customText += typed;
-      this.notify();
-      return true;
-    }
-    if (screen.customText !== undefined) {
-      if (key.name === "escape") screen.customText = undefined;
-      else if (keys.enter) {
-        const value = screen.customText.trim();
-        if (value) this.commitAskAnswer(screen, [value]);
-      } else if (key.name === "backspace") screen.customText = screen.customText.slice(0, -1);
-      this.notify();
-      return true;
-    }
-    if (key.name === "escape") this.ask.dismiss(screen.request.id);
-    else if ((keys.up || keys.down) && optionCount > 0) {
-      screen.selected = (screen.selected + (keys.up ? -1 : 1) + optionCount) % optionCount;
-    } else if (key.name === "space" && question.multiple) {
-      const current = screen.chosen[screen.questionIndex] ?? [];
-      screen.chosen[screen.questionIndex] = current.includes(screen.selected)
-        ? current.filter((index) => index !== screen.selected)
-        : [...current, screen.selected];
-    } else if (keys.enter) {
-      const chosen = screen.chosen[screen.questionIndex] ?? [];
-      const picked = question.multiple && chosen.length ? chosen : [screen.selected];
-      this.commitAskAnswer(screen, picked.map((index) => question.options[index]!.label));
-    }
-    this.notify();
-    return true;
-  }
-
-  private commitAskAnswer(screen: AskScreen, labels: string[]): void {
-    this.askAnswers[screen.questionIndex] = labels;
-    const next = screen.questionIndex + 1;
-    if (next < screen.request.questions.length) {
-      screen.questionIndex = next;
-      screen.selected = 0;
-      screen.customText = undefined;
-      return;
-    }
-    const answers = screen.request.questions.map((_question, index) => this.askAnswers[index] ?? []);
-    this.askAnswers = [];
-    this.ask.reply(screen.request.id, answers);
   }
 
   private syncTranscript(): void {

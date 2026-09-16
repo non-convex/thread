@@ -1,31 +1,11 @@
-import type {
-  CliRenderer,
-  HostClipboardService,
-  KeyEvent,
-  ScrollBoxRenderable,
-  TextareaRenderable,
-  ThemeMode,
-} from "@opentui/core";
+import type { CliRenderer, HostClipboardService, KeyEvent, ScrollBoxRenderable, ThemeMode } from "@opentui/core";
 import { render, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import {
-  isFloatingOverlay,
-  moveSelection,
-  overlaySelectionCount,
-  type LiveTurn,
-  type TranscriptItem,
-  type UiScreen,
-} from "../state.js";
-import type { ComposerImage } from "../images.js";
+import { isFloatingOverlay, moveSelection, overlaySelectionCount, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
 import { tryCreateHostClipboard } from "./clipboard.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
-import {
-  beginClipboardImagePaste,
-  handleComposerPaste,
-  pasteHostClipboard,
-  pasteHostClipboardImage,
-  type ComposerPasteHost,
-} from "./composer-paste.js";
+import { createComposerDraft } from "./composer-state.js";
+import { isEnter } from "./ask-input.js";
 import type { ThreadTuiViewModel } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { DocumentScreen } from "./screens.js";
@@ -38,223 +18,80 @@ export function ThreadRoot(props: {
   hostClipboard?: HostClipboardService;
 }) {
   const dimensions = useTerminalDimensions();
+  const draft = createComposerDraft(props.controller, props.hostClipboard);
   const [fullRevision, setFullRevision] = createSignal(0);
   const [liveRevision, setLiveRevision] = createSignal(0);
-  const [composerText, setComposerText] = createSignal("");
-  const [composerCursor, setComposerCursor] = createSignal(0);
-  const [forcePathCompletion, setForcePathCompletion] = createSignal(false);
   const [suggestionIndex, setSuggestionIndex] = createSignal(0);
-  // Local selection signals repaint only the overlay. Mirror them to the screen
-  // for Enter handling; overlayNavigated hides stale confirmations and errors.
+  // Local selection signals repaint only the overlay; the controller retains Enter handling.
   const [overlaySelected, setOverlaySelected] = createSignal(0);
   const [overlayNavigated, setOverlayNavigated] = createSignal(false);
-  const [attachments, setAttachments] = createSignal<ComposerImage[]>([]);
-  const [pendingPastes, setPendingPastes] = createSignal(0);
-  let composer: TextareaRenderable | undefined;
-  let lastDirectPasteAt = 0;
-  let directClipboardPastes = 0;
-  let pasteEpoch = 0;
   let sessionScroll: ScrollBoxRenderable | undefined;
   let screenScroll: ScrollBoxRenderable | undefined;
-  const state = () => {
-    liveRevision();
-    fullRevision();
-    return props.controller.state;
-  };
-  const meta = () => {
-    liveRevision();
-    fullRevision();
-    return props.controller.meta;
-  };
-  const transcript = createMemo((): readonly TranscriptItem[] => {
-    fullRevision();
-    return props.controller.state.transcript;
-  });
-  const liveTurn = createMemo((): LiveTurn | undefined => {
-    liveRevision();
-    return props.controller.state.liveTurn;
-  });
+  const state = () => { liveRevision(); fullRevision(); return props.controller.state; };
+  const meta = () => { liveRevision(); fullRevision(); return props.controller.meta; };
+  const transcript = createMemo((): readonly TranscriptItem[] => { fullRevision(); return props.controller.state.transcript; });
+  const liveTurn = createMemo((): LiveTurn | undefined => { liveRevision(); return props.controller.state.liveTurn; });
   const screen = () => state().screen;
+  const composerOpen = () => screen().type === "session" || isFloatingOverlay(screen());
   const suggestions = createMemo(() => composerSuggestions({
-    input: composerText(),
-    cursor: composerCursor(),
-    rootPath: props.controller.meta.rootPath,
-    commands: props.controller.slashSuggestions,
-    forcePaths: forcePathCompletion(),
+    input: draft.text(), cursor: draft.cursor(), rootPath: props.controller.meta.rootPath,
+    commands: props.controller.slashSuggestions, forcePaths: draft.forcePaths(),
   }));
-  const composerHeight = createMemo(() => Math.max(
-    COMPOSER_MIN_LINES,
-    Math.min(COMPOSER_MAX_LINES, estimatedWrappedLines(composerText(), Math.max(12, dimensions().width - 8))),
-  ));
-  const unsubscribe = props.controller.subscribe((kind) => batch(() => {
+  const composerHeight = createMemo(() => Math.max(COMPOSER_MIN_LINES, Math.min(COMPOSER_MAX_LINES,
+    estimatedWrappedLines(draft.text(), Math.max(12, dimensions().width - 8)))));
+  onCleanup(props.controller.subscribe((kind) => batch(() => {
     setLiveRevision((value) => value + 1);
     if (kind !== "live") setFullRevision((value) => value + 1);
-  }));
-  onCleanup(unsubscribe);
+  })));
 
   createEffect(() => {
-    const activeState = state();
-    if (activeState.screen.type === "session" && composer) {
-      if (activeState.composerInput !== undefined) {
-        const input = activeState.composerInput;
-        delete activeState.composerInput;
-        composer.setText(input);
-        composer.cursorOffset = input.length;
-        setComposerText(input);
-        setComposerCursor(input.length);
-        setForcePathCompletion(false);
-      }
-      if (!activeState.busy) composer.focus();
+    const active = state();
+    if (active.screen.type !== "session" || !draft.editor) return;
+    if (active.composerInput !== undefined) {
+      draft.replace(active.composerInput);
+      delete active.composerInput;
     }
+    if (!active.busy) draft.editor.focus();
   });
-
-  // Resync selection after the controller opens or updates a panel.
   createEffect(() => {
     const active = screen();
-    if (isFloatingOverlay(active)) {
-      setOverlaySelected(active.selected);
-      setOverlayNavigated(false);
-    }
+    if (isFloatingOverlay(active)) { setOverlaySelected(active.selected); setOverlayNavigated(false); }
   });
+  createEffect(() => { draft.text(); draft.cursor(); setSuggestionIndex(0); });
 
-  createEffect(() => {
-    composerText();
-    composerCursor();
-    setSuggestionIndex(0);
-  });
-
-  const applySuggestion = (submit: boolean): boolean => {
+  const applySuggestion = (submit: boolean) => {
     const suggestion = suggestions()[suggestionIndex()];
-    if (!suggestion || !composer) return false;
+    if (!suggestion || !draft.editor) return;
     if (submit && suggestion.submit) {
-      composer.clear();
-      setComposerText("");
-      setComposerCursor(0);
-      setForcePathCompletion(false);
+      draft.editor.clear();
+      draft.replace("");
       void props.controller.submit(suggestion.replacement.trim());
     } else {
-      const next = applyComposerSuggestion(composerText(), suggestion);
-      composer.setText(next.input);
-      composer.cursorOffset = next.cursor;
-      setComposerText(next.input);
-      setComposerCursor(next.cursor);
-      setForcePathCompletion(false);
+      const next = applyComposerSuggestion(draft.text(), suggestion);
+      draft.replace(next.input, next.cursor);
     }
-    return true;
   };
-
-  const pasteHost = (): ComposerPasteHost => {
-    const epoch = pasteEpoch;
-    return {
-      rootPath: props.controller.meta.rootPath,
-      attachments,
-      setAttachments: (images) => {
-        if (epoch === pasteEpoch) setAttachments(images);
-      },
-      insertText: (text) => {
-        if (epoch !== pasteEpoch || !composer) return;
-        composer.editBuffer.insertText(text);
-        setComposerText(composer.plainText);
-        setComposerCursor(composer.cursorOffset);
-      },
-      note: (text, level) => {
-        if (epoch === pasteEpoch) props.controller.note(text, level);
-      },
-      ...(props.hostClipboard ? { hostClipboard: props.hostClipboard } : {}),
-    };
-  };
-
-  const trackPaste = (operation: Promise<unknown>, directClipboard = false): void => {
-    const epoch = pasteEpoch;
-    if (directClipboard) directClipboardPastes += 1;
-    setPendingPastes((count) => count + 1);
-    const settle = () => {
-      if (directClipboard) {
-        directClipboardPastes = Math.max(0, directClipboardPastes - 1);
-        lastDirectPasteAt = Date.now();
-      }
-      if (epoch === pasteEpoch) setPendingPastes((count) => Math.max(0, count - 1));
-    };
-    void operation.then(settle, settle);
-  };
-
-  const clearDraft = (): void => {
-    pasteEpoch += 1;
-    setPendingPastes(0);
-    composer?.clear();
-    setComposerText("");
-    setComposerCursor(0);
-    setForcePathCompletion(false);
-    setAttachments([]);
-  };
-
-  const composerOpen = () => screen().type === "session" || isFloatingOverlay(screen());
-
-  usePaste((event) => {
-    if (!composerOpen()) return;
-    if (directClipboardPastes > 0 || Date.now() - lastDirectPasteAt < 400) {
-      event.preventDefault();
-      return;
-    }
-    trackPaste(handleComposerPaste(pasteHost(), event));
-  });
-
+  usePaste((event) => { if (composerOpen()) draft.paste(event); });
   useKeyboard((key: KeyEvent) => {
     if (key.ctrl && key.name === "c") {
       key.preventDefault();
       if (props.controller.interrupt()) return;
-      if (composer?.plainText || attachments().length > 0 || pendingPastes() > 0) {
+      if (draft.editor?.plainText || draft.attachments().length || draft.busy()) {
         props.controller.cancelIdleExitGesture();
-        clearDraft();
-        return;
-      }
-      props.controller.idleCtrlC();
+        draft.clear();
+      } else props.controller.idleCtrlC();
       return;
     }
     props.controller.cancelIdleExitGesture();
-    if (key.ctrl && key.name === "d" && screen().type === "session" && !composer?.plainText && attachments().length === 0 && pendingPastes() === 0) {
+    if (key.ctrl && key.name === "d" && screen().type === "session" && !draft.editor?.plainText && !draft.attachments().length && !draft.busy()) {
       key.preventDefault();
       props.controller.requestStop();
       return;
     }
-    if (composerOpen() && key.name === "v" && !key.shift) {
-      // Windows Terminal may intercept Ctrl+V; Alt+V provides an image-paste fallback.
-      const ctrlV = key.ctrl && !key.meta && !key.option;
-      const altV = !key.ctrl && (key.meta || key.option);
-      if (ctrlV || altV) {
-        const nativePaste = beginClipboardImagePaste(pasteHost());
-        if (nativePaste) {
-          key.preventDefault();
-          lastDirectPasteAt = Date.now();
-          trackPaste(nativePaste, true);
-          return;
-        }
-        if (props.hostClipboard) {
-          key.preventDefault();
-          lastDirectPasteAt = Date.now();
-          trackPaste(
-            altV
-              ? pasteHostClipboardImage(pasteHost()).then((attached) => {
-                  if (!attached) props.controller.note("No image in the clipboard.", "info");
-                })
-              : pasteHostClipboard(pasteHost()),
-            true,
-          );
-          return;
-        }
-        if (altV) props.controller.note("No image in the clipboard.", "info");
-      }
-    }
-    if (
-      composerOpen() &&
-      key.name === "backspace" &&
-      !key.ctrl &&
-      !key.meta &&
-      !composer?.plainText &&
-      attachments().length > 0
-    ) {
+    if (composerOpen() && draft.pasteKey(key)) { key.preventDefault(); return; }
+    if (composerOpen() && key.name === "backspace" && !key.ctrl && !key.meta && !draft.editor?.plainText && draft.attachments().length) {
       key.preventDefault();
-      setAttachments(attachments().slice(0, -1));
+      draft.setAttachments(draft.attachments().slice(0, -1));
       return;
     }
     if (key.shift && key.name === "tab" && screen().type === "session") {
@@ -262,139 +99,70 @@ export function ThreadRoot(props: {
       props.controller.cycleThinkingLevel();
       return;
     }
-    if (key.name === "escape") {
-      /* The ask panel owns escape: a parked question should be dismissable
-       * without aborting the whole turn, which is what interrupt() would do. */
-      if (screen().type === "ask") {
-        key.preventDefault();
-        props.controller.handleScreenKey(key);
-        return;
-      }
-      if (props.controller.interrupt()) {
-        key.preventDefault();
-        return;
-      }
-      if (screen().type !== "session") {
-        key.preventDefault();
-        props.controller.closeView();
-      } else if (forcePathCompletion()) {
-        key.preventDefault();
-        setForcePathCompletion(false);
-      }
-      return;
-    }
-    const activeScreen = screen();
-    /* The ask panel consumes every key: it needs printable characters for a
-     * free-text answer, so nothing may fall through to the composer. */
-    if (activeScreen.type === "ask") {
+    // Ask owns Escape and printable input: dismissing a question must not abort the turn.
+    if (screen().type === "ask") {
       key.preventDefault();
       props.controller.handleScreenKey(key);
       return;
     }
-    if (isFloatingOverlay(activeScreen)) {
-      // The picker/path-action panels float over the session screen: selection
-      // keys move the view-side signal (no notify — that is what flickered),
-      // enter goes to the controller, everything else reaches the composer.
-      const count = overlaySelectionCount(activeScreen);
-      if ((key.name === "up" || key.name === "down") && count > 0 && !activeScreen.busy) {
+    if (key.name === "escape") {
+      if (props.controller.interrupt()) key.preventDefault();
+      else if (screen().type !== "session") { key.preventDefault(); props.controller.closeView(); }
+      else if (draft.forcePaths()) { key.preventDefault(); draft.setForcePaths(false); }
+      return;
+    }
+    const active = screen();
+    const direction = key.name === "up" ? -1 : key.name === "down" ? 1 : 0;
+    const page = key.name === "pageup" ? -0.85 : key.name === "pagedown" ? 0.85 : 0;
+    if (isFloatingOverlay(active)) {
+      const count = overlaySelectionCount(active);
+      if (direction && count > 0 && !active.busy) {
         key.preventDefault();
-        const delta = key.name === "up" ? -1 : 1;
-        activeScreen.selected = moveSelection(activeScreen.selected, delta, count);
-        activeScreen.error = undefined;
-        if (activeScreen.type === "rewind") activeScreen.confirm = false;
-        setOverlaySelected(activeScreen.selected);
+        active.selected = moveSelection(active.selected, direction, count);
+        active.error = undefined;
+        if (active.type === "rewind") active.confirm = false;
+        setOverlaySelected(active.selected);
         setOverlayNavigated(true);
-        return;
-      }
-      if (props.controller.handleScreenKey(key)) {
-        key.preventDefault();
-        return;
-      }
-      if (key.name === "pageup" || key.name === "pagedown") {
-        key.preventDefault();
-        sessionScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
-      }
+      } else if (props.controller.handleScreenKey(key)) key.preventDefault();
+      else if (page) { key.preventDefault(); sessionScroll?.scrollBy(page, "viewport"); }
       return;
     }
-    if (screen().type === "session") {
-      const currentSuggestions = suggestions();
-      if (currentSuggestions.length > 0 && (key.name === "up" || key.name === "down")) {
+    if (active.type === "session") {
+      const choices = suggestions();
+      if (choices.length && direction) {
         key.preventDefault();
-        const delta = key.name === "up" ? -1 : 1;
-        setSuggestionIndex((suggestionIndex() + delta + currentSuggestions.length) % currentSuggestions.length);
-        return;
-      }
-      if (currentSuggestions.length > 0 && key.name === "tab") {
+        setSuggestionIndex(moveSelection(suggestionIndex(), direction, choices.length));
+      } else if (key.name === "tab") {
         key.preventDefault();
-        applySuggestion(false);
-        return;
-      }
-      if (key.name === "tab") {
+        if (choices.length) applySuggestion(false);
+        else draft.setForcePaths(true);
+      } else if (choices.length && isEnter(key) && !key.shift) {
         key.preventDefault();
-        setForcePathCompletion(true);
-        return;
-      }
-      if (currentSuggestions.length > 0 && ["return", "kpenter", "linefeed"].includes(key.name) && !key.shift) {
-        key.preventDefault();
-        applySuggestion(currentSuggestions[suggestionIndex()]?.submit ?? false);
-        return;
-      }
-      if (key.name === "pageup" || key.name === "pagedown") {
-        key.preventDefault();
-        sessionScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
-      }
+        applySuggestion(choices[suggestionIndex()]?.submit ?? false);
+      } else if (page) { key.preventDefault(); sessionScroll?.scrollBy(page, "viewport"); }
       return;
     }
-    const scrollKey = key.name === "up" || key.name === "down" || key.name === "pageup" || key.name === "pagedown";
-    const scrollableScreen = screen().type === "document";
-    if (scrollableScreen && scrollKey) {
+    if (active.type === "document" && (page || direction)) {
       key.preventDefault();
-      if (key.name === "pageup" || key.name === "pagedown") {
-        screenScroll?.scrollBy(key.name === "pageup" ? -0.85 : 0.85, "viewport");
-      } else {
-        screenScroll?.scrollBy(key.name === "up" ? -3 : 3);
-      }
-      return;
-    }
-    if (props.controller.handleScreenKey(key)) key.preventDefault();
+      if (page) screenScroll?.scrollBy(page, "viewport");
+      else screenScroll?.scrollBy(direction * 3);
+    } else if (props.controller.handleScreenKey(key)) key.preventDefault();
   });
 
-  return (
-    <box flexDirection="column" width="100%" height="100%" backgroundColor={props.resources.theme.background}>
-      <Switch>
-        {/* The model picker and path-action panels are overlays on
-            the session screen, not separate screens, so they all route here. */}
-        <Match when={screen().type === "session" || isFloatingOverlay(screen()) || screen().type === "ask"}>
-          <SessionScreen
-            controller={props.controller}
-            state={state}
-            transcript={transcript}
-            liveTurn={liveTurn}
-            meta={meta}
-            resources={props.resources}
-            composer={() => composer}
-            setComposer={(value) => { composer = value; }}
-            setComposerText={setComposerText}
-            setComposerCursor={setComposerCursor}
-            setForcePathCompletion={setForcePathCompletion}
-            suggestions={suggestions}
-            suggestionIndex={suggestionIndex}
-            overlaySelected={overlaySelected}
-            overlayNavigated={overlayNavigated}
-            composerHeight={composerHeight}
-            terminalWidth={() => dimensions().width}
-            attachments={attachments}
-            setAttachments={setAttachments}
-            pasteBusy={() => pendingPastes() > 0}
-            setScroll={(value) => { sessionScroll = value; }}
-          />
-        </Match>
-        <Match when={screen().type === "document"}>
-          <DocumentScreen screen={() => screen() as Extract<UiScreen, { type: "document" }>} state={state} resources={props.resources} setScroll={(value) => { screenScroll = value; }} />
-        </Match>
-      </Switch>
-    </box>
-  );
+  return <box flexDirection="column" width="100%" height="100%" backgroundColor={props.resources.theme.background}>
+    <Switch>
+      <Match when={composerOpen() || screen().type === "ask"}>
+        <SessionScreen controller={props.controller} state={state} transcript={transcript} liveTurn={liveTurn} meta={meta}
+          resources={props.resources} draft={draft} suggestions={suggestions} suggestionIndex={suggestionIndex}
+          overlaySelected={overlaySelected} overlayNavigated={overlayNavigated} composerHeight={composerHeight}
+          terminalWidth={() => dimensions().width} setScroll={(value) => { sessionScroll = value; }} />
+      </Match>
+      <Match when={screen().type === "document"}>
+        <DocumentScreen screen={() => screen() as Extract<UiScreen, { type: "document" }>} state={state}
+          resources={props.resources} setScroll={(value) => { screenScroll = value; }} />
+      </Match>
+    </Switch>
+  </box>;
 }
 
 export async function mountThreadView(renderer: CliRenderer, controller: ThreadTuiViewModel): Promise<{
@@ -406,26 +174,12 @@ export async function mountThreadView(renderer: CliRenderer, controller: ThreadT
   const syntaxStyle = createThreadSyntaxStyle(theme);
   const resources: ThreadViewResources = { theme, syntaxStyle };
   const hostClipboard = tryCreateHostClipboard();
+  const disposeResources = async () => { await hostClipboard?.dispose().catch(() => undefined); syntaxStyle.destroy(); };
   try {
-    await render(
-      () => (
-        <ThreadRoot
-          controller={controller}
-          resources={resources}
-          {...(hostClipboard ? { hostClipboard } : {})}
-        />
-      ),
-      renderer,
-    );
+    await render(() => <ThreadRoot controller={controller} resources={resources} {...(hostClipboard ? { hostClipboard } : {})} />, renderer);
+    return { disposeResources };
   } catch (error) {
-    await hostClipboard?.dispose().catch(() => undefined);
-    syntaxStyle.destroy();
+    await disposeResources();
     throw error;
   }
-  return {
-    disposeResources: async () => {
-      await hostClipboard?.dispose().catch(() => undefined);
-      syntaxStyle.destroy();
-    },
-  };
 }
