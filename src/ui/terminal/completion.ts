@@ -82,7 +82,6 @@ function commandSuggestions(
 
 interface PathPrefix {
   start: number;
-  token: string;
   at: boolean;
   quoted: boolean;
   raw: string;
@@ -101,7 +100,7 @@ function pathPrefix(input: string, cursor: number, force: boolean): PathPrefix |
   const start = openQuote ? quotedStart : delimiter + 1;
   const token = before.slice(start);
   if (!token) {
-    return force ? { start, token, at: false, quoted: false, raw: token } : undefined;
+    return force ? { start, at: false, quoted: false, raw: token } : undefined;
   }
   const at = token.startsWith("@");
   const withoutAt = at ? token.slice(1) : token;
@@ -111,7 +110,7 @@ function pathPrefix(input: string, cursor: number, force: boolean): PathPrefix |
   if (ambiguousSlashCommand && !force) return undefined;
   const naturallyPathLike = at || raw.includes("/") || raw.includes("\\") || raw.startsWith(".") || raw.startsWith("~");
   if (!force && !naturallyPathLike) return undefined;
-  return { start, token, at, quoted, raw };
+  return { start, at, quoted, raw };
 }
 
 function searchLocation(rootPath: string, rawPrefix: string): { directory: string; displayBase: string; query: string } {

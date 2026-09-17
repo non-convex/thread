@@ -4,7 +4,6 @@ import type { UiState } from "../state.js";
 
 export interface TerminalMeta {
   rootPath: string;
-  modelLabel: string;
   modelName: string;
   thinkingLevel: ModelThinkingLevel;
   supportsThinking: boolean;

@@ -74,7 +74,6 @@ export class ThreadTuiController {
     this.state = createUiState(session.session.id, session.liveTipTurnId, []);
     this.meta = {
       rootPath: app.runtime.rootPath,
-      modelLabel: app.runtime.model ? `${app.runtime.model.providerId}/${app.runtime.model.modelId}` : "no model",
       modelName: app.runtime.model?.modelId ?? "no model",
       thinkingLevel: app.runtime.thinkingLevel,
       supportsThinking: app.runtime.supportsThinking,
@@ -111,7 +110,6 @@ export class ThreadTuiController {
     }
   }
 
-  get isActive(): boolean { return this.active !== undefined; }
   get isStopped(): boolean { return this.stopped; }
 
   subscribe(listener: Listener): () => void {
@@ -443,7 +441,6 @@ export class ThreadTuiController {
   private refreshMeta(): void {
     const messages = this.app.runtime.contextMessages(this.app.selectedSessionId);
     const scan = scanCacheUsage(messages);
-    this.meta.modelLabel = this.app.runtime.model ? `${this.app.runtime.model.providerId}/${this.app.runtime.model.modelId}` : "no model";
     this.meta.modelName = this.app.runtime.model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.runtime.thinkingLevel;
     this.meta.supportsThinking = this.app.runtime.supportsThinking;
@@ -451,7 +448,7 @@ export class ThreadTuiController {
     const usage = this.app.runtime.contextUsage(this.app.selectedSessionId);
     this.meta.contextPercent = usage ? Math.min(999, Math.round(usage.requestTokens / usage.contextWindow * 100)) : 0;
     this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
-    this.meta.cacheMissedTokens = scan.totals.missedTokens;
+    this.meta.cacheMissedTokens = scan.missedTokens;
     this.meta.cacheMissReason = latestCacheMissReason(messages, scan);
   }
 

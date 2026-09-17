@@ -10,7 +10,7 @@ import { fileEditingPrompt } from "../core/tools/file-editing-prompt.js";
 import { safeUiEvent } from "../ui/events.js";
 import { agentCommand } from "./commands/agents.js";
 import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
-import { ThreadCommandRouter } from "./commands/registry.js";
+import { routeThreadCommand } from "./commands/registry.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
@@ -33,7 +33,6 @@ export class ThreadApp {
   readonly commands = new CommandRegistry();
   readonly extensionApi: ExtensionAPI;
   selectedSessionId: string;
-  private readonly commandRouter = new ThreadCommandRouter(this.commands);
   private readonly inputRouter: InputRouter;
   private inputOperation: { controller: AbortController; done: Promise<InputResult> } | undefined;
   private readonly extensionDisposers: ExtensionDisposer[] = [];
@@ -189,7 +188,7 @@ export class ThreadApp {
   }
 
   private async routeThreadCommand(input: string, options: { signal: AbortSignal }): Promise<InputResult> {
-    const result = await this.commandRouter.route(input, this.commandContext(options.signal));
+    const result = await routeThreadCommand(this.commands, input, this.commandContext(options.signal));
     if (!result) throw new Error(`Could not route command: ${input}`);
     return { kind: "command", result };
   }
