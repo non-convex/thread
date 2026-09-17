@@ -1,9 +1,9 @@
-import { Parser } from "htmlparser2";
-import TurndownService from "turndown";
 import { Type } from "@earendil-works/pi-ai";
-import { cooperativeYield, yieldToEventLoop } from "../utils/async.js";
+import { yieldToEventLoop } from "../utils/async.js";
+import { ACCEPT_HEADERS, readBoundedBody, textualMime, extractTextFromHtmlResponsive, convertHtmlToMarkdown, pageContent } from "./web-content.js";
 import { singletonResource } from "./execution.js";
-import type { AgentTool, ToolResult } from "./types.js";
+import type { AgentTool } from "./types.js";
+import { ok, fail } from "./results.js";
 
 export const WEB_SEARCH_DEFAULT_RESULTS = 8;
 export const WEB_SEARCH_MAX_RESULTS = 20;
@@ -49,14 +49,6 @@ export type WebToolFetch = (
 interface WebToolOptions {
   fetch?: WebToolFetch;
   env?: NodeJS.ProcessEnv;
-}
-
-function ok(content: string, details?: unknown): ToolResult {
-  return { content, isError: false, ...(details === undefined ? {} : { details }) };
-}
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
 }
 
 function requireNonBlank(value: string, label: string): string {
@@ -107,33 +99,6 @@ export function selectWebSearchProvider(env: NodeJS.ProcessEnv = process.env): W
   if (!configured) return "exa";
   if (configured === "exa" || configured === "parallel") return configured;
   throw new Error(`THREAD_WEBSEARCH_PROVIDER must be exa or parallel, got ${configured}`);
-}
-
-async function readBoundedBody(response: Response, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
-  }
-  if (!response.body) return Buffer.alloc(0);
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
-      }
-      chunks.push(Buffer.from(chunk.value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, total);
 }
 
 function searchRequest(provider: WebSearchProvider, args: WebSearchArgs, env: NodeJS.ProcessEnv) {
@@ -238,91 +203,6 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
   };
 }
 
-function acceptHeader(format: WebFetchFormat): string {
-  if (format === "markdown") {
-    return "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1";
-  }
-  if (format === "text") return "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1";
-  return "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, */*;q=0.1";
-}
-
-function textualMime(mime: string): boolean {
-  return (
-    !mime ||
-    mime.startsWith("text/") ||
-    mime === "application/json" ||
-    mime.endsWith("+json") ||
-    mime === "application/xml" ||
-    mime.endsWith("+xml") ||
-    mime === "application/javascript" ||
-    mime === "application/x-javascript"
-  );
-}
-
-function createHtmlTextCollector(): { parser: Parser; result: () => string } {
-  const text: string[] = [];
-  let skippedDepth = 0;
-  const skipped = new Set(["script", "style", "noscript", "iframe", "object", "embed"]);
-  const parser = new Parser({
-    onopentag(name) {
-      if (skippedDepth > 0 || skipped.has(name)) skippedDepth++;
-    },
-    ontext(value) {
-      if (skippedDepth === 0) text.push(value);
-    },
-    onclosetag() {
-      if (skippedDepth > 0) skippedDepth--;
-    },
-  });
-  return { parser, result: () => text.join("").trim() };
-}
-
-async function extractTextFromHtmlResponsive(html: string, signal: AbortSignal): Promise<string> {
-  const collector = createHtmlTextCollector();
-  const maybeYield = cooperativeYield();
-  const chunkCharacters = 64 * 1024;
-  for (let offset = 0; offset < html.length; offset += chunkCharacters) {
-    collector.parser.write(html.slice(offset, offset + chunkCharacters));
-    await maybeYield(signal);
-  }
-  collector.parser.end();
-  return collector.result();
-}
-
-export function convertHtmlToMarkdown(html: string): string {
-  const turndown = new TurndownService({
-    headingStyle: "atx",
-    hr: "---",
-    bulletListMarker: "-",
-    codeBlockStyle: "fenced",
-    emDelimiter: "*",
-  });
-  turndown.remove(["script", "style", "noscript", "iframe", "object", "embed", "meta", "link"]);
-  return turndown.turndown(html);
-}
-
-function pageContent(value: string, offset: number, limit: number) {
-  if (offset > 0 && offset >= value.length) throw new Error(`Offset ${offset} is beyond the response (${value.length} characters)`);
-  const splitsCharacter = (index: number) =>
-    value.charCodeAt(index - 1) >= 0xd800 && value.charCodeAt(index - 1) <= 0xdbff &&
-    value.charCodeAt(index) >= 0xdc00 && value.charCodeAt(index) <= 0xdfff;
-  if (splitsCharacter(offset)) throw new Error("Offset splits a character; use the continuation offset from the previous result");
-  let end = Math.min(value.length, offset + limit);
-  if (splitsCharacter(end)) end--;
-  if (end === offset && end < value.length) throw new Error("Page limit cannot fit the next character; use limit >= 2");
-  const more = end < value.length;
-  const notice = offset > 0 || more
-    ? `\n\n[Showing character offsets ${offset}–${end} of ${value.length} (end exclusive). ${more
-      ? `Use offset=${end} with the same URL and format only if more content is needed. Each call fetches the URL again.`
-      : "End of response."}]`
-    : "";
-  return {
-    content: value.slice(offset, end) + notice,
-    offset, shown: end - offset, totalCharacters: value.length,
-    ...(more ? { nextOffset: end } : {}),
-  };
-}
-
 export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebFetchArgs> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   return {
@@ -365,7 +245,7 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
         const signal = AbortSignal.any([context.signal, AbortSignal.timeout(Math.floor(timeoutSeconds * 1_000))]);
         const headers = {
           "User-Agent": BROWSER_USER_AGENT,
-          Accept: acceptHeader(format),
+          Accept: ACCEPT_HEADERS[format],
           "Accept-Language": "en-US,en;q=0.9",
         };
         let response = await fetchImpl(url, { headers, redirect: "follow", signal });

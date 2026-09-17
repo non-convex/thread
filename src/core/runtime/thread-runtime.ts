@@ -1,31 +1,29 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import path from "node:path";
 import { AgentRuntime, type TurnResult } from "../agent/runtime.js";
-import type { ModelCatalog, ModelClient } from "../agent/model-client.js";
+import type { ModelClient } from "../agent/model-client.js";
+import type { ModelCatalog } from "../agent/model-catalog.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
 import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
-import { AgentTaskRepository } from "../agent-task/repository.js";
 import { createWorkerProfile, DEFAULT_WORKER_SETTINGS, WORKER_PROFILE_ID, type WorkerProfileSettings } from "../agent-task/profile.js";
 import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
 import { createAgentRuntime } from "./create-agent-runtime.js";
 import { bindModel, ModelSelection } from "./model-selection.js";
-import { getThreadHome } from "../config/home.js";
 import type { ThreadState } from "./state.js";
 import { ContextBuilder } from "../context/builder.js";
 import { contextBudget } from "../context/budget.js";
 import { createDreamerProfile, DEFAULT_DREAMER_THINKING_LEVEL, DREAMER_PROFILE_ID } from "../dreamer/profile.js";
 import { DreamerScheduler } from "../dreamer/scheduler.js";
 import { ExtensionEvents, type ExtensionEventType, type ExtensionHandler } from "../extensions/events.js";
-import { FileHistoryService } from "../file-history/service.js";
+import type { FileHistoryService } from "../file-history/service.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
 import type { Project } from "../project/model.js";
-import { ProjectService } from "../project/service.js";
-import { SessionRecallService } from "../session-recall/service.js";
-import { SessionTreeRepository } from "../session-tree/repository.js";
-import { SessionTreeService } from "../session-tree/service.js";
+import type { SessionRecallService } from "../session-recall/service.js";
+import type { SessionTreeRepository } from "../session-tree/repository.js";
+import type { SessionTreeService } from "../session-tree/service.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
-import { formatSkillsSection, loadSkills, type LoadedSkills } from "../skills/loader.js";
+import { formatSkillsSection, type LoadedSkills } from "../skills/loader.js";
+import { openRuntimeResources, type RuntimeResources } from "./resources.js";
 import { createAskTool } from "../tools/ask.js";
 import { snapshotRuntimeOptions, snapshotTool, type ThreadRuntimeOptions, type RuntimeOptionsSnapshot, type PromptOptions, type RewindOptions } from "./options.js";
 import { createSessionReadTool, createSessionSearchTool } from "../tools/session-recall.js";
@@ -33,17 +31,6 @@ import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
 import { ToolRegistry, type AgentTool } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
 import { runtimeEventSink, withoutModelContent, safeRuntimeEvent, type RuntimeSubscriptionOptions, type RuntimeEvent, type RuntimeEventSink } from "./events.js";
-
-interface RuntimeResources {
-  project: Project;
-  repository: SessionTreeRepository;
-  tree: SessionTreeService;
-  fileHistory: FileHistoryService;
-  skills: LoadedSkills;
-  recall: SessionRecallService | undefined;
-  taskRepository: AgentTaskRepository;
-  memory: GlobalMemorySnapshots | undefined;
-}
 
 interface ActiveOperation {
   sessionId?: string;
@@ -129,28 +116,13 @@ export class ThreadRuntime {
 
   static async open(input: ThreadRuntimeOptions): Promise<ThreadRuntime> {
     const options = snapshotRuntimeOptions(input);
-    const project = await ProjectService.open(options.rootPath, options.stateDirectory ? { stateDirectory: options.stateDirectory } : {});
-    const skills = options.skills && "paths" in options.skills
-      ? await loadSkills(options.skills.paths.map((directory) => path.resolve(project.rootPath, directory)))
-      : options.skills ?? { skills: [], diagnostics: [] };
-    let repository: SessionTreeRepository | undefined;
-    let taskRepository: AgentTaskRepository | undefined;
-    let recall: SessionRecallService | undefined;
+    const resources = await openRuntimeResources(options);
     try {
-      repository = await SessionTreeRepository.open(project);
-      const tree = new SessionTreeService(repository);
-      await tree.initialize();
-      const memory = options.globalMemoryPath
-        ? await GlobalMemorySnapshots.open([...tree.projection.sessions.keys()], path.resolve(options.globalMemoryPath)) : undefined;
-      const fileHistory = new FileHistoryService(project, tree,
-        [options.stateDirectory ?? getThreadHome(), ...(memory ? [memory.filePath] : [])], options.fileCheckpoints ?? false);
-      recall = options.search ? new SessionRecallService(tree, options.search) : undefined;
-      taskRepository = await AgentTaskRepository.open(project);
-      const runtime = new ThreadRuntime(options, { project, repository, tree, fileHistory, skills, recall, taskRepository, memory });
+      const runtime = new ThreadRuntime(options, resources);
       await runtime.tasks.initialize();
       return runtime;
     } catch (error) {
-      await Promise.allSettled([recall?.close(), taskRepository?.close(), repository?.close()]);
+      await Promise.allSettled([resources.recall?.close(), resources.taskRepository.close(), resources.repository.close()]);
       throw error;
     }
   }

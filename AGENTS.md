@@ -5,6 +5,8 @@ Keep this guide short; put detailed behavior and design notes in the linked docs
 
 ## Code and documentation map
 
+For the execution path and shared implementation boundaries, see the [code map](docs/code-map.md).
+
 - `src/runtime.ts`, `src/core/runtime/`: public runtime API, configuration, events and lifecycle. See [runtime usage](docs/runtime.md).
 - `src/core/agent/`, `src/core/tools/`: model loop, tool execution and shared file-write boundary.
 - `src/app/`, `src/cli/`, `src/ui/`: coding defaults, commands, startup and presentation. See [TUI behavior](docs/tui.md).
@@ -25,5 +27,6 @@ Keep this guide short; put detailed behavior and design notes in the linked docs
 
 ## Change scope
 
-- Do not add or run tests unless strictly necessary. Routine edits, renames and refactors do not require tests by default.
+- Do not add or run tests unless strictly necessary for a concrete correctness risk. Keep only minimal, non-redundant coverage; routine edits, renames, refactors and visual tweaks should use focused code inspection.
+- When verification is necessary, use the smallest relevant check and stop once it resolves the concern. Remove one-off verification scripts, fixtures and generated captures afterward, including those under `.cache/`.
 - Do not add old-data compatibility, migration logic or legacy aliases unless the user explicitly requests them.

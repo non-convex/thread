@@ -131,6 +131,16 @@ export async function workspacePathClaim(
   return claim("workspace", normalizeResourcePath(await canonicalTarget(target)), access, options.scope ?? "exact");
 }
 
+/** Shared claims for built-in file tools; authorization and execution rechecks stay separate. */
+export function fileAccess(access: ToolResourceAccess, scope: ToolResourceScope = "exact"): ToolExecutionPolicy<{ path?: string }> {
+  return { effect: access, mode: "parallel", resources: async (args, context) => [
+    await workspacePathClaim(context.rootPath, args.path ?? (access === "read" ? "." : ""), access, {
+      forWrite: access === "write", allowOutside: access === "read", scope,
+      ...(access === "write" && context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+    }),
+  ] };
+}
+
 /** Preserve ordinary relative paths for display, but resolve aliases before host authorization. */
 export async function prepareFilePath<T extends Record<string, unknown> & { path?: string }>(
   args: T, context: ToolPlanningContext, options: { forWrite?: boolean; defaultPath?: string; literal?: boolean } = {},

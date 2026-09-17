@@ -150,7 +150,10 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 
 - `src/ui/terminal/theme.ts`：色板、syntax style、meter、图标、JSON 探测。
 - `src/ui/terminal/session-screen.tsx`：主屏幕、页脚、浮层、输入框和附件行。
+- `src/ui/terminal/composer-state.ts`：输入草稿、附件、粘贴进度，以及清空草稿后的异步结果隔离。
 - `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。
+- `src/ui/terminal/widgets.tsx`：浮层共用的单行文字、选项行、标题和状态区。
+- `src/ui/terminal/ask-input.ts`：当前提问的选项、自由回答和翻页。
 - `src/ui/images.ts`：图片限制、缩放、编码和路径附件。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。
 - `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`，按原调用位置合并结果。
@@ -158,4 +161,5 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。
 - `src/ui/terminal/spinner.tsx`：共享动画时钟。
 - `src/ui/events.ts` / `src/ui/state.ts`：展示事件、live 状态、`tool_finished.content`。
+- `src/ui/reducer.ts` / `src/ui/transcript-stream.ts`：状态更新；主 agent 与 Worker 共用文字和工具调用的流式更新规则。
 - `src/core/agent/tool-call-executor.ts`：生成工具执行事件，由 UI 订阅展示。

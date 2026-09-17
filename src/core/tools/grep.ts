@@ -3,15 +3,14 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { Type } from "@earendil-works/pi-ai";
 import { ProcessError, runProcess } from "../utils/process.js";
-import { prepareFilePath, resolveToolPath, workspacePathClaim, type ToolPlanningContext } from "./execution.js";
-import type { AgentTool, ToolResult } from "./types.js";
+import { prepareFilePath, resolveToolPath, fileAccess, type ToolPlanningContext } from "./execution.js";
+import type { AgentTool } from "./types.js";
+import { ok, fail, limited, clampInt } from "./results.js";
 import {
-  assertCursorCompatible, clampInt, decodeGrepCursor, presentContentPage, presentFilesPage,
+  assertCursorCompatible, decodeGrepCursor, presentContentPage, presentFilesPage,
   renderMatchWithContext, searchFromArgs, GREP_DEFAULT_LIMIT, GREP_MAX_CONTEXT, GREP_MAX_LIMIT,
-  GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepDetails, type GrepMatch, type GrepSearch,
+  GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepMatch, type GrepSearch,
 } from "./grep-results.js";
-
-const MODEL_OUTPUT_LIMIT = 64 * 1024;
 
 type PreparedGrepArgs = GrepSearch & { offset: number; limit: number };
 
@@ -25,19 +24,6 @@ async function prepareGrep(args: GrepArgs, context: ToolPlanningContext): Promis
     assertCursorCompatible({ ...args, ...explicit, pattern }, search);
   }
   return { ...search, offset: cursor?.offset ?? 0, limit: clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT) };
-}
-
-function ok(content: string, details?: GrepDetails): ToolResult {
-  return { content, isError: false, ...(details === undefined ? {} : { details }) };
-}
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
-
-function limited(value: string, max = MODEL_OUTPUT_LIMIT): string {
-  if (Buffer.byteLength(value, "utf8") <= max) return value;
-  return `${Buffer.from(value, "utf8").subarray(0, max).toString("utf8")}\n[output truncated at ${max} bytes]`;
 }
 
 export function grepFilePath(root: string, absolute: string): string {
@@ -234,16 +220,7 @@ export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
   }),
   replay: "safe",
   prepare: prepareGrep,
-  execution: {
-    effect: "read",
-    mode: "parallel",
-    resources: async (args, context) => [
-      await workspacePathClaim(context.rootPath, args.path, "read", {
-        allowOutside: true,
-        scope: "subtree",
-      }),
-    ],
-  },
+  execution: fileAccess("read", "subtree"),
   async execute(args, context) {
     try {
       context.signal.throwIfAborted();

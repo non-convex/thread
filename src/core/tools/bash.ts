@@ -7,6 +7,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { runProcess, type ProcessResult } from "../utils/process.js";
 import { claim, entireWorkspaceClaim } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
+import { fail } from "./results.js";
 
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 export const BASH_MAX_TIMEOUT_MS = 300_000;
@@ -22,10 +23,6 @@ const GIT_BASH_RELATIVE_PATHS = [
   "Git\\bin\\bash.exe",
   "Git\\usr\\bin\\bash.exe",
 ] as const;
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
 
 function gitBashFromGitExecutable(): string[] {
   const gitPath = which("git");

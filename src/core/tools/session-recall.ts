@@ -3,6 +3,7 @@ import type { SessionRecallService } from "../session-recall/service.js";
 import type { RecallSearchResult, SessionTurnDetail } from "../session-recall/types.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
+import { fail } from "./results.js";
 
 const STALENESS_NOTICE = "Historical Session Tree evidence; verify the current workspace when correctness depends on it.";
 const DEFAULT_LIMIT = 8;
@@ -10,10 +11,6 @@ const MAX_LIMIT = 50;
 export const SESSION_READ_MAX_BYTES = 64 * 1024;
 // Leave room for the range, staleness notice, and continuation instructions.
 const SESSION_READ_FOOTER_BYTES = 512;
-
-function fail(error: unknown): ToolResult {
-  return { content: error instanceof Error ? error.message : String(error), isError: true };
-}
 
 function formatSearch(result: RecallSearchResult): string {
   const header = [

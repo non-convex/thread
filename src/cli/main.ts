@@ -2,7 +2,7 @@
 import { stderr as errorOutput, stdout as output } from "node:process";
 import { resolve } from "node:path";
 import { ThreadApp } from "../app/thread-app.js";
-import { createConfiguredModelCatalog } from "../core/agent/model-client.js";
+import { createConfiguredModelCatalog } from "../core/agent/model-catalog.js";
 import type { AgentProfileDiagnostic } from "../core/agent/profile.js";
 import { WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
 import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
