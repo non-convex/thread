@@ -142,6 +142,10 @@ Meter 用 `█▓▒░` 做 8 格含半格。颜色按用量：`< 60%` muted，
 
 TUI 和 agent 执行解耦。所有展示事件经 `safeUiEvent` 进入 `UiEventBatcher`：约 33ms 一帧，相邻的 text/thinking delta（含 worker trace）会拼成一条。渲染失败不影响持久执行。
 
+打开模型、Agent 等菜单只更新浮层，不重新读取会话或计算历史预览。会话切换、回退、回合结束和成功的手动压缩才刷新聊天记录；同一次输入的结束事件与返回结果合并成一次刷新。切换模型或 Agent 设置仍更新相关上下文统计，`/clear` 不会被命令收尾重新加载的历史覆盖。
+
+工具预览依赖正文、显示宽度和预览规则，不因历史快照换了一批对象而重新折行。普通折叠预览取得足够的屏幕行后停止计算；Bash 保留原有的首尾预览规则。
+
 动画共用一个 100ms 时钟。状态行耗时和所有 spinner 读同一个 signal，避免每个工具自己 `setInterval` 把 OpenTUI 顶到 max FPS。
 
 Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动条隐藏。鼠标滚轮有单独的加速度曲线。

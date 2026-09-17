@@ -125,19 +125,25 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /** Bound previews by terminal columns, including wide characters and long single-line output. */
 export function toolPreview(content: string, width: number, maxRows: number, tail = false): { text: string; clipped: boolean } {
   const columns = Math.max(1, Math.floor(width));
+  const headOnly = !tail || maxRows < 4;
   const rows: string[] = [];
   for (const line of content.split("\n")) {
+    if (headOnly && rows.length >= maxRows) return { text: rows.join("\n"), clipped: true };
     let row = "";
     let used = 0;
     for (const { segment } of graphemes.segment(line)) {
       const size = stringWidth(segment);
-      if (used + size > columns && row) { rows.push(row); row = ""; used = 0; }
+      if (used + size > columns && row) {
+        rows.push(row);
+        if (headOnly && rows.length >= maxRows) return { text: rows.join("\n"), clipped: true };
+        row = "";
+        used = 0;
+      }
       row += segment;
       used += size;
     }
     rows.push(row);
   }
   if (rows.length <= maxRows) return { text: rows.join("\n"), clipped: false };
-  if (!tail || maxRows < 4) return { text: rows.slice(0, maxRows).join("\n"), clipped: true };
   return { text: [...rows.slice(0, 2), "…", ...rows.slice(-(maxRows - 3))].join("\n"), clipped: true };
 }

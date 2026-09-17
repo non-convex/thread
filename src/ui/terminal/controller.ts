@@ -57,6 +57,7 @@ export class ThreadTuiController {
   private readonly viewHistory: UiScreen[] = [];
   private readonly batcher: UiEventBatcher;
   private active: AbortController | undefined;
+  private historyDirty = true;
   private stopped = false;
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
@@ -189,7 +190,7 @@ export class ThreadTuiController {
       return;
     }
     if (!level) return;
-    this.refreshMeta();
+    this.meta.thinkingLevel = level;
     this.state.notice = { level: "info", text: `Thinking: ${level}` };
     this.notify();
   }
@@ -285,14 +286,17 @@ export class ThreadTuiController {
       });
       if (this.stopped || this.disposed) return true;
       this.batcher.flush();
+      if (result.kind === "turn") this.historyDirty = true;
+      const historyChanged = this.syncTranscript();
+      if (historyChanged) this.state.liveTurn = undefined;
+      if (historyChanged || (result.kind === "command" && result.result.changedState)) this.refreshMeta();
       if (result.kind === "command") this.presentCommand(result.result);
-      this.syncTranscript();
-      this.state.liveTurn = undefined;
-      this.refreshMeta();
       return true;
     } catch (error) {
       if (this.stopped || this.disposed) return false;
       this.batcher.flush();
+      // A failed turn may have persisted messages without reaching turn_finished.
+      this.historyDirty ||= this.state.liveTurn !== undefined;
       this.syncTranscript();
       this.state.liveTurn = undefined;
       this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
@@ -329,22 +333,25 @@ export class ThreadTuiController {
     if (this.stopped || this.disposed) return;
     let kind: UiNotifyKind = "live";
     let applied = false;
-    let historyChanged = false;
     let settled = false;
     for (const event of events) {
       try {
         reduceUiEvent(this.state, event);
         if (event.type === "context_updated") this.meta.contextPercent = event.percent;
         if (notifyKind(event) === "full") kind = "full";
-        if (event.type === "turn_finished") { historyChanged = true; settled = true; }
-        else if (event.type === "turn_preparing" || event.type === "turn_started") settled = false;
+        if (event.type === "turn_finished" || (event.type === "session_changed" && event.reason !== "turn")) {
+          this.historyDirty = true;
+          settled = true;
+        } else if (event.type === "compaction_finished" && event.reason === "manual" && event.ok && event.entryId) {
+          this.historyDirty = true;
+        } else if (event.type === "turn_preparing" || event.type === "turn_started") settled = false;
         applied = true;
       } catch {
         // One malformed presentation event must not discard the rest of its frame.
       }
     }
-    if (historyChanged) {
-      this.syncTranscript();
+    // Owned input flushes once on completion; external runtime turns refresh here.
+    if (!this.active && this.syncTranscript()) {
       if (settled) {
         this.state.liveTurn = undefined;
         this.state.busy = false;
@@ -416,7 +423,9 @@ export class ThreadTuiController {
     }
   }
 
-  private syncTranscript(): void {
+  private syncTranscript(): boolean {
+    // Opening a picker changes UI state, not the persisted conversation.
+    if (!this.historyDirty && this.state.sessionId === this.app.selectedSessionId) return false;
     const { session, liveTipTurnId, turns, entries, tasks } = this.app.runtime.readSession(this.app.selectedSessionId);
     const transcript = projectTranscript(entries, tasks);
     const last = turns.at(-1);
@@ -426,6 +435,8 @@ export class ThreadTuiController {
     this.state.transcript = transcript;
     this.state.sessionId = session.id;
     this.state.liveTipTurnId = liveTipTurnId;
+    this.historyDirty = false;
+    return true;
   }
 
   private refreshGit(): void {

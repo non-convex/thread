@@ -23,8 +23,10 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
   const presentation = createMemo(() => presentTool(props.tool, props.content));
   const args = createMemo(() => cleanToolText(toolArguments(props.tool)));
   const body = createMemo(() => formatToolText(presentation().body));
-  const previewRows = () => props.tool.name === "edit" || props.tool.name === "write" ? 10 : 5;
-  const preview = createMemo(() => toolPreview(body(), bodyWidth(), previewRows(), props.tool.name === "bash"));
+  // History snapshots replace tool objects; unchanged preview inputs stay cached.
+  const previewRows = createMemo(() => props.tool.name === "edit" || props.tool.name === "write" ? 10 : 5);
+  const tailPreview = createMemo(() => props.tool.name === "bash");
+  const preview = createMemo(() => toolPreview(body(), bodyWidth(), previewRows(), tailPreview()));
   const result = createMemo(() => formatToolText(props.content));
   const output = createMemo(() => presentation().diff ? body() : expanded() ? result() : preview().text);
   const diffLines = createMemo(() => {
