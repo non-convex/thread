@@ -11,7 +11,8 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
   const theme = props.resources.theme;
   const renderer = useRenderer();
   const [expanded, setExpanded] = createSignal(false);
-  const [titleClipped, setTitleClipped] = createSignal(false);
+  const [titleLines, setTitleLines] = createSignal(1);
+  const titleRows = () => props.tool.name === "bash" ? 3 : 1;
   let titleText: TextRenderable | undefined;
   const [bodyWidth, setBodyWidth] = createSignal(70);
   const running = () => props.tool.status === "running";
@@ -40,6 +41,7 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
       id={`tool-view:${props.tool.id}`}
       flexDirection="column"
       width="100%"
+      flexShrink={0}
       marginBottom={1}
       onMouseUp={(event) => {
         if (event.button !== MouseButton.LEFT || renderer.getSelection()?.getSelectedText()) return;
@@ -47,27 +49,28 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
         setExpanded((value) => !value);
       }}
     >
-      <box flexDirection="row" width="100%">
+      <box flexDirection="row" width="100%" flexShrink={0}>
         <Show when={running()} fallback={<text width={2} height={1} fg={colour()}>{icon()}</text>}>
           <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
         <text flexShrink={0} height={1} fg={theme.accent} attributes={bold}>{props.tool.name}</text>
-        <text
-          marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
-          maxHeight={props.tool.name === "bash" ? 3 : 1} wrapMode="word" truncate={true}
-          fg={theme.text}
-          ref={(node) => { titleText = node; }}
-          on:line-info-change={() => setTitleClipped(!!titleText && titleText.virtualLineCount > titleText.height)}
-        >{args()}</text>
+        {/* Clip on the parent: text measurement may round past its own maxHeight. */}
+        <box marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
+          maxHeight={titleRows()} overflow="hidden">
+          <text width="100%" flexShrink={0} wrapMode="word" fg={theme.text}
+            ref={(node) => { titleText = node; }}
+            on:line-info-change={() => setTitleLines(titleText?.virtualLineCount ?? 1)}
+          >{args()}</text>
+        </box>
         <Show when={duration()}>
           <text marginLeft={1} flexShrink={0} height={1} fg={theme.faint}>{duration()}</text>
         </Show>
         <text marginLeft={1} flexShrink={0} width={4} height={1} fg={theme.muted} selectable={false}>
-          {titleClipped() ? "… " : "  "}{expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
+          {titleLines() > titleRows() ? "… " : "  "}{expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
         </text>
       </box>
-      <box flexDirection="column" width="100%" paddingLeft={3}>
+      <box flexDirection="column" width="100%" paddingLeft={3} flexShrink={0}>
         <Show when={presentation().summary}>
           <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{presentation().summary}</text>
         </Show>
