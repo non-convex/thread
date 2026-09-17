@@ -10,13 +10,13 @@ export type { RecallSearchResult, RecallSearchHit, SessionTurnDetail, ReadOption
 export { FileHistoryService, type FileEditTracker, type FileContents } from "./core/file-history/service.js";
 export { FileHistoryStore } from "./core/file-history/store.js";
 export { ContextBuilder, type BuiltContext } from "./core/context/builder.js";
+export { ContextCompactionService } from "./core/context/compaction/service.js";
 export {
-  ContextCompactionService,
   COMPACTION_MIN_RETAINED_STEPS,
   COMPACTION_HISTORY_RESERVE_TOKENS,
   COMPACTION_PROGRESS_RESERVE_TOKENS,
   COMPACTION_TARGET_TOKENS,
-} from "./core/context/compaction/index.js";
+} from "./core/context/compaction/policy.js";
 export { AgentRuntime } from "./core/agent/runtime.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./core/agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./core/agent/execution-journal.js";

@@ -30,10 +30,6 @@ export function historySummaryInstruction(): string {
   return `${HISTORY_INSTRUCTION}\n\n${currentTimeAnchor()}\n\nDo not call any tools. Return only the Markdown document body.`;
 }
 
-export function isHistorySummaryInstruction(text: string): boolean {
-  return text.includes("Compact the earlier part of this conversation into a complete project-state document");
-}
-
 /**
  * Generate the cumulative project-state document. The previous document is part
  * of the sliced context, so the model updates it in place rather than restating it.

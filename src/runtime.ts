@@ -43,7 +43,7 @@ export { claim, entireWorkspaceClaim, noResources, singletonResource, workspaceP
 export type { Project } from "./core/project/model.js";
 export type { ProjectSession, SessionEntry, Turn } from "./core/session-tree/model.js";
 export type { RewindCandidate } from "./core/session-tree/service.js";
-export type { CompactionResult } from "./core/context/compaction/index.js";
+export type { CompactionResult } from "./core/context/compaction/service.js";
 export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./core/skills/loader.js";
 
 export type { ModelAttemptEvent } from "./core/agent/model-observation.js";

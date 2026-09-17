@@ -9,10 +9,6 @@ export function stableId(prefix: string, value: string, length = 20): string {
   return `${prefix}_${digest}`;
 }
 
-export function sha256(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 const HASH_CHUNK_BYTES = 1024 * 1024;
 
 /** Hash large buffers without monopolizing the event loop for one whole file. */

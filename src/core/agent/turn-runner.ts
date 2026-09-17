@@ -2,10 +2,7 @@ import { createId } from "../utils/id.js";
 import { type AssistantMessage, type Context, type ImageContent, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
-import {
-  type ContextCompactionService,
-  type CompactionResult,
-} from "../context/compaction/index.js";
+import type { ContextCompactionService, CompactionResult } from "../context/compaction/service.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";

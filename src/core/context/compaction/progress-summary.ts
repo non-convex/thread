@@ -62,7 +62,3 @@ export function generateProgressSummary(options: {
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
   });
 }
-
-export function isProgressSummaryInstruction(text: string): boolean {
-  return text.includes(PROGRESS_REQUEST);
-}

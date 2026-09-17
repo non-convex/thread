@@ -1,5 +1,5 @@
 import { contentText, type AssistantMessage } from "@earendil-works/pi-ai";
-import type { CompactionResult } from "../context/compaction/index.js";
+import type { CompactionResult } from "../context/compaction/service.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { Turn } from "../session-tree/model.js";

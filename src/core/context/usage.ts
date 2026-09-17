@@ -31,11 +31,6 @@ export interface CacheHitTotals {
   missed: number;
 }
 
-/** Only prompt tokens count; a cache write is a miss, not a cache hit. */
-export function cacheHitTotals(usage: Usage): CacheHitTotals {
-  return { cacheRead: usage.cacheRead, missed: usage.input + usage.cacheWrite };
-}
-
 export function cacheHitPercent(totals: CacheHitTotals): number | null {
   const prompt = totals.cacheRead + totals.missed;
   if (prompt <= 0) return null;
@@ -52,19 +47,10 @@ const CACHE_MISS_NOISE_FLOOR_TOKENS = 1024;
 export interface CacheMiss {
   /** Prompt tokens that were in the previous request's prompt but not read from cache. */
   missedTokens: number;
-  /** Extra cost versus a full cache hit; 0 when the provider reports no pricing. */
-  missedCost: number;
   /** Milliseconds since the previous request, which last refreshed the cache. */
   idleMs: number;
   /** True when this request used a different model than the previous one. */
   modelChanged: boolean;
-}
-
-export interface CacheWasteTotals {
-  missedTokens: number;
-  missedCost: number;
-  /** Number of counted misses; turns below the noise floor are excluded. */
-  missCount: number;
 }
 
 /** The last request seen while scanning; everything in its prompt should still be cached. */
@@ -77,9 +63,7 @@ interface PreviousRequest {
 }
 
 function assistantModelKey(message: AssistantMessage): string {
-  const provider = (message as AssistantMessage & { provider?: string }).provider ?? "";
-  const model = (message as AssistantMessage & { model?: string }).model ?? "";
-  return `${provider}/${model}`;
+  return `${message.provider ?? ""}/${message.model ?? ""}`;
 }
 
 /** Count previously cached tokens paid for again, excluding rewrites and breakpoint noise. */
@@ -92,13 +76,8 @@ function detectMiss(previous: PreviousRequest | undefined, message: AssistantMes
   const missedTokens = Math.min(previous.promptTokens, promptTokens) - usage.cacheRead;
   if (missedTokens <= CACHE_MISS_NOISE_FLOOR_TOKENS) return undefined;
 
-  // Compare the actual input/write rate against the cache-read rate.
-  const paidTokens = usage.input + usage.cacheWrite;
-  const paidPerToken = paidTokens > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paidTokens : 0;
-  const readPerToken = usage.cacheRead > 0 ? usage.cost.cacheRead / usage.cacheRead : 0;
   return {
     missedTokens,
-    missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken),
     idleMs: Math.max(0, message.timestamp - previous.timestamp),
     modelChanged: assistantModelKey(message) !== previous.modelKey,
   };
@@ -117,7 +96,7 @@ function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): P
 }
 
 export interface CacheScan {
-  totals: CacheWasteTotals;
+  missedTokens: number;
   /** Counted misses keyed by the assistant message that paid for them. */
   misses: Map<AssistantMessage, CacheMiss>;
   /** Hit ratio over the segment after the newest prefix rewrite. */
@@ -127,7 +106,7 @@ export interface CacheScan {
 /** Prefix rewrites reset cache comparisons. Model switches and failed requests still incur cost. */
 export function scanCacheUsage(messages: readonly Message[]): CacheScan {
   let previous: PreviousRequest | undefined;
-  const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
+  let missedTokens = 0;
   const misses = new Map<AssistantMessage, CacheMiss>();
   let hitTotals: CacheHitTotals = { cacheRead: 0, missed: 0 };
 
@@ -142,17 +121,15 @@ export function scanCacheUsage(messages: readonly Message[]): CacheScan {
     if (assistant.usage.totalTokens <= 0 && assistant.usage.input <= 0) continue;
     const miss = detectMiss(previous, assistant);
     if (miss) {
-      totals.missedTokens += miss.missedTokens;
-      totals.missedCost += miss.missedCost;
-      totals.missCount += 1;
+      missedTokens += miss.missedTokens;
       misses.set(assistant, miss);
     }
-    const hits = cacheHitTotals(assistant.usage);
-    hitTotals.cacheRead += hits.cacheRead;
-    hitTotals.missed += hits.missed;
+    // Only prompt tokens count; a cache write is a miss, not a cache hit.
+    hitTotals.cacheRead += assistant.usage.cacheRead;
+    hitTotals.missed += assistant.usage.input + assistant.usage.cacheWrite;
     previous = asPreviousRequest(assistant, previous?.reportedCache ?? false) ?? previous;
   }
-  return { totals, misses, hitTotals };
+  return { missedTokens, misses, hitTotals };
 }
 
 /** A prepended compaction summary replaces the reusable request prefix. */
