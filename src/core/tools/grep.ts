@@ -7,7 +7,7 @@ import { prepareFilePath, resolveToolPath, fileAccess, type ToolPlanningContext 
 import type { AgentTool } from "./types.js";
 import { ok, fail, limited, clampInt } from "./results.js";
 import {
-  assertCursorCompatible, decodeGrepCursor, presentContentPage, presentFilesPage,
+  assertCursorCompatible, decodeGrepCursor, presentPage,
   renderMatchWithContext, searchFromArgs, GREP_DEFAULT_LIMIT, GREP_MAX_CONTEXT, GREP_MAX_LIMIT,
   GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepMatch, type GrepSearch,
 } from "./grep-results.js";
@@ -55,28 +55,20 @@ function orderMatches(
   gitBoost: Map<string, number>,
   mtimes: Map<string, number>,
 ): GrepMatch[] {
-  const files = [...new Set(matches.map((match) => match.file))];
-  files.sort((left, right) => {
-    const git = (gitBoost.get(right) ?? 0) - (gitBoost.get(left) ?? 0);
-    if (git !== 0) return git;
-    const time = (mtimes.get(right) ?? 0) - (mtimes.get(left) ?? 0);
-    if (time !== 0) return time;
-    return left.localeCompare(right);
-  });
   const grouped = new Map<string, GrepMatch[]>();
   for (const match of matches) {
     const list = grouped.get(match.file) ?? [];
     list.push(match);
     grouped.set(match.file, list);
   }
-  const ordered: GrepMatch[] = [];
-  for (const file of files) {
-    const list = grouped.get(file);
-    if (!list) continue;
-    list.sort((left, right) => left.line - right.line);
-    ordered.push(...list);
-  }
-  return ordered;
+  const files = [...grouped.keys()].sort((left, right) => {
+    const git = (gitBoost.get(right) ?? 0) - (gitBoost.get(left) ?? 0);
+    if (git !== 0) return git;
+    const time = (mtimes.get(right) ?? 0) - (mtimes.get(left) ?? 0);
+    if (time !== 0) return time;
+    return left.localeCompare(right);
+  });
+  return files.flatMap((file) => grouped.get(file)!.sort((left, right) => left.line - right.line));
 }
 
 interface RgMatchEvent {
@@ -242,19 +234,15 @@ export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
       const gitBoost = await gitBoostFor(context.rootPath, context.signal);
       const mtimes = await mtimesFor(context.rootPath, new Set(parsed.matches.map((match) => match.file)));
       const ordered = orderMatches(parsed.matches, gitBoost, mtimes);
-      if (search.outputMode === "files") {
-        const presented = presentFilesPage({ ordered, offset, limit, search, scanCapped: parsed.scanCapped });
-        return ok(limited(presented.content), presented.details);
-      }
-      const page = ordered.slice(offset, offset + limit);
-      const renderLine = await renderMatchWithContext(context, page, search.context);
-      const presented = presentContentPage({
+      const renderLine = search.outputMode === "files" ? undefined
+        : await renderMatchWithContext(context, ordered.slice(offset, offset + limit), search.context);
+      const presented = presentPage({
         ordered,
         offset,
         limit,
         search,
         scanCapped: parsed.scanCapped,
-        renderLine,
+        ...(renderLine ? { renderLine } : {}),
       });
       return ok(limited(presented.content), presented.details);
     } catch (error) {

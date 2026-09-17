@@ -91,11 +91,9 @@ function fileTotals(matches: GrepMatch[]): Map<string, number> {
   return totals;
 }
 
-export function presentFilesPage(options: PageOptions) { return presentPage(options, true); }
-export function presentContentPage(options: PageOptions) { return presentPage(options, false); }
-
-function presentPage(options: PageOptions, filesMode: boolean): { content: string; details: GrepDetails } {
+export function presentPage(options: PageOptions): { content: string; details: GrepDetails } {
   const { ordered, offset, limit, search, scanCapped } = options;
+  const filesMode = search.outputMode === "files";
   const totals = fileTotals(ordered);
   const files = [...totals.keys()];
   const total = filesMode ? files.length : ordered.length;
