@@ -1,6 +1,7 @@
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FileContents, SaveBeforeWrite } from "../file-history/service.js";
+import type { GlobalMemoryCommit } from "../global-memory.js";
 import { assertFileWriteScope, samePath } from "./path-safety.js";
 import { resolveToolPath } from "./execution.js";
 import type { ToolContext } from "./types.js";
@@ -17,7 +18,7 @@ export async function updateFile(
     return target;
   };
   const target = await resolveTarget();
-  const operation = async (save: SaveBeforeWrite) => {
+  const operation = async (save: SaveBeforeWrite, commit?: GlobalMemoryCommit) => {
     context.signal.throwIfAborted();
     if (!samePath(await resolveTarget(), target)) throw new Error(`File target changed while waiting to write: ${inputPath}`);
     let before: FileContents | undefined;
@@ -32,12 +33,16 @@ export async function updateFile(
     if (!before?.content.equals(content)) {
       await save(before);
       context.signal.throwIfAborted();
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, content);
+      if (commit) await commit(before, content);
+      else {
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, content);
+      }
     }
     return { existed: before !== undefined, bytes: content.length };
   };
-  return context.fileHistory
-    ? context.fileHistory.track(target, operation)
-    : operation(async () => undefined);
+  const write = (commit?: GlobalMemoryCommit) => context.fileHistory
+    ? context.fileHistory.track(target, (save) => operation(save, commit))
+    : operation(async () => undefined, commit);
+  return context.globalMemory ? context.globalMemory.write(target, context, write) : write();
 }

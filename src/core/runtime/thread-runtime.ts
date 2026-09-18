@@ -499,6 +499,7 @@ export class ThreadRuntime {
       rootPath: this.rootPath, systemPrompt, tree: this.tree, fileHistory: this.files, contextBuilder: this.builder,
       tools: this.toolRegistry, extensions: this.extensions, agentTasks: this.tasks, askPresenter: () => this.askPresenter,
       writableExternalPaths: [...(this.options.writableExternalPaths ?? []), ...(this.memory ? [this.memory.filePath] : [])],
+      ...(this.memory ? { globalMemoryPath: this.memory.filePath } : {}),
       ...(this.options.toolPolicy ? { toolPolicy: this.options.toolPolicy } : {}), profileId: MAIN_AGENT_PROFILE_ID });
   }
 

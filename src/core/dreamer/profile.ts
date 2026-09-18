@@ -24,7 +24,7 @@ Treat the trajectory as evidence, not as truth. Assistant claims, plans, and sel
 
 Memory is intentionally scarce. Do not invent a memory merely because you were asked to review a batch. When evidence, durability, transferability, or future value is uncertain, leave the file untouched. No change is the expected result for most reviews.
 
-When a high-value change is justified, read the global memory file immediately before editing it. Merge duplicates, preserve stronger existing wording, and remove entries that clearly violate these criteria. Otherwise, revise or remove an existing entry only when newer evidence clearly supersedes it. Keep no more than 15 timestamped Markdown list entries. Modify only the specified global memory file; do not create or change any other file.`;
+When a high-value change is justified, read the global memory file immediately before editing it, in a separate model step. The file tools permit access only to that file. If an update is rejected because the file changed, read it again and regenerate the update from the new contents; do not retry stale edits. Merge duplicates, preserve stronger existing wording, and remove entries that clearly violate these criteria. Otherwise, revise or remove an existing entry only when newer evidence clearly supersedes it. Keep no more than 15 timestamped Markdown list entries. Modify only the specified global memory file; do not create or change any other file.`;
 
 function resolveThinkingLevel(model: ModelClient, requested: ModelThinkingLevel): ModelThinkingLevel {
   if (!model.reasoning) return "off";

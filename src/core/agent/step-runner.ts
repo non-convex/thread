@@ -48,6 +48,7 @@ export class AgentStepRunner {
   ) {}
 
   async run(context: Context, journal: ExecutionJournal, options: AgentStepOptions): Promise<AgentStepResult> {
+    this.toolRunner.observeModelContext(context.messages);
     options = { ...options, onUiEvent: executionEventSink(journal.identity, options.onUiEvent) };
     let assistantEntryId = journal.planAssistantEntryId();
     safeExecutionEvent(options.onUiEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });

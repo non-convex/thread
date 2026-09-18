@@ -118,23 +118,26 @@ export const readTool: AgentTool<ReadArgs> = {
       const offset = clampInt(args.offset, 1, Number.MAX_SAFE_INTEGER, 1);
       const limit = clampInt(args.limit, 1, READ_MAX_LIMIT, READ_DEFAULT_LIMIT);
       const target = await resolveToolPath(context, args.path);
-      const info = await stat(target);
-      if (!info.isFile()) throw new Error(`Not a file: ${args.path}`);
-      if (!info.size) return ok("(empty file)", { offset, shown: 0, total: 0 });
-      let page: ReadWindow;
-      if (info.size <= SLURP_MAX_BYTES) {
-        const buffer = await readFile(target, { signal: context.signal });
-        if (buffer.includes(0)) throw new Error(`Binary file (${info.size} bytes): ${args.path}`);
-        const lines = splitLines(buffer.toString("utf8"));
-        page = await collectWindow(lines.slice(offset - 1), offset, limit, lines.length);
-      } else {
-        if (await hasNulPrefix(target, info.size)) throw new Error(`Binary file (${info.size} bytes): ${args.path}`);
-        page = await streamWindow(target, offset, limit, context.signal);
-      }
-      if (page.firstLineBytes !== undefined) throw new Error(`Line ${offset} is ${page.firstLineBytes} bytes, exceeds the 64KB limit.`);
-      if (!page.window.length && offset > 1) throw new Error(`Offset ${offset} is beyond end of file (${page.total ?? page.scannedLines} lines total)`);
-      const presented = presentRead(page);
-      return ok(presented.content, presented.details);
+      const read = async () => {
+        const info = await stat(target);
+        if (!info.isFile()) throw new Error(`Not a file: ${args.path}`);
+        if (!info.size) return ok("(empty file)", { offset, shown: 0, total: 0 });
+        let page: ReadWindow;
+        if (info.size <= SLURP_MAX_BYTES) {
+          const buffer = await readFile(target, { signal: context.signal });
+          if (buffer.includes(0)) throw new Error(`Binary file (${info.size} bytes): ${args.path}`);
+          const lines = splitLines(buffer.toString("utf8"));
+          page = await collectWindow(lines.slice(offset - 1), offset, limit, lines.length);
+        } else {
+          if (await hasNulPrefix(target, info.size)) throw new Error(`Binary file (${info.size} bytes): ${args.path}`);
+          page = await streamWindow(target, offset, limit, context.signal);
+        }
+        if (page.firstLineBytes !== undefined) throw new Error(`Line ${offset} is ${page.firstLineBytes} bytes, exceeds the 64KB limit.`);
+        if (!page.window.length && offset > 1) throw new Error(`Offset ${offset} is beyond end of file (${page.total ?? page.scannedLines} lines total)`);
+        const presented = presentRead(page);
+        return ok(presented.content, presented.details);
+      };
+      return await (context.globalMemory ? context.globalMemory.read(target, context, read) : read());
     } catch (error) { return fail(error); }
   },
 };

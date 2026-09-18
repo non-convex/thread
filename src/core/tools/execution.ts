@@ -90,7 +90,7 @@ function normalizeResourcePath(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-async function canonicalTarget(target: string): Promise<string> {
+export async function canonicalTarget(target: string): Promise<string> {
   try {
     return await realPath(target);
   } catch (error) {

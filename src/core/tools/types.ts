@@ -26,6 +26,8 @@ export interface ToolContext {
   /** Resources approved and reserved for this invocation. Absent for direct tool calls. */
   resources?: readonly ToolResourceClaim[];
   fileHistory?: import("../file-history/service.js").FileEditTracker;
+  /** Per-execution observations and coordinated access to the configured memory file. */
+  globalMemory?: import("../global-memory.js").GlobalMemoryAccess;
   invocation: {
     executionId: string;
     assistantEntryId: string;

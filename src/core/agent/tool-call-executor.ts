@@ -44,6 +44,7 @@ export interface ToolExecutorOptions {
   askPresenter?: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
   fileHistory?: (executionId: string) => FileEditTracker;
+  globalMemory?: import("../global-memory.js").GlobalMemoryAccess;
   toolPolicy?: HostToolPolicy;
   agentId?: string;
   writeScope?: readonly import("../tools/path-safety.js").FileWriteScope[];
@@ -64,6 +65,10 @@ export class ToolCallExecutor {
     private readonly extensions: ExtensionEvents,
     private readonly options: ToolExecutorOptions = {},
   ) {}
+
+  observeModelContext(messages: readonly Message[]): void {
+    this.options.globalMemory?.observeModelContext(messages);
+  }
 
   async prepare(input: {
     journal: ExecutionJournal;
@@ -222,6 +227,7 @@ export class ToolCallExecutor {
       const context: ToolContext = {
         ...(this.options.fileHistory ? { fileHistory: this.options.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
+        ...(this.options.globalMemory ? { globalMemory: this.options.globalMemory } : {}),
         ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
         ...(this.options.writableExternalPaths?.length
           ? { writableExternalPaths: this.options.writableExternalPaths }

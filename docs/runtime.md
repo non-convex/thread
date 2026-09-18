@@ -108,6 +108,8 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 加载 Skill 后会追加对应能力说明，核心不会自动加入 coding 角色、文件编辑约定或 Git 提交署名。显式启用 `search`（会话 Recall）、`globalMemoryPath`、交互或 worker 时，还会装配这些能力对应的工具或说明；`search` 与基础工具 `websearch` 是不同功能。
 
+配置 `globalMemoryPath` 后，Main 使用内置 `read`、`write`、`edit` 管理该文件时，修改必须基于较早模型步骤中的读取；文件被其他 Main 回合或 Dreamer 更新后，旧修改会被拒绝，需要重新读取并生成更新。Dreamer 的内置文件工具只能访问这个文件。读写协调限于同一进程，不覆盖 Bash、自定义文件写入或外部进程，具体边界见[全局记忆与 Dreamer](./global-memory-architecture.md#写入边界)。
+
 MCP 属于未来的核心能力，将通过同一工具注册、策略、执行与取消机制接入。当前尚未实现 MCP 客户端或配置项。
 
 通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。执行边界见 [Worker 架构](./worker-architecture.md)。

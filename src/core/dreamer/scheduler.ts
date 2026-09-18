@@ -8,6 +8,7 @@ import { ExtensionEvents } from "../extensions/events.js";
 import type { HostToolPolicy } from "../runtime/policy.js";
 import { DREAMER_MAX_RUNTIME_MS } from "./profile.js";
 import { createDreamerReviewBatches } from "./review.js";
+import { GlobalMemoryAccess } from "../global-memory.js";
 
 export const DREAMER_IDLE_TURNS = 10;
 export const DREAMER_IDLE_MS = 10 * 60_000;
@@ -156,20 +157,20 @@ export class DreamerScheduler {
     const timeout = AbortSignal.timeout(this.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const batches = createDreamerReviewBatches(this.memoryPath, turns, profile.model.contextWindow);
-    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
-      writableExternalPaths: [this.memoryPath],
-      ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),
-      agentId: profile.id,
-    });
     const maxOutputTokens = Math.min(
       profile.model.maxOutputTokens,
       16_384,
       Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)),
     );
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
-    const runner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
-
     for (const batch of batches) {
+      const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+        writableExternalPaths: [this.memoryPath],
+        globalMemory: new GlobalMemoryAccess(this.memoryPath, true),
+        ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),
+        agentId: profile.id,
+      });
+      const runner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
       const journal = new EphemeralAgentJournal([batch.message], profile.id);
       const ui = executionEventSink(journal.identity, this.options.onEvent);
       let output = "";

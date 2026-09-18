@@ -12,6 +12,7 @@ import type { ToolRegistry } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import type { HostToolPolicy } from "./policy.js";
+import { GlobalMemoryAccess } from "../global-memory.js";
 
 export interface CreateAgentRuntimeInput {
   model: ModelClient;
@@ -26,6 +27,7 @@ export interface CreateAgentRuntimeInput {
   agentTasks: AgentTaskOrchestrator;
   askPresenter: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
+  globalMemoryPath?: string;
   toolPolicy?: HostToolPolicy;
   profileId?: string;
 }
@@ -49,6 +51,7 @@ export function createAgentRuntime(input: CreateAgentRuntimeInput): AgentRuntime
       askPresenter: input.askPresenter,
       writableExternalPaths: input.writableExternalPaths ?? [],
       fileHistory: (turnId) => input.fileHistory.forTurn(turnId),
+      ...(input.globalMemoryPath ? { globalMemory: new GlobalMemoryAccess(input.globalMemoryPath) } : {}),
       ...(input.toolPolicy ? { toolPolicy: input.toolPolicy } : {}),
       ...(input.profileId ? { agentId: input.profileId } : {}),
     },
