@@ -103,7 +103,7 @@ Linux 上 `Bun.Image.fromClipboard()` 会返回空。此时 Thread 使用 OpenTU
 
 ## 4. 图片先处理，再进入附件列表
 
-图片处理集中在 `src/ui/images.ts`。
+图片处理集中在 `src/core/images/prepare.ts`，由 TUI 附件和 `view_image` 工具共享；`src/ui/images.ts` 负责附件 ID 与路径粘贴。
 
 任何来源最后都会进入同一个函数：
 
@@ -116,10 +116,10 @@ Linux 上 `Bun.Image.fromClipboard()` 会返回空。此时 Thread 使用 OpenTU
 
 最长边超过 1568 像素时，图片会保持比例缩小。小图不会被放大。
 
-小而已经是 PNG、JPEG、WebP 或 GIF 的图片会直接保留。需要缩放或重编码时，再分成两类：
+图片先完整解码，再缩放或重编码，避免把损坏的图片数据发送给模型：
 
-- 截图、PNG、GIF、BMP，以及带透明通道的图，编码成调色板 PNG
-- JPEG、普通 WebP 等照片型输入，编码成质量 80 的 JPEG
+- 剪贴板管线、PNG、WebP、GIF、BMP，以及带透明通道的图，编码成无损 PNG；动图只使用首帧
+- JPEG 照片编码成质量 80 的 JPEG
 
 这样做不是追求图片文件最漂亮，而是在三件事之间找平衡：
 
@@ -319,7 +319,9 @@ Thread 对路径的判断很保守：
 - `src/ui/terminal/composer-state.ts`：Ctrl+V / Alt+V、附件 signal、粘贴进度和草稿生命周期
 - `src/ui/terminal/clipboard.ts`：OpenTUI host clipboard 的创建、读取和释放
 - `src/ui/terminal/composer-paste.ts`：把各种粘贴来源收束成附件或文字
-- `src/ui/images.ts`：图片校验、缩放、编码、路径读取
+- `src/core/images/prepare.ts`：共享图片校验、缩放和编码
+- `src/core/tools/view-image.ts`：模型主动读取本地图片，并将像素作为工具结果返回
+- `src/ui/images.ts`：附件 ID、路径识别与读取
 - `src/ui/terminal/session-screen.tsx`：附件行和提交行为
 - `src/core/session-tree/user-content.ts`：图文消息组装、展示和纯文本模型降级
 - `src/core/session-tree/service.ts`：把完整用户内容写进 turn

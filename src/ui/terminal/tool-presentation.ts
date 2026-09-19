@@ -19,6 +19,7 @@ export function toolArguments(tool: TranscriptTool): string {
   const range = [a.offset !== undefined ? `from ${a.offset}` : "", a.limit !== undefined ? `limit ${a.limit}` : ""].filter(Boolean);
   switch (tool.name) {
     case "read": return [text(a.path), ...range].join(" · ");
+    case "view_image": return [text(a.path), text(a.detail)].filter(Boolean).join(" · ");
     case "list": return [text(a.path) || ".", ...range].join(" · ");
     case "grep": return [
       `${JSON.stringify(a.pattern ?? "")} in ${text(a.path) || "."}`,
@@ -60,6 +61,11 @@ export function presentTool(tool: TranscriptTool, content: string): ToolPresenta
   const shown = number(d.shown);
   const total = number(d.total);
   switch (tool.name) {
+    case "view_image":
+      result.summary = number(d.width) === undefined ? "image attached" : `${d.width}×${d.height} · ${text(d.mimeType)} · attached`;
+      if (d.resized === true) result.notice = `Resized from ${d.sourceWidth}×${d.sourceHeight}`;
+      result.body = content;
+      break;
     case "read":
       result.summary = shown === undefined ? "read completed" : `${shown} lines read${shown > 0 ? ` · ${d.offset}–${Number(d.offset) + shown - 1}` : ""}`;
       if (d.nextOffset !== undefined) result.notice = `More content available from line ${d.nextOffset}${d.truncatedByBytes ? " · 64 KiB tool limit" : ""}`;

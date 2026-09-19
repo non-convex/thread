@@ -35,7 +35,7 @@ Worker 开启后，Thread 只注册四个任务工具：
 
 ## 共享工作区与 writeScope
 
-Worker 的 `ToolCallExecutor` 以项目根目录为执行根，因此 `read`、`write`、`edit` 和 `bash` 看到的就是主 agent 当前看到的目录。
+Worker 的 `ToolCallExecutor` 以项目根目录为执行根，因此 `read`、`view_image`、`write`、`edit` 和 `bash` 看到的就是主 agent 当前看到的目录。`view_image` 默认可用，检查 Worker 自己的模型是否支持图片；图片像素进入 Worker 的工具结果与后续上下文。
 
 每项任务必须声明 `writeScope`，用于任务协调和内置文件工具的写入检查：
 

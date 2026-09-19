@@ -5,10 +5,9 @@ import {
 } from "@opentui/core";
 import {
   composerImageFromBytes,
-  MAX_IMAGE_BYTES,
-  MAX_IMAGE_PIXELS,
   type ComposerImage,
 } from "../images.js";
+import { MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS } from "../../core/images/prepare.js";
 
 const HOST_TYPES = [
   "image/png",

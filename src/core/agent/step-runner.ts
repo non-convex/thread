@@ -5,6 +5,7 @@ import type { ExecutionJournal } from "./execution-journal.js";
 import type { ModelClient } from "./model-client.js";
 import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch.js";
 import type { ToolCallExecutor } from "./tool-call-executor.js";
+import { messageWithoutImages } from "../session-tree/user-content.js";
 
 export interface AgentStepResult {
   response: AssistantMessage;
@@ -47,6 +48,7 @@ export class AgentStepRunner {
   ) {}
 
   async run(context: Context, journal: ExecutionJournal, options: AgentStepOptions): Promise<AgentStepResult> {
+    if (this.model.acceptsImages !== true) context = { ...context, messages: context.messages.map(messageWithoutImages) };
     this.toolRunner.observeModelContext(context.messages);
     options = { ...options, onUiEvent: executionEventSink(journal.identity, options.onUiEvent) };
     let assistantEntryId = journal.planAssistantEntryId();

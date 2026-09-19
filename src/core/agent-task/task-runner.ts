@@ -63,6 +63,7 @@ export class WorkerTaskRunner {
     const taskUi = executionEventSink(journal.identity, ui);
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
     const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+      acceptsImages: profile.model.acceptsImages === true,
       ...(this.fileHistory ? { fileHistory: () => this.fileHistory!.forTurn(task.parentTurnId) } : {}),
       ...(this.executionOptions.toolPolicy ? { toolPolicy: this.executionOptions.toolPolicy } : {}),
       agentId: profile.id,

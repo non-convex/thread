@@ -160,7 +160,7 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。
 - `src/ui/terminal/widgets.tsx`：浮层共用的单行文字、选项行、标题和状态区。
 - `src/ui/terminal/ask-input.ts`：当前提问的选项、自由回答和翻页。
-- `src/ui/images.ts`：图片限制、缩放、编码和路径附件。
+- `src/ui/images.ts`：路径附件和附件 ID；图片限制、缩放和编码由 `src/core/images/prepare.ts` 共享。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。
 - `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`，按原调用位置合并结果。
 - `src/ui/terminal/tool-presentation.ts` / `tool-output.tsx`：工具参数、结果摘要、预览与展开。

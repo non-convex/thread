@@ -111,7 +111,7 @@ export class ThreadApp {
     const { search, globalMemoryPath, commitAttribution, projectInstructions = true, ...core } = options;
     const skills = core.skills ?? { paths: [skillsDirectory()] };
     const paths = "paths" in skills ? [...skills.paths] : [];
-    const tools = core.tools ?? ["read", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
+    const tools = core.tools ?? ["read", "view_image", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
     const needsAskTool = !core.askPresenter && !tools.some((tool) => typeof tool !== "string" && tool.name === "ask");
     const fileCheckpoints = core.fileCheckpoints ?? true;
     const runtimeOptions = snapshotRuntimeOptions({

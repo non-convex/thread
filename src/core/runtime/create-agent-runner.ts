@@ -43,6 +43,7 @@ export function createAgentRunner(input: CreateAgentRunnerInput): AgentRunner {
     input.tools,
     input.extensions,
     {
+      acceptsImages: input.model.acceptsImages === true,
       askPresenter: input.askPresenter,
       writableExternalPaths: input.writableExternalPaths ?? [],
       fileHistory: (turnId) => input.fileHistory.forTurn(turnId),

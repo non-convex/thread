@@ -7,6 +7,7 @@ import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
 import { listTool } from "./list.js";
 import { readTool } from "./read.js";
+import { viewImageTool } from "./view-image.js";
 import type { ToolRegistry, AgentTool } from "./types.js";
 import { ok, fail } from "./results.js";
 import { webFetchTool, webSearchTool } from "./web.js";
@@ -42,6 +43,7 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
 
 const BUILTIN_TOOLS = {
   read: readTool,
+  view_image: viewImageTool,
   list: listTool,
   grep: grepTool,
   write: writeTool,
@@ -59,5 +61,5 @@ export function builtinTool(name: BuiltinToolName): AgentTool {
 }
 
 export function registerWorkerTools(registry: ToolRegistry): void {
-  for (const tool of [readTool, listTool, grepTool, writeTool, editTool, bashTool]) registry.register(tool);
+  for (const tool of [readTool, viewImageTool, listTool, grepTool, writeTool, editTool, bashTool]) registry.register(tool);
 }

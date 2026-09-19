@@ -82,19 +82,24 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 ## 选择工具与加载 Skill
 
-`tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。
+`tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。
 
 为减少工具结果进入 live context 的体积，几个常用工具默认返回有限内容：
 
 | 工具 | 默认输出与继续读取 |
 | --- | --- |
 | `read` | 2,000 行，仍受 64 KiB 上限约束；按需使用 `offset/limit` 读取相关范围 |
+| `view_image` | 读取本地图片并把实际像素作为图片块回传模型；默认最长边 1568 像素，`detail: "original"` 保留原始尺寸；输入和输出各最多 8 MiB，最多 2000 万像素 |
 | `webfetch` | 32,000 字符；使用返回的 `nextOffset` 继续，或显式指定 `limit`（单页最多 200,000）。偏移按转换后的文本计算，使用 UTF-16 索引且不会切断代理对；每次调用重新抓取，动态页面内容可能变化 |
 | `bash` | stdout、stderr 各显示最多 16 KiB 尾部；较长的已捕获输出保存到系统临时目录，结果给出绝对路径，可用 `read` 或已有的 `bash` 搜索、分段读取，无需重跑原命令 |
 
 `bash` 的捕获范围仍是每个流最后 64 KiB，超过部分已丢弃，结果和保存文件都会明确说明。输出文件与文件 checkpoint、Recall 无关，Thread 不主动删除，系统清理临时目录后可能不可用；保存失败时直接返回已捕获内容，保留命令原本的成功或失败状态。
 
 自定义工具实现公共 `AgentTool` 接口，提供名称、描述、参数 schema、执行策略和 `execute()`；可在创建时传入，或空闲时通过 `runtime.registerTool(tool)` 添加。内置工具和自定义工具使用同一参数校验、调度、宿主策略、取消信号和执行记录。可运行的自定义工具见离线示例中的 `add`。
+
+`view_image({ path, detail? })` 支持 PNG、JPEG、WebP、GIF、BMP；按文件内容识别格式并解码，动图只使用首帧。文件路径可以相对项目，也可以是项目外的绝对路径，沿用 `read` 的资源声明、宿主授权和路径复查。编码与 TUI 粘贴图片共享 `core/images/prepare.ts`，需要支持 `Bun.Image` 的运行时。CLI 和 Worker 默认注册此工具；嵌入宿主通过 `tools: ["view_image"]` 显式启用。当前模型必须声明 `acceptsImages: true`（自定义模型配置为 `input: ["text", "image"]`），否则工具明确返回错误，不声称已经看过图片。`original` 控制本地预处理，服务商仍可能按自身规则处理图片。
+
+`ToolResult.content` 是文本说明；可选的 `images: ImageContent[]` 保存 `{ type: "image", mimeType, data }`，其中 `data` 是 base64 图片字节。执行器把两者合成模型可见的工具结果，像素随消息持久化并参与后续请求，`details.raw` 不重复保存图片字节。`ToolContext.acceptsImages` 表示当前执行模型的能力。`tool_result` 扩展可分别改写 `modelContent` 和 `modelImages`，设 `modelImages: []` 可移除附件。普通工具事件与终端只展示文本、尺寸和格式，不展示 base64；切换纯文本模型时，历史图片在请求中替换为提示，持久化图片保留。
 
 需要解析别名、默认路径或游标的工具可实现 `prepare(args, context)`。执行顺序为：schema 校验 → 扩展改写与再次校验 → `prepare()` → 资源声明 → 宿主授权 → 调度与执行。`prepare()` 每次调用只运行一次，收到取消信号，只能进行参数和目标解析，不能执行工具的业务副作用。省略时沿用校验后的参数；`AgentTool<Input, Prepared>` 可声明与模型输入不同的有效参数类型。资源声明、授权、执行与 `effectiveArgs` 记录均使用准备后的参数，模型的原始 tool call 仍保留在助手消息中。
 
@@ -221,7 +226,7 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
 
-工具结果消息的 `details` 使用 `ToolResultMetadata`：`raw` 保存原始 `ToolResult`，`outcome` 保存结束状态，`durationMs` 保存执行边界内测得的耗时（不含排队等待）。工具自身的结构化数据位于 `raw.details`，也通过 `tool_finished.details` 提供；这些元数据不追加到模型可见的结果正文。`read`、`grep` 等提供数量和分页信息，`edit`、`write` 提供本次实际写入的 diff 与增删行数。Diff 只用于展示：前后内容总计超过 256 KiB、内容无法作为文本解码或计算超过 50ms 时，返回 `diffUnavailable` 原因，不因此阻止文件修改。UI 和宿主不应通过后续读取当前工作区重建当时的 diff。
+工具结果消息的 `details` 使用 `ToolResultMetadata`：`raw` 保存原始工具结果的文本与元数据（图片字节只保存在消息内容中），`outcome` 保存结束状态，`durationMs` 保存执行边界内测得的耗时（不含排队等待）。工具自身的结构化数据位于 `raw.details`，也通过 `tool_finished.details` 提供；这些元数据不追加到模型可见的结果正文。`read`、`grep` 等提供数量和分页信息，`edit`、`write` 提供本次实际写入的 diff 与增删行数。Diff 只用于展示：前后内容总计超过 256 KiB、内容无法作为文本解码或计算超过 50ms 时，返回 `diffUnavailable` 原因，不因此阻止文件修改。UI 和宿主不应通过后续读取当前工作区重建当时的 diff。
 
 `model_call_finished.usage` 来自最终模型响应，不能与 attempt 用量重复相加。`attemptsObserved > 0` 时按 attempt 统计；为 0 时按逻辑调用统计。自定义 ModelClient 可以通过 `ModelRequestOptions.onAttempt` 报告内部尝试；不提供时 runtime 不猜测其内部重试或费用。没有响应时 usage 缺失，不应解释为零。`firstOutputAt` 是首次可见文本/思考增量或完整工具调用的时间；durationMs 使用单调时钟，不保证等于底层 HTTP 请求耗时。
 

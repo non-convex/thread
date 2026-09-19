@@ -160,6 +160,7 @@ export class DreamerScheduler {
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     for (const batch of batches) {
       const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+        acceptsImages: profile.model.acceptsImages === true,
         writableExternalPaths: [this.memoryPath],
         globalMemory: new GlobalMemoryAccess(this.memoryPath, true),
         ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),

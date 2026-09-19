@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/pi-ai";
+import type { Context, ImageContent } from "@earendil-works/pi-ai";
 import type { ToolResult } from "../tools/types.js";
 
 export interface ExtensionEventMap {
@@ -10,7 +10,7 @@ export interface ExtensionEventMap {
     denied?: boolean;
     denyReason?: string;
   };
-  tool_result: { toolName: string; raw: ToolResult; modelContent: string };
+  tool_result: { toolName: string; raw: ToolResult; modelContent: string; modelImages?: readonly ImageContent[] };
   turn_end: { turnId: string; outcome: "completed" | "interrupted" | "failed" };
 }
 

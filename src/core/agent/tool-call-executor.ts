@@ -41,6 +41,7 @@ function errorResult(error: unknown): ToolResult {
 }
 
 export interface ToolExecutorOptions {
+  acceptsImages?: boolean;
   askPresenter?: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
   fileHistory?: (executionId: string) => FileEditTracker;
@@ -227,6 +228,7 @@ export class ToolCallExecutor {
       const context: ToolContext = {
         ...(this.options.fileHistory ? { fileHistory: this.options.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
+        acceptsImages: this.options.acceptsImages === true,
         ...(this.options.globalMemory ? { globalMemory: this.options.globalMemory } : {}),
         ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
         ...(this.options.writableExternalPaths?.length
@@ -252,24 +254,28 @@ export class ToolCallExecutor {
     }
     const settled = result ?? { content: `Unknown tool: ${prepared.call.name}`, isError: true };
     let modelContent = settled.content;
+    let modelImages = settled.images;
     if (this.extensions.hasHandlers("tool_result")) {
       try {
         const visible = await this.extensions.emit("tool_result", {
           toolName: prepared.call.name,
           raw: structuredClone(settled),
           modelContent,
+          ...(modelImages?.length ? { modelImages: structuredClone(modelImages) } : {}),
         });
         modelContent = visible.modelContent;
+        modelImages = visible.modelImages;
       } catch (error) {
         modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
       }
     }
+    const { images: _images, ...raw } = settled;
     return {
       role: "toolResult",
       toolCallId: prepared.call.id,
       toolName: prepared.call.name,
-      content: [{ type: "text", text: modelContent }],
-      details: { raw: settled, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed" } satisfies ToolResultMetadata,
+      content: [{ type: "text", text: modelContent }, ...structuredClone(modelImages ?? [])],
+      details: { raw, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed" } satisfies ToolResultMetadata,
       isError: settled.isError,
       timestamp: Date.now(),
     };

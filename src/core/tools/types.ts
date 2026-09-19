@@ -1,8 +1,10 @@
-import type { TSchema } from "@earendil-works/pi-ai";
+import type { ImageContent, TSchema } from "@earendil-works/pi-ai";
 import { validateToolExecutionPolicy, type ToolExecutionPolicy, type ToolPlanningContext, type ToolResourceClaim } from "./execution.js";
 
 export interface ToolResult {
   content: string;
+  /** Pixels attached to the model-facing tool result, not embedded in the display text. */
+  images?: readonly ImageContent[];
   isError: boolean;
   details?: unknown;
 }
@@ -11,13 +13,16 @@ export type ToolOutcome = "completed" | "failed" | "cancelled" | "denied";
 
 /** Saved with tool-result messages; presentation metadata is not model text. */
 export interface ToolResultMetadata {
-  raw: ToolResult;
+  /** Image bytes live only in the message content, not in presentation metadata. */
+  raw: Omit<ToolResult, "images">;
   outcome: ToolOutcome;
   durationMs?: number;
 }
 
 export interface ToolContext {
   rootPath: string;
+  /** Whether the model for this execution accepts image inputs. */
+  acceptsImages?: boolean;
   /** Exact files outside rootPath that this agent may write. */
   writableExternalPaths?: readonly string[];
   /** Omitted: ordinary workspace policy. Empty: no built-in file writes are allowed. */

@@ -30,6 +30,8 @@ File-tool resource claims are built by `tools/execution.ts`. Actual writes still
 
 `tools/results.ts` contains the common result constructors and output bounds. Small and streamed file reads share one page collector. Grep's content and file-list modes share pagination metadata and notices. Web response limits, HTML conversion and character pagination live together in `tools/web-content.ts`.
 
+`tools/view-image.ts` reads bounded local image files through the same file-read authorization boundary. `images/prepare.ts` validates, resizes and encodes pixels for both that tool and TUI attachments. Tool results keep display text separate from optional image blocks; the executor places the pixels in model messages and durable history, without duplicating them in presentation metadata.
+
 ## From runtime events to the terminal
 
 The TUI controller receives runtime events and batches them through `ui/events.ts`. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
