@@ -1,5 +1,5 @@
 import {
-  type Api, type AssistantMessage, type CacheRetention, type Context, type Model, type Models,
+  type Api, type AssistantMessage, type CacheRetention, type Context, type Message, type Model, type Models,
   type ModelThinkingLevel, type ThinkingLevel, type ToolCall, getSupportedThinkingLevels, retryAssistantCall,
 } from "@earendil-works/pi-ai";
 import type { ModelOverrideConfig } from "../config/model-config.js";
@@ -46,6 +46,23 @@ export interface ModelClient {
   stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage>;
 }
 
+/** Pi skips incomplete assistant responses; their tool results must be skipped with them. */
+function replayableMessages(messages: readonly Message[]): Message[] {
+  const skippedCalls = new Set<string>();
+  return messages.filter((message) => {
+    if (message.role === "assistant") {
+      const skip = message.stopReason === "aborted" || message.stopReason === "error";
+      for (const block of message.content) {
+        if (block.type !== "toolCall") continue;
+        if (skip) skippedCalls.add(block.id);
+        else skippedCalls.delete(block.id);
+      }
+      return !skip;
+    }
+    return message.role !== "toolResult" || !skippedCalls.has(message.toolCallId);
+  });
+}
+
 /** Streaming and retries for one selected model, independent of catalog discovery. */
 export class PiModelClient implements ModelClient {
   readonly modelId: string;
@@ -84,6 +101,8 @@ export class PiModelClient implements ModelClient {
   }
 
   async stream(context: Context, options: ModelRequestOptions): Promise<AssistantMessage> {
+    // Keep the durable history intact, including cancelled calls and their diagnostics.
+    const replayContext = { ...context, messages: replayableMessages(context.messages) };
     const maxRetries = options.maxRetries ?? DEFAULT_MODEL_MAX_RETRIES;
     const baseDelayMs = options.retryBaseDelayMs ?? DEFAULT_MODEL_RETRY_BASE_DELAY_MS;
     const cacheRetention = options.cacheRetention ?? this.cacheRetention;
@@ -91,7 +110,7 @@ export class PiModelClient implements ModelClient {
     let attempt = 0;
     return retryAssistantCall(
       () => observeModelAttempt(++attempt, options, async (options) => {
-        const stream = this.models.streamSimple(this.model, context, {
+        const stream = this.models.streamSimple(this.model, replayContext, {
           signal: options.signal,
           ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
           ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
