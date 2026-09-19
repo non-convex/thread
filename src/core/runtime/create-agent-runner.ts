@@ -33,11 +33,6 @@ export interface CreateAgentRunnerInput {
 }
 
 export function createAgentRunner(input: CreateAgentRunnerInput): AgentRunner {
-  const maxOutputTokens = Math.min(
-    input.model.maxOutputTokens,
-    16_384,
-    Math.max(1_024, Math.floor(input.model.contextWindow * 0.2)),
-  );
   const compaction = new ContextCompactionService(
     input.tree,
     input.model,
@@ -65,7 +60,6 @@ export function createAgentRunner(input: CreateAgentRunnerInput): AgentRunner {
     toolRunner,
     input.extensions,
     input.systemPrompt,
-    maxOutputTokens,
     input.reasoning,
   );
   return new AgentRunner(input.tree, runner, input.extensions, input.agentTasks, input.fileHistory.captureEnabled);

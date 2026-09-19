@@ -44,10 +44,9 @@ export class TurnRunner {
     toolRunner: ToolCallExecutor,
     private readonly extensions: ExtensionEvents,
     private readonly systemPrompt: string,
-    maxOutputTokens: number,
     reasoning?: ThinkingLevel,
   ) {
-    this.stepRunner = new AgentStepRunner(model, toolRunner, maxOutputTokens, reasoning);
+    this.stepRunner = new AgentStepRunner(model, toolRunner, reasoning);
   }
 
   async execute(turn: Turn, options: RunTurnOptions): Promise<AssistantMessage[]> {

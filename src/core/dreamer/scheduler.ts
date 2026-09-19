@@ -157,11 +157,6 @@ export class DreamerScheduler {
     const timeout = AbortSignal.timeout(this.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
     const batches = createDreamerReviewBatches(this.memoryPath, turns, profile.model.contextWindow);
-    const maxOutputTokens = Math.min(
-      profile.model.maxOutputTokens,
-      16_384,
-      Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)),
-    );
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
     for (const batch of batches) {
       const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
@@ -170,7 +165,7 @@ export class DreamerScheduler {
         ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),
         agentId: profile.id,
       });
-      const runner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
+      const runner = new AgentStepRunner(profile.model, toolRunner, reasoning);
       const journal = new EphemeralAgentJournal([batch.message], profile.id);
       const ui = executionEventSink(journal.identity, this.options.onEvent);
       let output = "";

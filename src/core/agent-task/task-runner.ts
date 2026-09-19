@@ -69,8 +69,7 @@ export class WorkerTaskRunner {
       writeScope: task.spec.writeScope,
     });
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
-    const maxOutputTokens = Math.min(profile.model.maxOutputTokens, 16_384, Math.max(1_024, Math.floor(profile.model.contextWindow * 0.2)));
-    const stepRunner = new AgentStepRunner(profile.model, toolRunner, maxOutputTokens, reasoning);
+    const stepRunner = new AgentStepRunner(profile.model, toolRunner, reasoning);
     const usage = emptyUsage();
     let finalResponse = "";
     safeExecutionEvent(taskUi, { type: "agent_run_started", input: taskSpecMessage(task.spec, this.rootPath), timestamp: startedAt });

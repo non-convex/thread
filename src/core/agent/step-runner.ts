@@ -43,7 +43,6 @@ export class AgentStepRunner {
   constructor(
     private readonly model: ModelClient,
     private readonly toolRunner: ToolCallExecutor,
-    private readonly maxOutputTokens: number,
     private readonly reasoning?: import("@earendil-works/pi-ai").ThinkingLevel,
   ) {}
 
@@ -62,7 +61,7 @@ export class AgentStepRunner {
     try {
       const response = await streamModel(this.model, context, {
         signal: options.signal,
-        maxTokens: this.maxOutputTokens,
+        maxTokens: this.model.maxOutputTokens,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         onTextDelta: (delta) => {
           try { options.onTextDelta?.(delta); } catch { /* A legacy text observer cannot cancel the turn. */ }

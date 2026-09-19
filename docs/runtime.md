@@ -190,6 +190,8 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 ## 取消、完成与预算
 
+主 agent、Worker 和 Dreamer 的每次模型请求直接使用各自的 `ModelClient.maxOutputTokens`（自定义模型配置中的 `maxTokens`）作为输出上限，不再额外限制为 16,384 tokens 或上下文容量的 20%。内置模型适配器仍按剩余上下文调整请求额度；采用数值思考预算的协议在模型总输出上限内分配思考 tokens。历史摘要和轮内进度摘要继续使用各自的专用输出预算。
+
 `prompt()` 返回时，当前 turn 的工具收尾、历史结算和必要持久化已结束。结果的 `outcome` 区分 `completed`、`interrupted` 和 `failed`。调用参数无效、目标不存在、实例已关闭等请求错误会拒绝 Promise。
 
 `interrupt()` 和 `close()` 都是完成屏障。重复 `close()` 返回同一个 Promise；开始关闭后拒绝新的操作。宿主应在退出时等待这个 Promise，不要仅通知取消就释放进程。
