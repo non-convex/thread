@@ -17,7 +17,7 @@ export interface TurnResult {
   limit?: RuntimeLimit;
 }
 
-export class AgentRuntime {
+export class AgentRunner {
   constructor(
     private readonly tree: SessionTreeService,
     private readonly runner: TurnRunner,

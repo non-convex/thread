@@ -17,7 +17,7 @@ export {
   COMPACTION_PROGRESS_RESERVE_TOKENS,
   COMPACTION_TARGET_TOKENS,
 } from "./core/context/compaction/policy.js";
-export { AgentRuntime } from "./core/agent/runtime.js";
+export { AgentRunner } from "./core/agent/runner.js";
 export { AgentStepRunner, type AgentStepOptions, type AgentStepResult } from "./core/agent/step-runner.js";
 export { type ExecutionJournal, type ToolExecutionFact } from "./core/agent/execution-journal.js";
 export {

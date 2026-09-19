@@ -1,5 +1,5 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { AgentRuntime, type TurnResult } from "../agent/runtime.js";
+import { AgentRunner, type TurnResult } from "../agent/runner.js";
 import type { ModelClient } from "../agent/model-client.js";
 import type { ModelCatalog } from "../agent/model-catalog.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
@@ -7,7 +7,7 @@ import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import { createWorkerProfile, DEFAULT_WORKER_SETTINGS, WORKER_PROFILE_ID, type WorkerProfileSettings } from "../agent-task/profile.js";
 import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
-import { createAgentRuntime } from "./create-agent-runtime.js";
+import { createAgentRunner } from "./create-agent-runner.js";
 import { bindModel, ModelSelection } from "./model-selection.js";
 import type { ThreadState } from "./state.js";
 import { ContextBuilder } from "../context/builder.js";
@@ -210,7 +210,7 @@ export class ThreadRuntime {
       const session = this.tree.resolveSession(sessionId);
       if (!this.model) throw new Error("No model configured");
       if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
-      const runner = this.createAgentRuntime(session.id);
+      const runner = this.createAgentRunner(session.id);
       const result = await runner.run(input, { ...options, sessionId: session.id, signal,
         captureModelContent: () => this.captureModelContent(),
         onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
@@ -229,7 +229,7 @@ export class ThreadRuntime {
     return this.operate(sessionId, options.signal, (signal) => {
       const session = this.tree.resolveSession(sessionId);
       if (!this.model) throw new Error("Compaction requires a configured model");
-      return this.createAgentRuntime(session.id).compactCurrent({ ...options, sessionId: session.id, signal,
+      return this.createAgentRunner(session.id).compactCurrent({ ...options, sessionId: session.id, signal,
         captureModelContent: () => this.captureModelContent(),
         onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
     });
@@ -492,10 +492,10 @@ export class ThreadRuntime {
       profile.id === WORKER_PROFILE_ID ? this.options.sharedInstructions : undefined].filter(Boolean).join("\n\n") };
   }
 
-  private createAgentRuntime(sessionId: string): AgentRuntime {
+  private createAgentRunner(sessionId: string): AgentRunner {
     if (!this.model) throw new Error("No model configured");
     const systemPrompt = this.systemPromptFor(sessionId);
-    return createAgentRuntime({ model: this.model, ...(this.modelSelection.reasoning ? { reasoning: this.modelSelection.reasoning } : {}),
+    return createAgentRunner({ model: this.model, ...(this.modelSelection.reasoning ? { reasoning: this.modelSelection.reasoning } : {}),
       rootPath: this.rootPath, systemPrompt, tree: this.tree, fileHistory: this.files, contextBuilder: this.builder,
       tools: this.toolRegistry, extensions: this.extensions, agentTasks: this.tasks, askPresenter: () => this.askPresenter,
       writableExternalPaths: [...(this.options.writableExternalPaths ?? []), ...(this.memory ? [this.memory.filePath] : [])],

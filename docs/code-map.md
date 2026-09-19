@@ -12,11 +12,11 @@ The execution path is:
 
 ```text
 ThreadApp.handleInput → InputRouter → ThreadRuntime.prompt
-  → AgentRuntime → TurnRunner → AgentStepRunner
+  → AgentRunner → TurnRunner → AgentStepRunner
   → ToolExecutionBatch → ToolScheduler → ToolCallExecutor
 ```
 
-These stages have different responsibilities. `AgentRuntime` admits and finishes the durable turn. `TurnRunner` assembles context and handles compaction. `AgentStepRunner` owns one model response. A tool batch reconciles streamed calls with that response and preserves result order, while the scheduler controls concurrent execution. The executor validates and authorizes each invocation before calling the tool.
+These stages have different responsibilities. `AgentRunner` in `core/agent/runner.ts` admits and finishes the durable turn; `core/runtime/create-agent-runner.ts` assembles it from the project runtime's configured services. `TurnRunner` assembles context and handles compaction. `AgentStepRunner` owns one model response. A tool batch reconciles streamed calls with that response and preserves result order, while the scheduler controls concurrent execution. The executor validates and authorizes each invocation before calling the tool.
 
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 

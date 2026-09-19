@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import { AgentRuntime } from "../agent/runtime.js";
+import { AgentRunner } from "../agent/runner.js";
 import type { ModelClient } from "../agent/model-client.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { TurnRunner } from "../agent/turn-runner.js";
@@ -14,7 +14,7 @@ import type { FileHistoryService } from "../file-history/service.js";
 import type { HostToolPolicy } from "./policy.js";
 import { GlobalMemoryAccess } from "../global-memory.js";
 
-export interface CreateAgentRuntimeInput {
+export interface CreateAgentRunnerInput {
   model: ModelClient;
   reasoning?: ThinkingLevel;
   rootPath: string;
@@ -32,7 +32,7 @@ export interface CreateAgentRuntimeInput {
   profileId?: string;
 }
 
-export function createAgentRuntime(input: CreateAgentRuntimeInput): AgentRuntime {
+export function createAgentRunner(input: CreateAgentRunnerInput): AgentRunner {
   const maxOutputTokens = Math.min(
     input.model.maxOutputTokens,
     16_384,
@@ -68,5 +68,5 @@ export function createAgentRuntime(input: CreateAgentRuntimeInput): AgentRuntime
     maxOutputTokens,
     input.reasoning,
   );
-  return new AgentRuntime(input.tree, runner, input.extensions, input.agentTasks, input.fileHistory.captureEnabled);
+  return new AgentRunner(input.tree, runner, input.extensions, input.agentTasks, input.fileHistory.captureEnabled);
 }

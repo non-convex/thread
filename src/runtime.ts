@@ -26,7 +26,7 @@ export {
   type ModelDescriptor,
 } from "./core/agent/model-catalog.js";
 export { PiModelClient, type ModelClient, type ModelRequestOptions, type ModelRetryCallbacks } from "./core/agent/model-client.js";
-export type { TurnResult } from "./core/agent/runtime.js";
+export type { TurnResult } from "./core/agent/runner.js";
 export type { AgentProfile } from "./core/agent/profile.js";
 export type { AgentTool, ToolContext, ToolResult, ToolResultMetadata, ToolOutcome } from "./core/tools/types.js";
 export type { FileWriteScope } from "./core/tools/path-safety.js";

@@ -1,5 +1,5 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
-import type { TurnResult } from "../core/agent/runtime.js";
+import type { TurnResult } from "../core/agent/runner.js";
 import { parseCommandLine } from "./commands/parser.js";
 import { clearDisplayResult, type CommandResult } from "./commands/types.js";
 import type { UiEventSink } from "../ui/events.js";

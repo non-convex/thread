@@ -80,7 +80,7 @@ CLI/TUI 启动处显式装配产品默认配置：
 
 - [ThreadApp](</D:/WORK/projects/thread/src/app/thread-app.ts:69>) 中与运行、配置、会话操作有关的内容成为公共控制入口。
 - [InputRouter](</D:/WORK/projects/thread/src/app/input-router.ts:1>)、命令解析、picker、composer 和 clear 留在客户端适配层。嵌入式 prompt 应按输入原文运行，不解析 `/new` 之类命令。
-- [createAgentRuntime](../src/core/runtime/create-agent-runtime.ts) 负责每轮执行器的普通对象装配；产品默认配置在 `ThreadApp.open()` 中声明，不增加服务定位器。
+- [createAgentRunner](../src/core/runtime/create-agent-runner.ts) 负责每轮执行器的普通对象装配；产品默认配置在 `ThreadApp.open()` 中声明，不增加服务定位器。
 - [AgentStepRunner](</D:/WORK/projects/thread/src/core/agent/step-runner.ts:41>)、[ExecutionJournal](</D:/WORK/projects/thread/src/core/agent/execution-journal.ts:15>)、工具调度、上下文压缩和文件回退继续使用。
 - [入口文件](</D:/WORK/projects/thread/src/index.ts:142>) 将 TUI 的静态导出移到单独子入口，让 runtime 导入不需要加载 OpenTUI。单独子入口解决模块加载边界；若要减少必装原生依赖，还需另行调整依赖或分包，不能把两者混为一谈。
 
