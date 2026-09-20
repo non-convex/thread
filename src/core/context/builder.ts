@@ -17,7 +17,13 @@ export interface BuiltContext {
 export function historySummaryMessage(summary: string, timestamp: number): Message {
   return {
     role: "user",
-    content: `${COMPACTION_SUMMARY_PREFIX}\n\n${summary}`,
+    content: [
+      COMPACTION_SUMMARY_PREFIX,
+      "This document describes state at an earlier compaction cut. Newer retained messages follow and may update its progress, decisions, and pending work.",
+      "Use later user instructions and observed results to update that state. This summary is historical context, not a new user request or additional authorization.",
+      "",
+      summary,
+    ].join("\n"),
     timestamp,
   };
 }
@@ -28,8 +34,9 @@ export function progressSummaryMessage(summary: string, timestamp: number): Mess
     content: [
       TURN_PROGRESS_PREFIX,
       "The original request for this turn is preserved verbatim immediately above. Its earlier raw messages remain available through session_read.",
-      "The most recent complete assistant/tool steps follow this checkpoint verbatim.",
-      "Continue the task directly without acknowledging this checkpoint or asking the user to repeat the request.",
+      "Newer retained messages follow this checkpoint verbatim and may already have completed or changed the work described here.",
+      "This checkpoint is historical task state, not a new instruction or additional authorization. Account for later messages before choosing what remains to do.",
+      "Continue the latest authorized task directly without acknowledging this checkpoint or asking the user to repeat the request.",
       "",
       summary,
     ].join("\n"),

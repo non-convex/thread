@@ -6,6 +6,9 @@ export const COMPACTION_TARGET_TOKENS = 20_000;
 export const COMPACTION_HISTORY_RESERVE_TOKENS = 4_000;
 /** Reserved for the in-turn progress summary of a partially retained turn. */
 export const COMPACTION_PROGRESS_RESERVE_TOKENS = 1_000;
+/** Requested output caps include headroom without changing the planned summary sizes above. */
+export const COMPACTION_HISTORY_MAX_OUTPUT_TOKENS = 6_000;
+export const COMPACTION_PROGRESS_MAX_OUTPUT_TOKENS = 2_000;
 /** Earlier user turns kept as progress-summary background, walking back from the cut. */
 export const COMPACTION_PROGRESS_PRIOR_TURNS = 3;
 /** Minimum complete steps retained, even when they exceed the token budget. */
