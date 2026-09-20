@@ -27,6 +27,7 @@ For the execution path and shared implementation boundaries, see the [code map](
 
 ## Change scope
 
-- Do not add or run tests unless strictly necessary for a concrete correctness risk. Keep only minimal, non-redundant coverage; routine edits, renames, refactors and visual tweaks should use focused code inspection.
-- When verification is necessary, use the smallest relevant check and stop once it resolves the concern. Remove one-off verification scripts, fixtures and generated captures afterward, including those under `.cache/`.
+- Do not add, run or retain tests by default. A test is allowed only when a specific correctness risk cannot be resolved by focused code inspection or necessary static checks. State that risk and why testing is indispensable before using this exception. Routine edits, new features, renames, refactors and visual tweaks do not by themselves justify tests.
+- If testing is indispensable, use the smallest temporary, focused check and stop once it resolves the concern. Remove its test code, fixtures, test-only configuration and dependencies, and generated output afterward, including files under `.cache/` and `dist/`. Do not keep permanent tests or introduce a test suite, test script or test CI job unless the user explicitly requests it.
+- Prefer focused code inspection. Run static checks or builds only when needed for a concrete concern; do not routinely broaden or repeat verification.
 - Do not add old-data compatibility, migration logic or legacy aliases unless the user explicitly requests them.

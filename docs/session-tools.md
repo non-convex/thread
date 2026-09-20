@@ -202,7 +202,7 @@ rewind 只移动当前路径的末端，旧的 turn 和分支仍然保留，可�
 
 ### 想看工具执行细节时
 
-如果问题是“当时测试到底通过没有”，只读 assistant 的结论可能还不够。可以要求返回工具调用和结果：
+如果问题是“当时类型检查到底通过没有”，只读 assistant 的结论可能还不够。可以要求返回工具调用和结果：
 
 ```json
 {
@@ -212,13 +212,12 @@ rewind 只移动当前路径的末端，旧的 turn 和分支仍然保留，可�
 }
 ```
 
-正文中会增加相应记录。例如，假设当时运行过测试，可能看到：
+正文中会增加相应记录。例如，假设当时运行过类型检查，可能看到：
 
 ```text
-[tool call bash] {"command":"bun test"}
+[tool call bash] {"command":"bun run check"}
 
-[tool result bash] 12 pass
-0 fail
+[tool result bash] exit 0
 ```
 
 工具实际执行记录存在时，调用参数使用实际生效的参数，并避免重复展示 assistant 消息中的同一次调用。图片位置显示为 `[image]`。
