@@ -5,7 +5,7 @@ import {
 import type { ModelOverrideConfig } from "../config/model-config.js";
 import { observeModelAttempt, type ModelAttemptEvent } from "./model-observation.js";
 
-/** Transient provider errors (408/409/429/5xx and server-requested retries). */
+/** Retryable provider/transport errors, including unknown certificate verification errors via the Pi patch. */
 export const DEFAULT_MODEL_MAX_RETRIES = 10;
 export const DEFAULT_MODEL_RETRY_BASE_DELAY_MS = 500;
 

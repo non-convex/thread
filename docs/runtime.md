@@ -207,6 +207,8 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 ## 取消、完成与预算
 
+内置模型客户端对 Pi 识别的可重试服务端/网络错误，以及 `unknown certificate verification error`，默认最多重试 10 次（不含首次请求），等待从 500ms 开始逐次翻倍；请求的 `maxRetries` 和 `retryBaseDelayMs` 可覆盖默认值。重试沿用相同的请求上下文，等待支持取消，主 agent 的 TUI 会显示重试次数和等待时间；持续失败时返回原始错误。证书错误的识别由 `patches/@earendil-works%2Fpi-ai@0.85.1.patch` 补入 Pi 现有重试器，`bun install` 自动应用，升级 Pi 时需同步检查补丁。重试仍执行正常的 TLS 证书验证。
+
 主 agent、Worker 和 Dreamer 的每次模型请求直接使用各自的 `ModelClient.maxOutputTokens`（自定义模型配置中的 `maxTokens`）作为输出上限，不再额外限制为 16,384 tokens 或上下文容量的 20%。内置模型适配器仍按剩余上下文调整请求额度；采用数值思考预算的协议在模型总输出上限内分配思考 tokens。
 
 历史摘要和轮内进度摘要的提示词分别要求将完整正文控制在 4,000 和 1,000 tokens 内。压缩规划仍分别为两份摘要预留 4,000 和 1,000 tokens，不因请求输出上限放宽而减少保留原始消息的预算。

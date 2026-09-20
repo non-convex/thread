@@ -60,5 +60,8 @@
     "@types/node": "24.3.0",
     "@types/turndown": "^5.0.5",
     "typescript": "5.9.2"
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@0.85.1": "patches/@earendil-works%2Fpi-ai@0.85.1.patch"
   }
 }
