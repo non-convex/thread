@@ -109,16 +109,21 @@ async function presentBashOutput(result: ProcessResult): Promise<ToolResult> {
   const captureNotice = result.truncated
     ? `\n\n[Capture limit reached: only the last ${BASH_OUTPUT_LIMIT} bytes of each stream were retained; earlier output is unavailable.]`
     : "";
-  const captured = format(BASH_OUTPUT_LIMIT) + captureNotice;
-  const details: { exitCode: number; truncated?: boolean; outputPath?: string } = { exitCode: result.code };
+  const drainNotice = result.outputIncomplete
+    ? "\n\n[Output capture ended before its pipes closed; trailing output may be missing.]"
+    : "";
+  const notices = captureNotice + drainNotice;
+  const captured = format(BASH_OUTPUT_LIMIT) + notices;
+  const details: { exitCode: number; truncated?: boolean; outputIncomplete?: boolean; outputPath?: string } = { exitCode: result.code };
   if (result.truncated) details.truncated = true;
+  if (result.outputIncomplete) details.outputIncomplete = true;
   let content = captured;
   if (result.stdout.length > BASH_PREVIEW_BYTES || result.stderr.length > BASH_PREVIEW_BYTES) {
     const outputPath = path.join(tmpdir(), `thread-bash-${randomUUID()}.log`);
     try {
       await writeFile(outputPath, captured, { flag: "wx", mode: 0o600 });
       details.outputPath = outputPath;
-      content = `${format(BASH_PREVIEW_BYTES)}\n\n[Showing up to ${BASH_PREVIEW_BYTES} trailing bytes per stream. Captured output saved to: ${outputPath}. Read or search that file for details; do not rerun the command just to retrieve output.]${captureNotice}`;
+      content = `${format(BASH_PREVIEW_BYTES)}\n\n[Showing up to ${BASH_PREVIEW_BYTES} trailing bytes per stream. Captured output saved to: ${outputPath}. Read or search that file for details; do not rerun the command just to retrieve output.]${notices}`;
     } catch (error) {
       content += `\n\n[Could not save captured output: ${error instanceof Error ? error.message : String(error)}]`;
     }

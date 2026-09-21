@@ -8,6 +8,8 @@ export interface ProcessResult {
   stdout: Buffer;
   stderr: Buffer;
   truncated?: boolean;
+  /** Capture ended before stdout and stderr reached EOF. */
+  outputIncomplete?: boolean;
   killedBySignal?: boolean;
 }
 
@@ -62,9 +64,14 @@ class ByteTail {
   }
 }
 
+const WINDOWS_OUTPUT_DRAIN_MS = 500;
+const ABORT_SETTLE_MS = 1_000;
+
 function killProcessTree(pid: number): void {
   if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).unref();
+    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+      .on("error", () => undefined)
+      .unref();
     return;
   }
   try {
@@ -88,10 +95,20 @@ export async function runProcess(
   const overflow = options.overflow ?? "kill";
   const result = await new Promise<ProcessResult>((resolve, reject) => {
     let settled = false;
+    let exited = false;
+    let exitCode: number | null = null;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (fn: () => void): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(drainTimer);
+      clearTimeout(abortTimer);
       options.signal?.removeEventListener("abort", onAbort);
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
       fn();
     };
 
@@ -109,13 +126,37 @@ export async function runProcess(
     let stderrBytes = 0;
     let killedBySignal = false;
 
+    const complete = (code: number | null): void => {
+      if (settled) return;
+      const processResult: ProcessResult = {
+        command,
+        args,
+        code: code ?? -1,
+        stdout: stdoutTail.concat(),
+        stderr: stderrTail.concat(),
+      };
+      if (stdoutTail.dropped || stderrTail.dropped) processResult.truncated = true;
+      if (!child.stdout!.readableEnded || !child.stderr!.readableEnded) processResult.outputIncomplete = true;
+      if (killedBySignal) processResult.killedBySignal = true;
+      finish(() => resolve(processResult));
+    };
+
+    const terminate = (): void => {
+      // An exited Windows parent cannot identify its detached descendants.
+      // On Unix the process group can still exist after its leader exits.
+      if (child.pid !== undefined && (!exited || process.platform !== "win32")) killProcessTree(child.pid);
+    };
+
     const onAbort = (): void => {
+      if (settled || killedBySignal) return;
       killedBySignal = true;
-      if (child.pid !== undefined) killProcessTree(child.pid);
+      // Killing the parent does not guarantee EOF on inherited output pipes.
+      abortTimer = setTimeout(() => complete(exitCode), ABORT_SETTLE_MS);
+      terminate();
     };
 
     const overflowKill = (stream: "stdout" | "stderr"): void => {
-      if (child.pid !== undefined) killProcessTree(child.pid);
+      terminate();
       finish(() => reject(new Error(`${command} ${stream} exceeded ${maxOutputBytes} bytes`)));
     };
 
@@ -125,7 +166,7 @@ export async function runProcess(
         try {
           options.onStdout(chunk);
         } catch (error) {
-          if (child.pid !== undefined) killProcessTree(child.pid);
+          terminate();
           finish(() => reject(error));
         }
         return;
@@ -142,6 +183,7 @@ export async function runProcess(
       stdoutTail.push(chunk);
     });
     child.stderr!.on("data", (chunk: Buffer) => {
+      if (settled) return;
       if (overflow === "truncate") {
         stderrTail.push(chunk);
         return;
@@ -154,18 +196,16 @@ export async function runProcess(
       stderrTail.push(chunk);
     });
     child.once("error", (error) => finish(() => reject(error)));
-    child.once("close", (code) => {
-      const processResult: ProcessResult = {
-        command,
-        args,
-        code: code ?? -1,
-        stdout: stdoutTail.concat(),
-        stderr: stderrTail.concat(),
-      };
-      if (stdoutTail.dropped || stderrTail.dropped) processResult.truncated = true;
-      if (killedBySignal) processResult.killedBySignal = true;
-      finish(() => resolve(processResult));
+    child.once("exit", (code) => {
+      exited = true;
+      exitCode = code;
+      if (settled || process.platform !== "win32") return;
+      // Windows daemons can inherit the caller's pipe handles, preventing
+      // `close` forever. Allow queued output to drain, then release our ends.
+      // This is a bounded capture window, not a lossless-output guarantee.
+      drainTimer = setTimeout(() => complete(code), WINDOWS_OUTPUT_DRAIN_MS);
     });
+    child.once("close", complete);
     child.stdin!.on("error", () => undefined);
     if (options.input === undefined) {
       child.stdin!.end();
