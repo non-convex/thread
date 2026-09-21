@@ -6,6 +6,7 @@ import type { ModelClient } from "./model-client.js";
 import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch.js";
 import type { ToolCallExecutor } from "./tool-call-executor.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
+import { ToolLoopGuard } from "./tool-loop-guard.js";
 
 export interface AgentStepResult {
   response: AssistantMessage;
@@ -41,6 +42,8 @@ async function persistBatchResults(
 
 /** One model response plus its complete, source-ordered tool execution batch. */
 export class AgentStepRunner {
+  private readonly loopGuard = new ToolLoopGuard();
+
   constructor(
     private readonly model: ModelClient,
     private readonly toolRunner: ToolCallExecutor,
@@ -48,6 +51,7 @@ export class AgentStepRunner {
   ) {}
 
   async run(context: Context, journal: ExecutionJournal, options: AgentStepOptions): Promise<AgentStepResult> {
+    if (options.step === 1) this.loopGuard.reset();
     if (this.model.acceptsImages !== true) context = { ...context, messages: context.messages.map(messageWithoutImages) };
     this.toolRunner.observeModelContext(context.messages);
     options = { ...options, onUiEvent: executionEventSink(journal.identity, options.onUiEvent) };
@@ -58,6 +62,7 @@ export class AgentStepRunner {
       assistantEntryId,
       signal: options.signal,
       runner: this.toolRunner,
+      loopGuard: this.loopGuard,
       ...(options.onUiEvent ? { ui: options.onUiEvent } : {}),
     });
     try {

@@ -5,6 +5,7 @@ import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.j
 import type { ExecutionJournal } from "./execution-journal.js";
 import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
 import { ToolScheduler } from "./tool-scheduler.js";
+import type { ToolLoopGuard } from "./tool-loop-guard.js";
 
 export interface IndexedToolCall {
   contentIndex: number;
@@ -34,6 +35,7 @@ export class ToolExecutionBatch {
       assistantEntryId: string;
       signal: AbortSignal;
       runner: ToolCallExecutor;
+      loopGuard: ToolLoopGuard;
       ui?: ExecutionEventSink;
     },
   ) {
@@ -122,6 +124,15 @@ export class ToolExecutionBatch {
       if (!result) throw new Error(`Tool call was not scheduled: ${prepared.call.id}`);
       // Deliberately await in source order. The underlying tasks remain concurrent.
       results.push(await result);
+    }
+    // Attach reminders only after the complete batch settles. Keeping them in
+    // the result preserves assistant/tool pairing and compaction step boundaries.
+    for (const [index, prepared] of this.finalized.entries()) {
+      const result = results[index]!;
+      const reminder = this.input.loopGuard.observe(prepared, result);
+      if (reminder && result.role === "toolResult") {
+        result.content = [...result.content, { type: "text", text: reminder }];
+      }
     }
     return results;
   }

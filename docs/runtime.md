@@ -239,6 +239,10 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝或重试响应；现有的错误、工具调用和空结果校验保持不变。
 
+主 agent、Worker 和 Dreamer 共用重复调用提醒：按助手声明顺序比较工具名、实际生效的参数和返回结果，连续三次相同时，在第三次工具结果后附加运行时提醒，每次执行最多提醒三次。参数或结果变化会重新计数，交互工具不参与。提醒不会自动停止任务，也不禁止有意义的轮询；工具的原始输出保持不变。提醒在完整批次结算后加入并随工具结果持久化，不额外插入用户消息。
+
+主 agent 的上下文溢出恢复不再限制为整个 turn 一次：完成一个工具批次后，后续步骤可以再次恢复；没有完成工具批次就再次溢出，仍会停止。阈值压缩与溢出恢复共同记录压缩后的工具批次数，如果连续三次在不足三个批次时又需要压缩，会在再次调用摘要模型之前结束当前 turn 并说明原因。只有实际成功的压缩才更新计数，手动压缩不使用这项轮内限制。它用于识别短时间反复填满上下文的情况，不限制正常长任务的总工具次数。
+
 `prompt()` 返回时，当前 turn 的工具收尾、历史结算和必要持久化已结束。结果的 `outcome` 区分 `completed`、`interrupted` 和 `failed`。调用参数无效、目标不存在、实例已关闭等请求错误会拒绝 Promise。
 
 `interrupt()` 和 `close()` 都是完成屏障。重复 `close()` 返回同一个 Promise；开始关闭后拒绝新的操作。宿主应在退出时等待这个 Promise，不要仅通知取消就释放进程。
@@ -260,7 +264,7 @@ Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝�
 | `model_call_started` / `model_call_finished` | 一次 `ModelClient.stream()` 逻辑调用；`callId`、模型、purpose、参数、结束状态、用量和时长 |
 | `model_attempt_started` / `model_attempt_finished` | 内置模型客户端的一次实际请求尝试，包括失败后将重试的响应；通过 callId 和 attempt 关联 |
 | `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
-| `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为模型可见的工具结果，details 为工具返回的可选结构化元数据。取消时 content 为诊断文本（会话封口可能另补中断结果） |
+| `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为执行器当时形成的模型可见结果，details 为工具返回的可选结构化元数据。完整批次结算后可能另向持久化结果追加重复调用提醒。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
 

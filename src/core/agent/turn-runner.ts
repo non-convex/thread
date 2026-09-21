@@ -32,6 +32,9 @@ interface CompactionInvocation {
   budget?: ContextBudget;
 }
 
+const MIN_TOOL_BATCHES_BETWEEN_COMPACTIONS = 3;
+const MAX_CONSECUTIVE_RAPID_REFILLS = 3;
+
 export class TurnRunner {
   private readonly stepRunner: AgentStepRunner;
 
@@ -52,6 +55,24 @@ export class TurnRunner {
   async execute(turn: Turn, options: RunTurnOptions): Promise<AssistantMessage[]> {
     const assistantMessages: AssistantMessage[] = [];
     let overflowRecoveryUsed = false;
+    let toolBatchesSinceCompaction: number | undefined;
+    let consecutiveRapidRefills = 0;
+    const compact = async (
+      assembled: { built: BuiltContext; context: Context },
+      invocation: CompactionInvocation,
+    ): Promise<CompactionResult> => {
+      const rapidRefill = toolBatchesSinceCompaction !== undefined &&
+        toolBatchesSinceCompaction < MIN_TOOL_BATCHES_BETWEEN_COMPACTIONS;
+      if (rapidRefill && consecutiveRapidRefills + 1 >= MAX_CONSECUTIVE_RAPID_REFILLS) {
+        throw new Error(`Context repeatedly refilled within ${MIN_TOOL_BATCHES_BETWEEN_COMPACTIONS} tool batches after compaction (${MAX_CONSECUTIVE_RAPID_REFILLS} consecutive occurrences). Use narrower reads or smaller tool outputs before continuing, or start a new session.`);
+      }
+      const result = await this.compactBuilt(assembled, options, invocation);
+      if (result.compacted) {
+        consecutiveRapidRefills = rapidRefill ? consecutiveRapidRefills + 1 : 0;
+        toolBatchesSinceCompaction = 0;
+      }
+      return result;
+    };
     for (let step = 1; ; step++) {
       options.signal.throwIfAborted();
       if (options.maxSteps !== undefined && step > options.maxSteps) {
@@ -62,7 +83,7 @@ export class TurnRunner {
       const threshold = Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
       if (budget.requestTokens > threshold &&
           this.compaction.needsCompaction(assembled.built, budget.overheadTokens, turn.id)) {
-        const compacted = await this.compactBuilt(assembled, options, {
+        const compacted = await compact(assembled, {
           reason: "threshold",
           turnId: turn.id,
           budget,
@@ -111,7 +132,7 @@ export class TurnRunner {
         )) {
           throw new Error("Context overflow cannot be reduced by compaction; use /rewind or /new");
         }
-        const recovered = await this.compactBuilt(overflowContext, options, {
+        const recovered = await compact(overflowContext, {
           reason: "overflow",
           turnId: turn.id,
           budget: overflowBudget,
@@ -138,6 +159,10 @@ export class TurnRunner {
       if (response.stopReason !== "toolUse") {
         throw new Error(`Model returned tool calls with stop reason ${response.stopReason}; calls were not executed`);
       }
+      // A completed tool batch advances the run: later steps may recover from
+      // another overflow, while repeated recovery without a batch is still blocked.
+      overflowRecoveryUsed = false;
+      if (toolBatchesSinceCompaction !== undefined) toolBatchesSinceCompaction++;
       continuedContextMessages.push(...results);
       continuedSessionMessages.push(...results);
       if (options.onUiEvent) {
