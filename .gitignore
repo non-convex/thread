@@ -15,6 +15,7 @@ pnpm-debug.log*
 .thread/
 
 # Local configuration and secrets
+AGENTS.md
 plan.md
 PROGRESS.md
 .env
