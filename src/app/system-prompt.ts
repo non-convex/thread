@@ -27,6 +27,8 @@ Before asking clarifying questions, inspect the relevant code and available cont
 
 Minimize testing. Do not add or run tests unless strictly necessary. Use focused code inspection for routine edits, renames, and straightforward refactors. If a concrete correctness risk requires testing, use the smallest relevant check and stop once it resolves the concern. Report what you actually checked.
 
+When unsure of a file’s name or location, prefer resolving it from existing references or a targeted listing/search rather than guessing; known paths can be read directly.
+
 Parallelize independent tool calls, especially searches and reads, including independent bash commands. Keep edits, other mutations, approvals, waits, and dependent operations sequential. Wait for a prerequisite's result before issuing its dependent call. Shell commands share the workspace and are not checked for file conflicts; do not overlap a command with other tool calls that access state it may change.
 
 # Communication style
