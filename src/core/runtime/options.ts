@@ -40,7 +40,10 @@ export interface ThreadRuntimeOptions {
   globalMemoryPath?: string;
   askPresenter?: AskPresenter;
   toolPolicy?: HostToolPolicy;
+  /** Exact external files writable by the main agent's built-in file tools. */
   writableExternalPaths?: readonly string[];
+  /** External directory trees writable by the main agent's built-in file tools. */
+  writableExternalDirectories?: readonly string[];
   worker?: {
     enabled: boolean;
     model?: ModelClient;
@@ -109,6 +112,7 @@ export function snapshotRuntimeOptions(options: ThreadRuntimeOptions): RuntimeOp
     ...(options.skills ? { skills: structuredClone(options.skills) } : {}),
     ...(options.search ? { search: { ...options.search } } : {}),
     ...(options.writableExternalPaths ? { writableExternalPaths: options.writableExternalPaths.map((item) => path.resolve(item)) } : {}),
+    ...(options.writableExternalDirectories ? { writableExternalDirectories: options.writableExternalDirectories.map((item) => path.resolve(item)) } : {}),
     ...(options.state ? { state: structuredClone(options.state) } : {}),
     ...(options.agentProfileDiagnostics ? { agentProfileDiagnostics: structuredClone(options.agentProfileDiagnostics) } : {}),
     ...(options.worker ? { worker: {

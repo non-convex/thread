@@ -105,7 +105,11 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 把游标中的搜索条件和分页位置展开为有效参数，宿主无需解码私有游标。文件访问前仍检查实际路径是否落在批准的资源范围，写入排队后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
 
+`write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 仍受项目内的任务 `writeScope` 限制。
+
 `skills: { paths: [...] }` 只在启动时扫描声明的目录。相对路径以 `rootPath` 为基准，多个目录按声明顺序加载；同一文件去重，同名 Skill 保留先声明项并报告诊断。runtime 不自动扫描 `${THREAD_HOME}/skills` 或其他全局路径。宿主也可传入已加载的 `LoadedSkills`，形如 `{ skills, diagnostics }`。
+
+CLI 和 `ThreadApp` 自动把配置的 Skill 扫描目录加入可写目录，默认是 `${THREAD_HOME}/skills`（未设置 `THREAD_HOME` 时为 `~/.thread/skills`）。主 agent 可用内置 `edit`、`write` 修改其中的 `SKILL.md`、脚本和参考文件，也可以创建新 Skill。裸 `ThreadRuntime` 的 Skill 加载配置不授予写权限，外部目录需显式传入 `writableExternalDirectories`。Skill 仍在启动时加载，修改后重新打开应用才会更新已加载的内容。
 
 有可供模型调用的 Skill 时，runtime 自动加入 `skill` 工具；无需在 `tools` 中重复声明。系统提示词只包含这些 Skill 的目录和加载说明，正文由工具按需返回。带 `disable-model-invocation: true` 的 Skill 不进入模型目录，也不能由模型的 `skill` 工具加载；宿主仍可使用 `invokeSkill()` 显式调用。`runtime.skills` 和 `runtime.skillDiagnostics` 返回独立副本。
 
@@ -146,6 +150,8 @@ MCP 属于未来的核心能力，将通过同一工具注册、策略、执行�
 worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeScope`，拒绝修改范围外的实际路径；检查发生在文件备份和修改之前，进入同路径写入队列后再次确认目标。文件范围只允许该文件，目录范围允许其后代，符号链接不能扩大范围；返工沿用原任务范围。宿主策略放行不会跳过这项检查。它不限制任意 bash 命令或自定义工具的文件副作用，也不是操作系统沙箱。详见 [Worker 架构](./worker-architecture.md)。
 
 开启 `fileCheckpoints: true` 后，内置文件编辑工具会保存每轮首次修改前的文件内容。worker 的记录归属于主 agent 的父 turn；bash、脚本和自定义工具的任意文件修改不会因此自动获得 checkpoint。
+
+文件 checkpoint 只覆盖项目内的文件。授权的项目外目录（包括全局 Skill 安装目录）可以编辑，但不进入项目文件备份，`rewind()` 不会还原这些外部文件。
 
 ```ts
 // 默认行为跟随创建实例时的 fileCheckpoints。

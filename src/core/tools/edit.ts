@@ -16,7 +16,7 @@ function normalizeToLF(text: string): string {
 export const editTool: AgentTool<EditArgs> = {
   name: "edit",
   description:
-    "Edit an existing UTF-8 workspace file with one or more exact text replacements. Use one edits array for separate changes in the same file. Every oldText must match a unique, non-overlapping region of the original file, not the result of earlier edits. Copy only enough context from read to make each match unique. Line ending differences are tolerated; other whitespace and characters must match. All edits are checked before writing. Content outside the matched regions is preserved. Prefer this over write for partial changes. Does not create files.",
+    "Edit an existing UTF-8 file in the workspace or an authorized external location with one or more exact text replacements. Use one edits array for separate changes in the same file. Every oldText must match a unique, non-overlapping region of the original file, not the result of earlier edits. Copy only enough context from read to make each match unique. Line ending differences are tolerated; other whitespace and characters must match. All edits are checked before writing. Content outside the matched regions is preserved. Prefer this over write for partial changes. Does not create files.",
   parameters: Type.Object({
     path: Type.String({ minLength: 1, description: "Existing file to edit." }),
     edits: Type.Array(Type.Object({

@@ -44,6 +44,7 @@ export interface ToolExecutorOptions {
   acceptsImages?: boolean;
   askPresenter?: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
+  writableExternalDirectories?: readonly string[];
   fileHistory?: (executionId: string) => FileEditTracker;
   globalMemory?: import("../global-memory.js").GlobalMemoryAccess;
   toolPolicy?: HostToolPolicy;
@@ -122,6 +123,7 @@ export class ToolCallExecutor {
     const planning = Object.freeze({
       rootPath: this.rootPath,
       writableExternalPaths: Object.freeze([...(this.options.writableExternalPaths ?? [])]),
+      writableExternalDirectories: Object.freeze([...(this.options.writableExternalDirectories ?? [])]),
       signal: input.signal,
     });
     let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
@@ -233,6 +235,9 @@ export class ToolCallExecutor {
         ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
         ...(this.options.writableExternalPaths?.length
           ? { writableExternalPaths: this.options.writableExternalPaths }
+          : {}),
+        ...(this.options.writableExternalDirectories?.length
+          ? { writableExternalDirectories: this.options.writableExternalDirectories }
           : {}),
         signal,
         resources: structuredClone(prepared.resources),

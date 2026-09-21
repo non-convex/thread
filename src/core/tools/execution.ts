@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isPathInside, realPath, resolveWorkspacePath } from "./path-safety.js";
+import { canonicalTarget, isPathInside, realPath, resolveWorkspacePath } from "./path-safety.js";
 import type { ToolContext } from "./types.js";
 
 export type ToolEffect = "read" | "write" | "process" | "interactive";
@@ -22,6 +22,7 @@ export interface ToolResourceClaim {
 export interface ToolPlanningContext {
   readonly rootPath: string;
   readonly writableExternalPaths?: readonly string[];
+  readonly writableExternalDirectories?: readonly string[];
   readonly signal: AbortSignal;
 }
 
@@ -90,27 +91,6 @@ function normalizeResourcePath(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-export async function canonicalTarget(target: string): Promise<string> {
-  try {
-    return await realPath(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const missing: string[] = [];
-  let parent = target;
-  while (true) {
-    missing.unshift(path.basename(parent));
-    const next = path.dirname(parent);
-    if (next === parent) return path.normalize(target);
-    parent = next;
-    try {
-      return path.join(await realPath(parent), ...missing);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-}
-
 /** Resolve and canonicalize a workspace path for scheduler conflict detection. */
 export async function workspacePathClaim(
   rootPath: string,
@@ -120,6 +100,7 @@ export async function workspacePathClaim(
     forWrite?: boolean;
     allowOutside?: boolean;
     allowedOutsidePaths?: readonly string[];
+    allowedOutsideDirectories?: readonly string[];
     scope?: ToolResourceScope;
   } = {},
 ): Promise<ToolResourceClaim> {
@@ -127,6 +108,7 @@ export async function workspacePathClaim(
     forWrite: options.forWrite === true,
     allowOutside: options.allowOutside === true,
     ...(options.allowedOutsidePaths ? { allowedOutsidePaths: options.allowedOutsidePaths } : {}),
+    ...(options.allowedOutsideDirectories ? { allowedOutsideDirectories: options.allowedOutsideDirectories } : {}),
   });
   return claim("workspace", normalizeResourcePath(await canonicalTarget(target)), access, options.scope ?? "exact");
 }
@@ -137,6 +119,7 @@ export function fileAccess(access: ToolResourceAccess, scope: ToolResourceScope 
     await workspacePathClaim(context.rootPath, args.path ?? (access === "read" ? "." : ""), access, {
       forWrite: access === "write", allowOutside: access === "read", scope,
       ...(access === "write" && context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+      ...(access === "write" && context.writableExternalDirectories ? { allowedOutsideDirectories: context.writableExternalDirectories } : {}),
     }),
   ] };
 }
@@ -153,6 +136,7 @@ export async function prepareFilePath<T extends Record<string, unknown> & { path
     forWrite: options.forWrite === true,
     allowOutside: options.forWrite !== true,
     ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+    ...(context.writableExternalDirectories ? { allowedOutsideDirectories: context.writableExternalDirectories } : {}),
   }));
   context.signal.throwIfAborted();
   return { ...args, path: path.isAbsolute(input) || !isPathInside(root, target) ? target : path.relative(root, target) || "." };
@@ -164,6 +148,7 @@ export async function resolveToolPath(context: ToolContext, input: string, forWr
   const target = await resolveWorkspacePath(context.rootPath, input, {
     forWrite, allowOutside: !forWrite,
     ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
+    ...(context.writableExternalDirectories ? { allowedOutsideDirectories: context.writableExternalDirectories } : {}),
   });
   if (context.resources) {
     const actual = normalizeResourcePath(await canonicalTarget(target));

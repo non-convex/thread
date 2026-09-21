@@ -25,6 +25,8 @@ export interface ToolContext {
   acceptsImages?: boolean;
   /** Exact files outside rootPath that this agent may write. */
   writableExternalPaths?: readonly string[];
+  /** Directory trees outside rootPath that this agent may write. */
+  writableExternalDirectories?: readonly string[];
   /** Omitted: ordinary workspace policy. Empty: no built-in file writes are allowed. */
   writeScope?: readonly import("./path-safety.js").FileWriteScope[];
   signal: AbortSignal;

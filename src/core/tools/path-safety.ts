@@ -7,6 +7,8 @@ export interface ResolvePathOptions {
   allowOutside?: boolean;
   /** Exact external files that a caller may write without opening their parent directory. */
   allowedOutsidePaths?: readonly string[];
+  /** External directory trees that a caller may write. */
+  allowedOutsideDirectories?: readonly string[];
 }
 
 /** Workspace-relative paths writable through the built-in file tools. */
@@ -24,6 +26,28 @@ function comparable(value: string): string {
 export async function realPath(target: string): Promise<string> {
   const resolved = await realpath(target);
   return process.platform === "win32" && /^[A-Za-z]:$/.test(resolved) ? `${resolved}\\` : resolved;
+}
+
+/** Resolve existing ancestors without requiring the target to exist. */
+export async function canonicalTarget(target: string): Promise<string> {
+  try {
+    return await realPath(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const missing: string[] = [];
+  let parent = target;
+  while (true) {
+    missing.unshift(path.basename(parent));
+    const next = path.dirname(parent);
+    if (next === parent) return path.normalize(target);
+    parent = next;
+    try {
+      return path.join(await realPath(parent), ...missing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
 }
 
 export function isPathInside(root: string, candidate: string): boolean {
@@ -47,11 +71,11 @@ export async function assertFileWriteScope(rootPath: string, target: string, sco
   if (!allowed) throw new Error(`File write is outside the declared write scope: ${path.relative(root, target)}. Use a path assigned to this task.`);
 }
 
-function confine(root: string, candidate: string, inputPath: string, kind: "path" | "resolved" | "parent"): void {
+function confine(root: string, candidate: string, inputPath: string, kind: "path" | "resolved" | "parent", location = "workspace"): void {
   if (isPathInside(root, candidate)) return;
-  if (kind === "resolved") throw new Error(`Path resolves outside workspace: ${inputPath}`);
-  if (kind === "parent") throw new Error(`Parent resolves outside workspace: ${inputPath}`);
-  throw new Error(`Path is outside workspace: ${inputPath}`);
+  if (kind === "resolved") throw new Error(`Path resolves outside ${location}: ${inputPath}`);
+  if (kind === "parent") throw new Error(`Parent resolves outside ${location}: ${inputPath}`);
+  throw new Error(`Path is outside ${location}: ${inputPath}`);
 }
 
 export async function resolveWorkspacePath(
@@ -65,7 +89,21 @@ export async function resolveWorkspacePath(
   const absolute = path.resolve(root, inputPath);
   const externalAllowed = !isPathInside(root, absolute) &&
     (options.allowedOutsidePaths ?? []).some((candidate) => samePath(path.resolve(candidate), absolute));
-  if (!allowOutside && !externalAllowed) confine(root, absolute, inputPath, "path");
+  let writeRoot = root;
+  let externalDirectory = false;
+  if (!allowOutside && !externalAllowed && !isPathInside(root, absolute)) {
+    for (const directory of options.allowedOutsideDirectories ?? []) {
+      const declared = path.resolve(directory);
+      const resolved = await canonicalTarget(declared);
+      if (isPathInside(declared, absolute) || isPathInside(resolved, absolute)) {
+        writeRoot = resolved;
+        externalDirectory = true;
+        break;
+      }
+    }
+    if (!externalDirectory) confine(root, absolute, inputPath, "path");
+  }
+  const location = externalDirectory ? "the allowed external directory" : "workspace";
   try {
     const stat = await lstat(absolute);
     if (forWrite && stat.isSymbolicLink()) throw new Error(`Refusing to write through a symlink: ${inputPath}`);
@@ -73,7 +111,7 @@ export async function resolveWorkspacePath(
     if (externalAllowed && !samePath(resolved, absolute)) {
       throw new Error(`Path resolves outside the allowed external file: ${inputPath}`);
     }
-    if (!allowOutside && !externalAllowed) confine(root, resolved, inputPath, "resolved");
+    if (!allowOutside && !externalAllowed) confine(writeRoot, resolved, inputPath, "resolved", location);
     if (forWrite) return resolved;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -89,14 +127,15 @@ export async function resolveWorkspacePath(
             throw new Error(`Parent resolves outside the allowed external file: ${inputPath}`);
           }
         } else {
-          confine(root, resolvedParent, inputPath, "parent");
+          // The allowed directory itself may not exist yet; check the complete target.
+          confine(writeRoot, path.join(resolvedParent, suffix), inputPath, "parent", location);
         }
         if (forWrite) return path.join(resolvedParent, suffix);
         break;
       } catch (parentError) {
         if ((parentError as NodeJS.ErrnoException).code !== "ENOENT") throw parentError;
         const next = path.dirname(parent);
-        if (next === parent || (!externalAllowed && !isPathInside(root, next))) {
+        if (next === parent) {
           throw new Error(`No workspace parent exists for: ${inputPath}`);
         }
         suffix = path.join(path.basename(parent), suffix);

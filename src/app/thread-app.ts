@@ -110,13 +110,15 @@ export class ThreadApp {
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
     const { search, globalMemoryPath, commitAttribution, projectInstructions = true, ...core } = options;
     const skills = core.skills ?? { paths: [skillsDirectory()] };
-    const paths = "paths" in skills ? [...skills.paths] : [];
+    const paths = "paths" in skills ? skills.paths.map((directory) => path.resolve(core.rootPath, directory)) : [];
     const tools = core.tools ?? ["read", "view_image", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
     const needsAskTool = !core.askPresenter && !tools.some((tool) => typeof tool !== "string" && tool.name === "ask");
     const fileCheckpoints = core.fileCheckpoints ?? true;
     const runtimeOptions = snapshotRuntimeOptions({
       ...core, tools, skills, fileCheckpoints,
+      writableExternalDirectories: [...(core.writableExternalDirectories ?? []), ...paths],
       systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, fileEditingPrompt(fileCheckpoints),
+        paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
       ...(search === false ? {} : { search: search ?? {} }),
       ...(globalMemoryPath === false ? {} : { globalMemoryPath: globalMemoryPath ?? path.join(getThreadHome(), GLOBAL_MEMORY_FILE) }),

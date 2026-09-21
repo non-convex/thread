@@ -27,6 +27,7 @@ export interface CreateAgentRunnerInput {
   agentTasks: AgentTaskOrchestrator;
   askPresenter: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
+  writableExternalDirectories?: readonly string[];
   globalMemoryPath?: string;
   toolPolicy?: HostToolPolicy;
   profileId?: string;
@@ -46,6 +47,7 @@ export function createAgentRunner(input: CreateAgentRunnerInput): AgentRunner {
       acceptsImages: input.model.acceptsImages === true,
       askPresenter: input.askPresenter,
       writableExternalPaths: input.writableExternalPaths ?? [],
+      writableExternalDirectories: input.writableExternalDirectories ?? [],
       fileHistory: (turnId) => input.fileHistory.forTurn(turnId),
       ...(input.globalMemoryPath ? { globalMemory: new GlobalMemoryAccess(input.globalMemoryPath) } : {}),
       ...(input.toolPolicy ? { toolPolicy: input.toolPolicy } : {}),

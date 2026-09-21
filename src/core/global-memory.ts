@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getThreadHome } from "./config/home.js";
 import type { FileContents } from "./file-history/service.js";
-import { canonicalTarget } from "./tools/execution.js";
-import { resolveWorkspacePath, samePath } from "./tools/path-safety.js";
+import { canonicalTarget, resolveWorkspacePath, samePath } from "./tools/path-safety.js";
 import type { ToolContext } from "./tools/types.js";
 import { atomicFile } from "./utils/atomic-file.js";
 
