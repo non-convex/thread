@@ -263,6 +263,7 @@ Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝�
 | --- | --- |
 | `model_call_started` / `model_call_finished` | 一次 `ModelClient.stream()` 逻辑调用；`callId`、模型、purpose、参数、结束状态、用量和时长 |
 | `model_attempt_started` / `model_attempt_finished` | 内置模型客户端的一次实际请求尝试，包括失败后将重试的响应；通过 callId 和 attempt 关联 |
+| `model_cache_diagnostic` | 显式启用时提供 provider 请求前缀的比较结果，不包含请求正文；通过 callId 和 attempt 关联已观察请求 |
 | `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
 | `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为执行器当时形成的模型可见结果，details 为工具返回的可选结构化元数据。完整批次结算后可能另向持久化结果追加重复调用提醒。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
@@ -288,6 +289,38 @@ const unsubscribe = runtime.subscribe((event) => {
 ```
 
 `captureModelContent` 默认 false，在每次模型调用开始时决定是否捕获；未选择它的订阅者不会收到 input/response。已有工具参数、工具结果和文本增量仍可见，该选项不是权限隔离。导出器应自行决定内容采集、脱敏、截断、采样和保留策略。普通 `prompt({ onEvent })` 回调不包含完整模型 input/response。
+
+### 请求前缀诊断
+
+缓存命中率降低时，可以显式开启 provider 请求前缀诊断。CLI 使用一个独立的 JSONL 文件，不把诊断写进对话或模型上下文：
+
+```bash
+thread --root /path/to/project --cache-diagnostics ./cache-diagnostics.jsonl
+```
+
+输出路径相对于启动目录，父目录须已存在；文件以追加方式写入。日志只包含执行标识、比较位置、数量、状态，以及对应请求的 token 用量和耗时，不包含提示词、工具参数、结果正文、图片、请求头或缓存 key 的值。实际 attempt 有观测时记录 `model_attempt_finished`，否则记录 `model_call_finished` 的用量，避免把最终 attempt 重复计算。文件最多 16 MiB，待写队列最多 1 MiB；达到限制或写入失败时会停止该诊断订阅，退出时报告原因，不中断模型任务。正常退出会等待已接收的日志写入，仍受 CLI 原有的五秒关闭期限约束。
+
+嵌入宿主和扩展可使用同一个显式订阅选项，无需开启完整内容采集：
+
+```ts
+const unsubscribe = runtime.subscribe((event) => {
+  if (event.type === "model_cache_diagnostic") {
+    console.log(event.callId, event.attempt, event.diagnostic);
+  }
+}, { promptCacheDiagnostics: true });
+```
+
+`promptCacheDiagnostics` 默认关闭，未开启时不复制或计算 provider payload 的指纹；未选择该选项的订阅者不接收诊断事件。能力在每次模型调用开始时确定，覆盖主 agent、Worker、Dreamer 和两类摘要请求。最后一个诊断订阅取消后清除比较基线，重新开启从新基线开始。
+
+内置 Pi 客户端使用 `onPayload`，观察层标为 `stage: "provider_payload"`：这是 provider 格式转换后的完整逻辑请求，在 HTTP 压缩以及 WebSocket 增量续接处理之前。它不是线上压缩字节或 WebSocket 帧抓包，也不表示服务端已经接收请求。诊断不会修改 payload、切换传输方式、调整缓存标记或增加模型请求。使用 `callId` 和 `attempt` 关联已有的请求结果、usage 与耗时，才能判断这些请求是否成功、是否实际命中缓存。
+
+当前识别 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Azure Responses 和 Codex Responses 的请求结构。事件首次为 `baseline`，后续同一逻辑会话的请求为 `compared`。其中 `tools`、`system`、`history` 分别报告当前与上次条目数、相同前缀条目数，以及 `unchanged`、`appended`、`truncated` 或 `changed`。`firstChangedItem` 在各自分区内从 1 计数；追加时它表示第一条新增内容。Responses 的 `historyFormat` 为 `responses_input`，这里的条目可能是消息、思考、工具调用或工具结果，不等同于聊天消息数。
+
+对象字段顺序不算内容变化，数组及正文顺序仍然参与比较。只在协议规定的位置排除 `cache_control` 与 `prompt_cache_breakpoint`，并单独报告 `cacheMarkersChanged`；工具参数或 schema 内同名的普通字段不会被忽略。`changedSettings` 只列出已检查的顶层设置名称，包括模型、工具选择、思考、输出格式、输出预算、采样、缓存 key/期限和 service tier，不包含它们的值。相同的结构化前缀不保证命中：服务端分词、隐藏提示、缓存过期、路由和请求头等不在这项比较的证明范围内。
+
+比较基线只在内存保留指纹，不保留原文，也不把指纹写入诊断日志。基线按 Session、agent 和摘要用途区分；Worker 使用 task ID，其他没有 Session 的后台执行使用 execution ID，避免并行任务互相覆盖基线。`previous` 指向上一次可比较的已观察请求，`elapsedMs` 表示两次观察的间隔。最多保留最近 64 组基线，每次最多处理 4,096 个条目和 32 MiB 的指纹输入；超过限制只返回 `unavailable`，不会限制原模型请求。切换 API 或基线被淘汰后会重新建立基线。
+
+自定义 `ModelClient` 可通过可选的 `ModelRequestOptions.onProviderRequest({ api, payload, attempt })` 接入，应在 provider 格式转换后提供独立副本并忽略观察者的返回值。内置客户端已隔离观察者修改、异常和异步拒绝。未观察到该钩子时，报告 `provider_payload_not_observed`，不会用 runtime 的原始 `Context` 冒充 provider 请求；不支持的 API 或结构也会明确返回 `unavailable`。
 
 ### 外部适配器与关闭
 

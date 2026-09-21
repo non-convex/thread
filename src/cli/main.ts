@@ -13,12 +13,14 @@ import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
 import { settlesWithin } from "../core/utils/async.js";
 import { loginProvider, logoutProvider, showAuthStatus } from "./subscription-auth.js";
+import { openCacheDiagnostics } from "./cache-diagnostics.js";
 
 interface CliOptions {
   rootPath: string;
   provider: string | undefined;
   model: string | undefined;
   configPath: string | undefined;
+  cacheDiagnosticsPath: string | undefined;
   extensions: string[];
   tui: TerminalMode | "plain";
   help: boolean;
@@ -53,6 +55,7 @@ function parseArgs(argv: string[]): CliOptions {
     provider: process.env.THREAD_PROVIDER,
     model: process.env.THREAD_MODEL,
     configPath: process.env.THREAD_CONFIG,
+    cacheDiagnosticsPath: undefined,
     extensions: [],
     tui: "fullscreen",
     help: false,
@@ -60,13 +63,14 @@ function parseArgs(argv: string[]): CliOptions {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
     if (arg === "--help" || arg === "-h") options.help = true;
-    else if (["--root", "--provider", "--model", "--config", "--extension", "--tui"].includes(arg)) {
+    else if (["--root", "--provider", "--model", "--config", "--extension", "--tui", "--cache-diagnostics"].includes(arg)) {
       const value = argv[++index];
       if (!value) throw new Error(`${arg} requires a value`);
       if (arg === "--root") options.rootPath = value;
       if (arg === "--provider") options.provider = value;
       if (arg === "--model") options.model = value;
       if (arg === "--config") options.configPath = value;
+      if (arg === "--cache-diagnostics") options.cacheDiagnosticsPath = value;
       if (arg === "--extension") options.extensions.push(value);
       if (arg === "--tui") {
         if (value === "plain") options.tui = "plain";
@@ -86,12 +90,13 @@ function help(): string {
 
 Usage: thread [--root <project-directory>] [--config <file>]
                  [--provider <id> --model <id>] [--extension <module>]
-                 [--tui fullscreen|plain]
+                 [--tui fullscreen|plain] [--cache-diagnostics <file>]
        thread login <provider>
        thread logout <provider>
        thread auth status
 
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
+--cache-diagnostics appends content-free provider-prefix diagnostics as JSONL (opt-in).
 Default config: ~/.thread/config.json
 Remembered main model, thinking, and agent choices: ~/.thread/state.json (delete to reset)
 Subscription credentials: ~/.thread/auth.json
@@ -267,7 +272,13 @@ async function main(): Promise<void> {
       stateSave = stateSave.then(() => saveThreadState(nextState)).catch(() => undefined);
     },
   });
+  let closeCacheDiagnostics: (() => Promise<void>) | undefined;
   try {
+    if (options.cacheDiagnosticsPath) {
+      const logPath = resolve(options.cacheDiagnosticsPath);
+      closeCacheDiagnostics = await openCacheDiagnostics(app.runtime, logPath);
+      output.write(`Cache diagnostics: ${logPath} (provider-payload comparisons; no request contents)\n`);
+    }
     for (const extension of options.extensions) await app.loadExtension(extension.startsWith(".") ? resolve(extension) : extension);
     if (usePlain) {
       await runPlainCli(app, {
@@ -278,8 +289,12 @@ async function main(): Promise<void> {
       await new terminalModule.ThreadTerminalApp(app, { mode: "fullscreen" }).run();
     }
   } finally {
+    const appClosed = app.close().finally(async () => {
+      try { await closeCacheDiagnostics?.(); }
+      catch (error) { errorOutput.write(`Cache diagnostics: ${error instanceof Error ? error.message : String(error)}\n`); }
+    });
     const closed = await settlesWithin(
-      Promise.all([app.close(), stateSave]),
+      Promise.all([appClosed, stateSave]),
       APPLICATION_SHUTDOWN_GRACE_MS,
     );
     if (!closed) errorOutput.write("Thread shutdown exceeded 5 seconds; exiting now.\n");

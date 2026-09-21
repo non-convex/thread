@@ -62,6 +62,9 @@ export async function streamModel(
 ): Promise<AssistantMessage> {
   if (!sink) return model.stream(context, options);
   const capture = sink.captureModelContent?.() ?? false;
+  const scope = sink.identity;
+  const diagnostics = scope ? sink.promptCacheDiagnostics?.() : undefined;
+  let providerPayloadObserved = false;
   const cacheRetention = options.cacheRetention ?? model.cacheRetention;
   const cacheKey = options.sessionId ?? model.cacheKey;
   const common = { callId: createId("model-call"), providerId: model.providerId, modelId: model.modelId, purpose: detail.purpose };
@@ -85,6 +88,16 @@ export async function streamModel(
   });
   try {
     response = await model.stream(context, { ...options,
+      ...(diagnostics && scope ? { onProviderRequest: (request: { api: string; payload: unknown; attempt: number }) => {
+        providerPayloadObserved = true;
+        const diagnostic = diagnostics.observe(request.payload, request.api, { ...common, scope, attempt: request.attempt });
+        safeExecutionEvent(sink, { type: "model_cache_diagnostic", ...identity(), attempt: request.attempt, diagnostic });
+        // The provider supplied a defensive copy. Never return a replacement payload.
+        try {
+          const pending = options.onProviderRequest?.(request);
+          if (pending) void pending.catch(() => undefined);
+        } catch { /* Observation only. */ }
+      } } : {}),
       onTextDelta: (delta) => { firstOutputAt ??= Date.now(); options.onTextDelta?.(delta); },
       onThinkingDelta: (delta) => { firstOutputAt ??= Date.now(); options.onThinkingDelta?.(delta); },
       onToolCallComplete: (call, index) => { firstOutputAt ??= Date.now(); return options.onToolCallComplete?.(call, index); },
@@ -104,6 +117,11 @@ export async function streamModel(
     error = cause;
     throw cause;
   } finally {
+    if (diagnostics && !providerPayloadObserved) {
+      safeExecutionEvent(sink, { type: "model_cache_diagnostic", ...identity(), diagnostic: {
+        stage: "provider_payload", status: "unavailable", reason: "provider_payload_not_observed",
+      } });
+    }
     safeExecutionEvent(sink, { type: "model_call_finished", ...identity(), durationMs: performance.now() - start,
       outcome: outcome(options.signal, response, error), attemptsObserved, ...resultFields(response),
       ...(firstOutputAt !== undefined ? { firstOutputAt } : {}),

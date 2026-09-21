@@ -17,6 +17,8 @@ export interface ModelRetryCallbacks {
 export interface ModelRequestOptions extends ModelRetryCallbacks {
   /** Read-only attempt observations, including failed responses before retry. */
   onAttempt?: (event: ModelAttemptEvent) => void | Promise<void>;
+  /** Read-only copy after provider payload construction, before compression/transport continuation. Opt-in. */
+  onProviderRequest?: (request: { api: string; payload: unknown; attempt: number }) => void | Promise<void>;
   signal: AbortSignal;
   maxTokens?: number;
   reasoning?: ThinkingLevel;
@@ -117,6 +119,13 @@ export class PiModelClient implements ModelClient {
           maxRetries: 0, // Retry above so observers see every attempt.
           sessionId: options.sessionId ?? this.cacheKey,
           ...(cacheRetention === undefined ? {} : { cacheRetention }),
+          ...(options.onProviderRequest ? { onPayload: (payload: unknown, requestModel: Model<Api>) => {
+            try {
+              const pending = options.onProviderRequest?.({ api: requestModel.api, payload: structuredClone(payload), attempt });
+              if (pending) void pending.catch(() => undefined);
+            } catch { /* Diagnostics cannot change or reject the provider request. */ }
+            return undefined;
+          } } : {}),
         });
         for await (const event of stream) {
           switch (event.type) {

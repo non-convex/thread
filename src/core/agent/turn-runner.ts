@@ -21,6 +21,7 @@ export interface RunTurnOptions extends ExecutionLimits {
   sessionId?: string;
   onEvent?: RuntimeEventSink;
   captureModelContent?: () => boolean;
+  promptCacheDiagnostics?: () => import("./prompt-cache-diagnostics.js").PromptCacheDiagnostics | undefined;
   onTextDelta?: (delta: string) => void;
   onUiEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];

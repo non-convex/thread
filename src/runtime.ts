@@ -47,4 +47,5 @@ export type { CompactionResult } from "./core/context/compaction/service.js";
 export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./core/skills/loader.js";
 
 export type { ModelAttemptEvent } from "./core/agent/model-observation.js";
+export type { PromptCacheDiagnostic, PromptCacheSectionDiagnostic } from "./core/agent/prompt-cache-diagnostics.js";
 export type { AgentTask, AgentTaskRun, AgentTaskSummary } from "./core/agent-task/model.js";

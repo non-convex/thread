@@ -1,6 +1,7 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRunner, type TurnResult } from "../agent/runner.js";
 import type { ModelClient } from "../agent/model-client.js";
+import { PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
 import type { ModelCatalog } from "../agent/model-catalog.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
 import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
@@ -61,6 +62,7 @@ export class ThreadRuntime {
   private readonly loadedSkills: LoadedSkills;
   private readonly workerSettings: WorkerProfileSettings;
   private readonly listeners = new Map<RuntimeEventSink, RuntimeSubscriptionOptions>();
+  private cacheDiagnostics: PromptCacheDiagnostics | undefined;
   private state: ThreadState;
   private askPresenter: AskPresenter | undefined;
   private askDisposer: (() => void) | undefined;
@@ -97,7 +99,7 @@ export class ThreadRuntime {
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
       onEvent: runtimeEventSink({ executionId: "dreamer", agentId: "dreamer", sessionId: null, turnId: null },
-        (event) => this.publish(event), () => this.captureModelContent()),
+        (event) => this.publish(event), () => this.captureModelContent(), () => this.promptCacheDiagnostics()),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
     }) : undefined;
     for (const tool of options.tools) this.toolRegistry.register(tool);
@@ -213,7 +215,11 @@ export class ThreadRuntime {
       const runner = this.createAgentRunner(session.id);
       const result = await runner.run(input, { ...options, sessionId: session.id, signal,
         captureModelContent: () => this.captureModelContent(),
-        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
+        promptCacheDiagnostics: () => this.promptCacheDiagnostics(),
+        onEvent: (event) => {
+          this.publish(event);
+          if (event.type !== "model_cache_diagnostic") safeRuntimeEvent(options.onEvent, withoutModelContent(event));
+        } });
       this.dreamer?.recordTurn(this.tree.messagesForTurn(result.turn.id));
       return result;
     });
@@ -231,7 +237,11 @@ export class ThreadRuntime {
       if (!this.model) throw new Error("Compaction requires a configured model");
       return this.createAgentRunner(session.id).compactCurrent({ ...options, sessionId: session.id, signal,
         captureModelContent: () => this.captureModelContent(),
-        onEvent: (event) => { this.publish(event); safeRuntimeEvent(options.onEvent, withoutModelContent(event)); } });
+        promptCacheDiagnostics: () => this.promptCacheDiagnostics(),
+        onEvent: (event) => {
+          this.publish(event);
+          if (event.type !== "model_cache_diagnostic") safeRuntimeEvent(options.onEvent, withoutModelContent(event));
+        } });
     });
   }
 
@@ -279,7 +289,11 @@ export class ThreadRuntime {
   subscribe(listener: RuntimeEventSink, options: RuntimeSubscriptionOptions = {}): () => void {
     this.assertOpen();
     this.listeners.set(listener, { ...options });
-    return () => this.listeners.delete(listener);
+    this.promptCacheDiagnostics();
+    return () => {
+      this.listeners.delete(listener);
+      this.promptCacheDiagnostics();
+    };
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -441,6 +455,8 @@ export class ThreadRuntime {
       await collect(this.files.settle());
       await collect(this.repository.close());
       this.listeners.clear();
+      this.cacheDiagnostics?.clear();
+      this.cacheDiagnostics = undefined;
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "Thread resources failed to close cleanly");
     });
@@ -459,8 +475,18 @@ export class ThreadRuntime {
     return [...this.listeners.values()].some((options) => options.captureModelContent);
   }
 
+  private promptCacheDiagnostics(): PromptCacheDiagnostics | undefined {
+    if ([...this.listeners.values()].some((options) => options.promptCacheDiagnostics)) {
+      return this.cacheDiagnostics ??= new PromptCacheDiagnostics();
+    }
+    this.cacheDiagnostics?.clear();
+    this.cacheDiagnostics = undefined;
+    return undefined;
+  }
+
   private publish(event: RuntimeEvent): void {
     for (const [listener, options] of this.listeners) {
+      if (event.type === "model_cache_diagnostic" && !options.promptCacheDiagnostics) continue;
       safeRuntimeEvent(listener, options.captureModelContent ? event : withoutModelContent(event));
     }
   }

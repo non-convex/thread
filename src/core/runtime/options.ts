@@ -61,7 +61,7 @@ export interface ThreadRuntimeOptions {
   onStateChange?: (state: ThreadState) => void;
 }
 
-export type PromptOptions = Omit<RunTurnOptions, "signal" | "sessionId" | "captureModelContent"> & { signal?: AbortSignal };
+export type PromptOptions = Omit<RunTurnOptions, "signal" | "sessionId" | "captureModelContent" | "promptCacheDiagnostics"> & { signal?: AbortSignal };
 
 export interface RewindOptions {
   signal?: AbortSignal;

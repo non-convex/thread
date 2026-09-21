@@ -125,12 +125,13 @@ export class AgentRunner {
 
   private withEvents(options: RunTurnOptions, sessionId: string, turnId: string): RunTurnOptions {
     if (!options.onEvent && !options.onUiEvent) return options;
-    const domain = runtimeEventSink({ sessionId, turnId, executionId: turnId, agentId: "main" }, options.onEvent, options.captureModelContent);
+    const domain = runtimeEventSink({ sessionId, turnId, executionId: turnId, agentId: "main" }, options.onEvent, options.captureModelContent, options.promptCacheDiagnostics);
     const onUiEvent: ExecutionEventSink = (event) => {
       domain(event);
       safeExecutionEvent(options.onUiEvent, event);
     };
     onUiEvent.captureModelContent = () => options.captureModelContent?.() ?? false;
+    onUiEvent.promptCacheDiagnostics = () => options.promptCacheDiagnostics?.();
     return { ...options, onUiEvent };
   }
 }

@@ -1,6 +1,7 @@
 import type { Context, AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { ExecutionIdentity } from "./policy.js";
 import type { AgentTaskSummary } from "../agent-task/model.js";
+import type { PromptCacheDiagnostic, PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
 
 export type ModelEvent = {
   callId: string;
@@ -12,6 +13,7 @@ export type ModelEvent = {
   | { type: "model_call_started"; input?: Context; parameters: { maxTokens?: number; reasoning?: string; cacheRetention?: string; cacheKey?: string } }
   | { type: "model_call_finished"; outcome: "completed" | "failed" | "cancelled"; durationMs: number;
       firstOutputAt?: number; response?: AssistantMessage; usage?: Usage; stopReason?: string; error?: string; attemptsObserved: number }
+  | { type: "model_cache_diagnostic"; attempt?: number; diagnostic: PromptCacheDiagnostic }
   | { type: "model_attempt_started"; attempt: number }
   | { type: "model_attempt_finished"; attempt: number; outcome: "completed" | "failed" | "cancelled";
       durationMs: number; firstOutputAt?: number; response?: AssistantMessage; usage?: Usage; stopReason?: string; error?: string }
@@ -78,7 +80,11 @@ type ExecutionPayload = (
     });
 
 export type ExecutionEvent = ExecutionPayload & { timestamp?: number; identity?: ExecutionIdentity };
-export type ExecutionEventSink = ((event: ExecutionEvent) => void) & { captureModelContent?: () => boolean };
+export type ExecutionEventSink = ((event: ExecutionEvent) => void) & {
+  captureModelContent?: () => boolean;
+  promptCacheDiagnostics?: () => PromptCacheDiagnostics | undefined;
+  identity?: ExecutionIdentity;
+};
 
 export type RuntimeScope = ExecutionIdentity;
 type AssistantEvent = Extract<ExecutionPayload, { type: "assistant_started" | "assistant_text_delta" | "assistant_thinking_delta" | "model_retry_scheduled" | "model_retry_started" }>;
@@ -95,6 +101,8 @@ export type RuntimeEventSink = (event: RuntimeEvent) => void | Promise<void>;
 export interface RuntimeSubscriptionOptions {
   /** Includes model inputs and complete responses. Tool content and text deltas are already public events. */
   captureModelContent?: boolean;
+  /** Compare provider-formatted request prefixes without publishing their contents. Default: false. */
+  promptCacheDiagnostics?: boolean;
 }
 
 export function safeRuntimeEvent(sink: RuntimeEventSink | undefined, event: RuntimeEvent): void {
@@ -113,10 +121,16 @@ export function safeExecutionEvent(sink: ExecutionEventSink | undefined, event: 
 
 export function executionEventSink(identity: ExecutionIdentity, sink?: ExecutionEventSink): ExecutionEventSink {
   return Object.assign((event: ExecutionEvent) => safeExecutionEvent(sink, { ...event, identity: event.identity ?? identity }),
-    { captureModelContent: () => sink?.captureModelContent?.() ?? false });
+    { identity, captureModelContent: () => sink?.captureModelContent?.() ?? false,
+      promptCacheDiagnostics: () => sink?.promptCacheDiagnostics?.() });
 }
 
-export function runtimeEventSink(scope: RuntimeScope, sink?: RuntimeEventSink, captureModelContent?: () => boolean): ExecutionEventSink {
+export function runtimeEventSink(
+  scope: RuntimeScope,
+  sink?: RuntimeEventSink,
+  captureModelContent?: () => boolean,
+  promptCacheDiagnostics?: () => PromptCacheDiagnostics | undefined,
+): ExecutionEventSink {
   const emit: ExecutionEventSink = (event) => {
     if (!sink) return;
     const { identity, ...payload } = event;
@@ -142,7 +156,9 @@ export function runtimeEventSink(scope: RuntimeScope, sink?: RuntimeEventSink, c
         safeRuntimeEvent(sink, { ...common, ...payload });
     }
   };
+  emit.identity = scope;
   emit.captureModelContent = captureModelContent ?? (() => false);
+  if (promptCacheDiagnostics) emit.promptCacheDiagnostics = promptCacheDiagnostics;
   return emit;
 }
 
