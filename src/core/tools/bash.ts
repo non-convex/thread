@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { runProcess, type ProcessResult } from "../utils/process.js";
-import { claim, entireWorkspaceClaim } from "./execution.js";
+import { noResources } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 import { fail } from "./results.js";
 
@@ -134,7 +134,7 @@ async function presentBashOutput(result: ProcessResult): Promise<ToolResult> {
 export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
   name: "bash",
   description:
-    `Run a foreground shell command in the workspace. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Shows up to ${BASH_PREVIEW_BYTES / 1024} KiB from the end of stdout and stderr; longer captured output is saved to a temporary file. Capture is limited to the last 64KB per stream.`,
+    `Run a foreground shell command in the workspace. Independent commands may run in parallel. Wait for prerequisite results and keep mutations or commands that could conflict with other tool calls sequential; shell file conflicts are not checked automatically. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Shows up to ${BASH_PREVIEW_BYTES / 1024} KiB from the end of stdout and stderr; longer captured output is saved to a temporary file. Capture is limited to the last 64KB per stream.`,
   parameters: Type.Object({
     command: Type.String(),
     timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: BASH_MAX_TIMEOUT_MS })),
@@ -142,8 +142,10 @@ export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
   replay: "never",
   execution: {
     effect: "process",
-    mode: "sequential",
-    resources: () => [entireWorkspaceClaim("write"), claim("process", "foreground", "write")],
+    mode: "parallel",
+    // Shell effects are not enumerated; the model must sequence conflicting calls.
+    // Empty claims allow concurrency, not read-only access or filesystem isolation.
+    resources: noResources,
   },
   async execute(args, context) {
     const timeoutMs = args.timeoutMs ?? BASH_DEFAULT_TIMEOUT_MS;

@@ -8,6 +8,8 @@ ${fileEditingPrompt(fileCheckpoints)}
 
 Implement only the assigned task. Your file changes are immediately visible to everyone. Inspect the relevant code before editing, follow the supplied guidance and acceptance criteria, and stay within the declared write scope. Do not undo, overwrite, or reorganize unrelated work; assume other agents may be editing outside your scope. Do not delegate, ask the user questions, or use Git commands that change repository state. If the task cannot be completed safely within its boundaries, explain the blocker instead of expanding scope.
 
+Parallelize independent searches and reads, including independent bash commands. Keep edits, other mutations, waits, and dependent operations sequential, waiting for prerequisite results before continuing. Shell file conflicts are not checked automatically; do not overlap commands with tools or agents accessing state those commands may change.
+
 In your final response, briefly state what you completed, which files you changed, and any unfinished work or blockers. Include verification results only when verification was performed.`;
 }
 
