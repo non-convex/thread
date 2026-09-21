@@ -12,6 +12,8 @@ import type { FileEditTracker } from "../file-history/service.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import type { ExecutionIdentity, HostToolPolicy } from "../runtime/policy.js";
 import { abortedToolResult } from "../session-tree/conversation-seal.js";
+import { FileReadState } from "../tools/file-read-state.js";
+import { replayableMessages } from "./model-client.js";
 
 export interface PreparedToolCall {
   journal: ExecutionJournal;
@@ -61,6 +63,8 @@ export interface ToolExecutorOptions {
  * later in assistant source order.
  */
 export class ToolCallExecutor {
+  private readonly fileReads = new FileReadState();
+
   constructor(
     private readonly rootPath: string,
     private readonly tools: ToolRegistry,
@@ -69,7 +73,9 @@ export class ToolCallExecutor {
   ) {}
 
   observeModelContext(messages: readonly Message[]): void {
-    this.options.globalMemory?.observeModelContext(messages);
+    const visible = replayableMessages(messages);
+    this.fileReads.observeModelContext(visible);
+    this.options.globalMemory?.observeModelContext(visible);
   }
 
   async prepare(input: {
@@ -230,6 +236,7 @@ export class ToolCallExecutor {
       const context: ToolContext = {
         ...(this.options.fileHistory ? { fileHistory: this.options.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
+        fileReads: this.fileReads,
         acceptsImages: this.options.acceptsImages === true,
         ...(this.options.globalMemory ? { globalMemory: this.options.globalMemory } : {}),
         ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
@@ -274,13 +281,14 @@ export class ToolCallExecutor {
         modelContent = `${settled.content}\n[tool_result extension failed: ${error instanceof Error ? error.message : String(error)}]`;
       }
     }
-    const { images: _images, ...raw } = settled;
+    const { images: _images, fileObservation, ...raw } = settled;
     return {
       role: "toolResult",
       toolCallId: prepared.call.id,
       toolName: prepared.call.name,
       content: [{ type: "text", text: modelContent }, ...structuredClone(modelImages ?? [])],
-      details: { raw, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed" } satisfies ToolResultMetadata,
+      details: { raw, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed",
+        ...(!settled.isError && fileObservation ? { fileObservation } : {}) } satisfies ToolResultMetadata,
       isError: settled.isError,
       timestamp: Date.now(),
     };

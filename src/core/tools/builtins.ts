@@ -15,7 +15,7 @@ import { webFetchTool, webSearchTool } from "./web.js";
 export const writeTool: AgentTool<{ path: string; content: string }> = {
   name: "write",
   description:
-    "Create a new UTF-8 file or completely replace an existing one. Prefer edit for partial changes to a file that already exists.",
+    "Create a new UTF-8 file or completely replace an existing one. Before overwriting, read the file in an earlier model step; if it changed since that read, re-read it and regenerate the write. Your successful writes remain current without reading them back. Prefer edit for partial changes to a file that already exists.",
   parameters: Type.Object({
     path: Type.String({ description: "File to create or replace." }),
     content: Type.String({ description: "Full file contents." }),
@@ -29,12 +29,13 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
       const inputPath = args.path;
       if (!inputPath) throw new Error("path cannot be empty");
       let changes: FileDiffDetails = {};
-      const { existed, bytes } = await updateFile(context, inputPath, (before) => {
+      const { existed, bytes, fileObservation } = await updateFile(context, inputPath, (before) => {
         const updated = Buffer.from(args.content, "utf8");
         changes = fileDiff(inputPath, before?.content, updated);
         return updated;
-      });
-      return ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`, { existed, bytes, ...changes });
+      }, { requireRead: true });
+      return { ...ok(`${existed ? "Overwrote" : "Created"} ${inputPath} (${bytes} bytes)`, { existed, bytes, ...changes }),
+        ...(fileObservation ? { fileObservation } : {}) };
     } catch (error) {
       return fail(error);
     }

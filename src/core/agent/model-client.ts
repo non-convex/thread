@@ -47,7 +47,7 @@ export interface ModelClient {
 }
 
 /** Pi skips incomplete assistant responses; their tool results must be skipped with them. */
-function replayableMessages(messages: readonly Message[]): Message[] {
+export function replayableMessages(messages: readonly Message[]): Message[] {
   const skippedCalls = new Set<string>();
   return messages.filter((message) => {
     if (message.role === "assistant") {

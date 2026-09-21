@@ -7,6 +7,8 @@ export interface ToolResult {
   images?: readonly ImageContent[];
   isError: boolean;
   details?: unknown;
+  /** Version receipt for built-in file tools; persisted separately from model text. */
+  fileObservation?: import("./file-read-state.js").FileObservation;
 }
 
 export type ToolOutcome = "completed" | "failed" | "cancelled" | "denied";
@@ -14,7 +16,8 @@ export type ToolOutcome = "completed" | "failed" | "cancelled" | "denied";
 /** Saved with tool-result messages; presentation metadata is not model text. */
 export interface ToolResultMetadata {
   /** Image bytes live only in the message content, not in presentation metadata. */
-  raw: Omit<ToolResult, "images">;
+  raw: Omit<ToolResult, "images" | "fileObservation">;
+  fileObservation?: import("./file-read-state.js").FileObservation;
   outcome: ToolOutcome;
   durationMs?: number;
 }
@@ -33,6 +36,8 @@ export interface ToolContext {
   /** Resources approved and reserved for this invocation. Absent for direct tool calls. */
   resources?: readonly ToolResourceClaim[];
   fileHistory?: import("../file-history/service.js").FileEditTracker;
+  /** File versions whose results reached this execution's current model context. */
+  fileReads?: import("./file-read-state.js").FileReadState;
   /** Per-execution observations and coordinated access to the configured memory file. */
   globalMemory?: import("../global-memory.js").GlobalMemoryAccess;
   invocation: {

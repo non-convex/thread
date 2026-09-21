@@ -38,7 +38,7 @@ export const editTool: AgentTool<EditArgs> = {
       if (!Array.isArray(args.edits) || args.edits.length === 0) throw new Error("edits must contain at least one replacement");
 
       let changes: FileDiffDetails = {};
-      await updateFile(context, inputPath, (before) => {
+      const { fileObservation } = await updateFile(context, inputPath, (before) => {
         if (!before) throw new Error(`File not found: ${inputPath}`);
         const buffer = before.content;
         if (buffer.includes(0)) throw new Error(`Binary file (${buffer.length} bytes): ${inputPath}`);
@@ -79,7 +79,7 @@ export const editTool: AgentTool<EditArgs> = {
         return updated;
       });
       return { content: `Applied ${args.edits.length} edit(s) to ${inputPath}`, isError: false,
-        details: { edits: args.edits.length, ...changes } };
+        details: { edits: args.edits.length, ...changes }, ...(fileObservation ? { fileObservation } : {}) };
     } catch (error) {
       return { content: error instanceof Error ? error.message : String(error), isError: true };
     }

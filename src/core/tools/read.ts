@@ -4,7 +4,9 @@ import { createInterface } from "node:readline";
 import { Type } from "@earendil-works/pi-ai";
 import { prepareFilePath, fileAccess, resolveToolPath } from "./execution.js";
 import { ok, fail, clampInt } from "./results.js";
-import type { AgentTool } from "./types.js";
+import type { AgentTool, ToolResult } from "./types.js";
+import { canonicalTarget } from "./path-safety.js";
+import { fileContentVersion, fileStatVersion } from "./file-read-state.js";
 
 export const READ_DEFAULT_LIMIT = 2_000;
 export const READ_MAX_LIMIT = 5_000;
@@ -117,15 +119,24 @@ export const readTool: AgentTool<ReadArgs> = {
       if (!args.path) throw new Error("path cannot be empty");
       const offset = clampInt(args.offset, 1, Number.MAX_SAFE_INTEGER, 1);
       const limit = clampInt(args.limit, 1, READ_MAX_LIMIT, READ_DEFAULT_LIMIT);
-      const target = await resolveToolPath(context, args.path);
+      const target = await canonicalTarget(await resolveToolPath(context, args.path));
       const read = async () => {
         const info = await stat(target);
         if (!info.isFile()) throw new Error(`Not a file: ${args.path}`);
-        if (!info.size) return ok("(empty file)", { offset, shown: 0, total: 0 });
+        const finish = async (result: ToolResult, version: string): Promise<ToolResult> => {
+          context.signal.throwIfAborted();
+          if (fileStatVersion(await stat(target)) !== fileStatVersion(info)) {
+            throw new Error(`File changed while being read: ${args.path}. Read it again before using the result.`);
+          }
+          return { ...result, fileObservation: { path: target, version } };
+        };
+        if (!info.size) return finish(ok("(empty file)", { offset, shown: 0, total: 0 }), fileContentVersion(Buffer.alloc(0)));
+        let version = fileStatVersion(info);
         let page: ReadWindow;
         if (info.size <= SLURP_MAX_BYTES) {
           const buffer = await readFile(target, { signal: context.signal });
           if (buffer.includes(0)) throw new Error(`Binary file (${info.size} bytes): ${args.path}`);
+          version = fileContentVersion(buffer);
           const lines = splitLines(buffer.toString("utf8"));
           page = await collectWindow(lines.slice(offset - 1), offset, limit, lines.length);
         } else {
@@ -135,7 +146,7 @@ export const readTool: AgentTool<ReadArgs> = {
         if (page.firstLineBytes !== undefined) throw new Error(`Line ${offset} is ${page.firstLineBytes} bytes, exceeds the 64KB limit.`);
         if (!page.window.length && offset > 1) throw new Error(`Offset ${offset} is beyond end of file (${page.total ?? page.scannedLines} lines total)`);
         const presented = presentRead(page);
-        return ok(presented.content, presented.details);
+        return finish(ok(presented.content, presented.details), version);
       };
       return await (context.globalMemory ? context.globalMemory.read(target, context, read) : read());
     } catch (error) { return fail(error); }
