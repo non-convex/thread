@@ -77,6 +77,10 @@ export class AgentStepRunner {
         onThinkingDelta: (delta) => {
           safeExecutionEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: options.step, delta, entryId: assistantEntryId });
         },
+        onToolCallProgress: (progress) => {
+          safeExecutionEvent(options.onUiEvent, { type: "assistant_tool_call_progress", step: options.step,
+            ...progress, entryId: assistantEntryId });
+        },
         onToolCallComplete: (call, contentIndex) => toolBatch.observe(call, contentIndex),
         onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
           const nextEntryId = journal.planAssistantEntryId();

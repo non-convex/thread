@@ -25,6 +25,12 @@ export class UiEventBatcher {
 
   push(event: UiEvent): void {
     const previous = this.pending.at(-1);
+    // Only the latest byte count matters within a frame; never buffer argument contents.
+    if (event.type === "assistant_tool_call_progress" && previous?.type === event.type &&
+        previous.entryId === event.entryId && previous.id === event.id && previous.step === event.step) {
+      this.pending[this.pending.length - 1] = event;
+      return;
+    }
     if ((event.type === "assistant_text_delta" || event.type === "assistant_thinking_delta") &&
         previous?.type === event.type && previous.step === event.step && previous.entryId === event.entryId) {
       previous.delta += event.delta;

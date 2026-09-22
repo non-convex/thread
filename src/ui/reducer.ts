@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { AGENT_TASK_TOOL_NAMES } from "../core/agent-task/model.js";
 import type { UiEvent } from "./events.js";
 import type { AgentTaskCard, LiveTurn, UiState } from "./state.js";
@@ -45,7 +46,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       updateTaskCard(state, event.taskId, (card) => ({ ...card, trace: streamBlocks(card.trace, event.event) }));
       return;
     case "command_started":
-      Object.assign(state, { busy: true, activity: `running /${event.name}`, notice: undefined,
+      Object.assign(state, { busy: true, activity: `running /${event.name}`, modelRetryError: undefined, notice: undefined,
         turnStartedAt: undefined, turnFinishedAt: undefined });
       return;
     case "command_finished":
@@ -59,6 +60,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "turn_preparing":
       state.busy = true;
       state.activity = "preparing";
+      state.modelRetryError = undefined;
       state.notice = undefined;
       state.turnStartedAt = Date.now();
       state.turnFinishedAt = undefined;
@@ -68,6 +70,7 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "turn_started": {
       state.busy = true;
       state.activity ??= "thinking";
+      state.modelRetryError = undefined;
       state.notice = undefined;
       const previous = state.liveTurn;
       state.liveTurn = { id: event.turnId, input: event.input, sessionId: event.sessionId,
@@ -76,10 +79,15 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       return;
     }
     case "model_retry_scheduled":
-      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts} in ${(event.delayMs / 1000).toFixed(1)}s`;
+      state.modelRetryError = stripVTControlCharacters(event.errorMessage).replace(/\s+/g, " ").trim().slice(0, 240) || "Unknown error";
+      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts} in ${(event.delayMs / 1000).toFixed(1)}s · ${state.modelRetryError}`;
       return;
     case "model_retry_started":
-      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts}`;
+      state.activity = `retrying model · attempt ${event.attempt}/${event.maxAttempts}${state.modelRetryError ? ` · ${state.modelRetryError}` : ""}`;
+      return;
+    case "assistant_tool_call_progress":
+      state.modelRetryError = undefined;
+      state.activity = `generating ${event.name} · ${(event.argumentBytes / 1024).toFixed(1)} KiB · step ${event.step}`;
       return;
     case "tool_started":
       if (AGENT_TASK_TOOL_NAMES.has(event.name)) {
@@ -109,14 +117,24 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
   if (state.liveTurn) state.liveTurn = { ...state.liveTurn, blocks: streamBlocks(state.liveTurn.blocks, event) };
   switch (event.type) {
     case "assistant_started":
-    case "assistant_thinking_delta": state.activity = `thinking · step ${event.step}`; break;
-    case "assistant_text_delta": state.activity = `responding · step ${event.step}`; break;
+      state.modelRetryError = undefined;
+      state.activity = `waiting for model · step ${event.step}`;
+      break;
+    case "assistant_thinking_delta":
+      state.modelRetryError = undefined;
+      state.activity = `thinking · step ${event.step}`;
+      break;
+    case "assistant_text_delta":
+      state.modelRetryError = undefined;
+      state.activity = `responding · step ${event.step}`;
+      break;
     case "tool_started":
     case "tool_finished":
       if (state.liveTurn) state.activity = inFlightToolActivity(state.liveTurn);
       break;
     case "compaction_started": state.activity = `compacting context · ${event.reason}`; break;
     case "turn_finished":
+      state.modelRetryError = undefined;
       if (state.turnStartedAt !== undefined) state.turnFinishedAt ??= Date.now();
       if (event.outcome === "interrupted") state.notice = { level: "info", text: "Interrupted" };
       else if (event.error) state.notice = { level: "error", text: event.error };

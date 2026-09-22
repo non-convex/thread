@@ -28,6 +28,7 @@ type AgentEvent = ModelEvent | ToolEvent
   | { type: "assistant_started"; step: number; entryId?: string }
   | { type: "assistant_text_delta"; step: number; delta: string; entryId?: string }
   | { type: "assistant_thinking_delta"; step: number; delta: string; entryId?: string }
+  | { type: "assistant_tool_call_progress"; step: number; id: string; name: string; argumentBytes: number; entryId?: string }
   | { type: "agent_run_started"; input: string }
   | { type: "agent_run_finished"; outcome: "completed" | "failed" | "cancelled"; output: string; error?: string };
 
@@ -87,7 +88,7 @@ export type ExecutionEventSink = ((event: ExecutionEvent) => void) & {
 };
 
 export type RuntimeScope = ExecutionIdentity;
-type AssistantEvent = Extract<ExecutionPayload, { type: "assistant_started" | "assistant_text_delta" | "assistant_thinking_delta" | "model_retry_scheduled" | "model_retry_started" }>;
+type AssistantEvent = Extract<ExecutionPayload, { type: "assistant_started" | "assistant_text_delta" | "assistant_thinking_delta" | "assistant_tool_call_progress" | "model_retry_scheduled" | "model_retry_started" }>;
 type OtherEvent = Exclude<ExecutionPayload, AssistantEvent | ToolEvent | { type: "context_updated" }>;
 
 /** Live facts, not a durable replay log. Workers use the same event shapes as the main agent. */
@@ -139,6 +140,7 @@ export function runtimeEventSink(
       case "assistant_started":
       case "assistant_text_delta":
       case "assistant_thinking_delta":
+      case "assistant_tool_call_progress":
       case "model_retry_scheduled":
       case "model_retry_started":
         if (payload.entryId) safeRuntimeEvent(sink, { ...payload, ...common, entryId: payload.entryId });

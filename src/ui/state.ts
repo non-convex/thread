@@ -109,6 +109,7 @@ export interface UiState {
   liveTurn: LiveTurn | undefined;
   busy: boolean;
   activity: string | undefined;
+  modelRetryError: string | undefined;
   notice: { level: "info" | "success" | "error"; text: string } | undefined;
   sessionId: string;
   liveTipTurnId: string | null;
@@ -123,6 +124,7 @@ export function createUiState(sessionId: string, liveTipTurnId: string | null, t
     liveTurn: undefined,
     busy: false,
     activity: undefined,
+    modelRetryError: undefined,
     notice: undefined,
     sessionId,
     liveTipTurnId,

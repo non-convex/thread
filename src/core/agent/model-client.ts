@@ -32,6 +32,8 @@ export interface ModelRequestOptions extends ModelRetryCallbacks {
   retryBaseDelayMs?: number;
   onTextDelta?: (delta: string) => void;
   onThinkingDelta?: (delta: string) => void;
+  /** Generation progress only; arguments are incomplete and must not be executed. Bytes count streamed argument deltas. */
+  onToolCallProgress?: (progress: { id: string; name: string; argumentBytes: number }, contentIndex: number) => void;
   /** Complete streamed arguments, before the assistant response itself finishes. */
   onToolCallComplete?: (call: ToolCall, contentIndex: number) => void | Promise<void>;
 }
@@ -112,6 +114,7 @@ export class PiModelClient implements ModelClient {
     let attempt = 0;
     return retryAssistantCall(
       () => observeModelAttempt(++attempt, options, async (options) => {
+        const argumentBytes = new Map<number, number>();
         const stream = this.models.streamSimple(this.model, replayContext, {
           signal: options.signal,
           // Explicit auto enables connection-scoped context continuation, not just WebSocket transport.
@@ -133,6 +136,16 @@ export class PiModelClient implements ModelClient {
           switch (event.type) {
             case "text_delta": options.onTextDelta?.(event.delta); break;
             case "thinking_delta": options.onThinkingDelta?.(event.delta); break;
+            case "toolcall_start":
+            case "toolcall_delta": {
+              const call = event.partial.content[event.contentIndex];
+              if (call?.type !== "toolCall") break;
+              const bytes = (argumentBytes.get(event.contentIndex) ?? 0) +
+                (event.type === "toolcall_delta" ? Buffer.byteLength(event.delta, "utf8") : 0);
+              argumentBytes.set(event.contentIndex, bytes);
+              options.onToolCallProgress?.({ id: call.id, name: call.name, argumentBytes: bytes }, event.contentIndex);
+              break;
+            }
             case "toolcall_end": await options.onToolCallComplete?.(structuredClone(event.toolCall), event.contentIndex); break;
           }
         }

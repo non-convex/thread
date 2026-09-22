@@ -38,6 +38,7 @@ export async function observeModelAttempt(
     response = await invoke({ ...options,
       onTextDelta: (delta) => { firstOutputAt ??= Date.now(); options.onTextDelta?.(delta); },
       onThinkingDelta: (delta) => { firstOutputAt ??= Date.now(); options.onThinkingDelta?.(delta); },
+      onToolCallProgress: (progress, index) => { firstOutputAt ??= Date.now(); options.onToolCallProgress?.(progress, index); },
       onToolCallComplete: (call, index) => { firstOutputAt ??= Date.now(); return options.onToolCallComplete?.(call, index); },
     });
     return response;
@@ -100,6 +101,7 @@ export async function streamModel(
       } } : {}),
       onTextDelta: (delta) => { firstOutputAt ??= Date.now(); options.onTextDelta?.(delta); },
       onThinkingDelta: (delta) => { firstOutputAt ??= Date.now(); options.onThinkingDelta?.(delta); },
+      onToolCallProgress: (progress, index) => { firstOutputAt ??= Date.now(); options.onToolCallProgress?.(progress, index); },
       onToolCallComplete: (call, index) => { firstOutputAt ??= Date.now(); return options.onToolCallComplete?.(call, index); },
       onAttempt: (event) => {
         emitAttempt(options.onAttempt, event);
