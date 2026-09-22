@@ -44,7 +44,7 @@ export function userContentDisplay(content: UserMessage["content"]): string {
 }
 
 export function messageWithoutImages(message: Message): Message {
-  if (typeof message.content === "string" || message.role === "assistant") return message;
+  if ((message.role !== "user" && message.role !== "toolResult") || typeof message.content === "string") return message;
   const imageCount = message.content.filter((block) => block.type === "image").length;
   if (imageCount === 0) return message;
   const marker: TextContent = {

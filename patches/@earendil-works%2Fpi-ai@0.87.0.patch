@@ -1,8 +1,7 @@
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
-index ce8c4cbc3bdbbfa2e8e59070cdcdee12a6bb7177..1de22d74c18720500dc61c6841064cac660194ce 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -44,6 +44,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+@@ -46,6 +46,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      "connection.?lost",
      "other side closed",
      "fetch failed",

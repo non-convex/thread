@@ -22,6 +22,8 @@ export function extractDocuments(entries: readonly SessionEntry[]): RecallDocume
       continue;
     }
     const message = entry.message;
+    // System prompt/tool state is request configuration, not project conversation evidence.
+    if (message.role === "system") continue;
     if (message.role === "toolResult" && RECALL_TOOLS.has(message.toolName)) continue;
     const kind = message.role === "toolResult" ? "tool-result" : message.role;
     if (typeof message.content === "string") { add(kind, message.content); continue; }

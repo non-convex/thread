@@ -235,11 +235,11 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 ## 取消、完成与预算
 
-内置 Codex 订阅客户端显式使用 `transport: "auto"`，让 Pi 在同一 WebSocket 连接上通过 `previous_response_id` 续接匹配的上下文，只发送新增输入。Pi 0.85.1 省略该选项时虽也会选择 WebSocket，却不会启用增量上下文。首个请求、连接重建或上下文前缀不匹配时仍发送完整输入；WebSocket 失败时沿用 Pi 的 SSE 回退机制。服务端 prompt cache 命中率与是否增量上传是两个独立指标。
+内置 Codex 订阅客户端显式使用 `transport: "auto"`，让 Pi 在同一 WebSocket 连接上通过 `previous_response_id` 续接匹配的上下文，只发送新增输入。Pi 0.87.0 省略该选项时虽也会选择 WebSocket，却不会启用增量上下文。首个请求、连接重建或上下文前缀不匹配时仍发送完整输入；WebSocket 失败时沿用 Pi 的 SSE 回退机制。服务端 prompt cache 命中率与是否增量上传是两个独立指标。
 
 工具调用尚在生成时，`ModelRequestOptions.onToolCallProgress` 与 `assistant_tool_call_progress` 事件提供调用 ID、工具名和累计参数增量字节数，不包含未完成的参数内容。字节数按单次请求尝试、单个工具调用分别累计，重试重新计数；首个工具流事件计入 `firstOutputAt`。这些通知只描述模型输出，工具仍在完整参数到齐后按原有授权与执行规则处理。
 
-内置模型客户端对 Pi 识别的可重试服务端/网络错误，以及 `unknown certificate verification error`，默认最多重试 10 次（不含首次请求），等待从 500ms 开始逐次翻倍；请求的 `maxRetries` 和 `retryBaseDelayMs` 可覆盖默认值。重试沿用相同的请求上下文，等待支持取消，主 agent 的 TUI 会显示重试次数、等待时间和最近一次失败原因；持续失败时返回原始错误。证书错误的识别由 `patches/@earendil-works%2Fpi-ai@0.85.1.patch` 补入 Pi 现有重试器，`bun install` 自动应用，升级 Pi 时需同步检查补丁。重试仍执行正常的 TLS 证书验证。
+内置模型客户端对 Pi 识别的可重试服务端/网络错误，以及 `unknown certificate verification error`，默认最多重试 10 次（不含首次请求），等待从 500ms 开始逐次翻倍；请求的 `maxRetries` 和 `retryBaseDelayMs` 可覆盖默认值。重试沿用相同的请求上下文，等待支持取消，主 agent 的 TUI 会显示重试次数、等待时间和最近一次失败原因；持续失败时返回原始错误。证书错误的识别由 `patches/@earendil-works%2Fpi-ai@0.87.0.patch` 补入 Pi 现有重试器，`bun install` 自动应用，升级 Pi 时需同步检查补丁。重试仍执行正常的 TLS 证书验证。
 
 主 agent、Worker 和 Dreamer 的每次模型请求直接使用各自的 `ModelClient.maxOutputTokens`（自定义模型配置中的 `maxTokens`）作为输出上限，不再额外限制为 16,384 tokens 或上下文容量的 20%。内置模型适配器仍按剩余上下文调整请求额度；采用数值思考预算的协议在模型总输出上限内分配思考 tokens。
 
@@ -281,7 +281,7 @@ Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝�
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
 
-工具结果消息的 `details` 使用 `ToolResultMetadata`：`raw` 保存原始工具结果的文本与元数据（图片字节只保存在消息内容中），`outcome` 保存结束状态，`durationMs` 保存执行边界内测得的耗时（不含排队等待）。内置文件工具可返回 `ToolResult.fileObservation`，形如 `{ path, version }`；执行器将其保存到 `details.fileObservation`，作为当前模型上下文的文件版本凭据，不放入 `raw` 或模型正文。工具自身的结构化数据位于 `raw.details`，也通过 `tool_finished.details` 提供；这些元数据不追加到模型可见的结果正文。`read`、`grep` 等提供数量和分页信息，`edit`、`write` 提供本次实际写入的 diff 与增删行数。Diff 只用于展示：前后内容总计超过 256 KiB、内容无法作为文本解码或计算超过 50ms 时，返回 `diffUnavailable` 原因，不因此阻止文件修改。UI 和宿主不应通过后续读取当前工作区重建当时的 diff。
+工具结果消息的 `details` 使用 `ToolResultMetadata`：`raw` 保存原始工具结果的文本与元数据（图片字节只保存在消息内容中），`outcome` 保存结束状态，`durationMs` 保存执行边界内测得的耗时（不含排队等待）。内置文件工具可返回 `ToolResult.fileObservation`，形如 `{ path, version }`；执行器将其保存到 `details.fileObservation`，作为当前模型上下文的文件版本凭据，不放入 `raw` 或模型正文。工具自身的结构化数据位于 `raw.details`，也通过 `tool_finished.details` 提供；这些元数据不追加到模型可见的结果正文。元数据必须能够 JSON 序列化；执行器在构建 Pi 消息时将其转换为与持久记录一致的 JSON 表示，对象中的 `undefined` 字段会省略，循环引用和 `BigInt` 不受支持。`read`、`grep` 等提供数量和分页信息，`edit`、`write` 提供本次实际写入的 diff 与增删行数。Diff 只用于展示：前后内容总计超过 256 KiB、内容无法作为文本解码或计算超过 50ms 时，返回 `diffUnavailable` 原因，不因此阻止文件修改。UI 和宿主不应通过后续读取当前工作区重建当时的 diff。
 
 `model_call_finished.usage` 来自最终模型响应，不能与 attempt 用量重复相加。`attemptsObserved > 0` 时按 attempt 统计；为 0 时按逻辑调用统计。自定义 ModelClient 可以通过 `ModelRequestOptions.onAttempt` 报告内部尝试；不提供时 runtime 不猜测其内部重试或费用。没有响应时 usage 缺失，不应解释为零。`firstOutputAt` 是首次可见文本/思考增量或完整工具调用的时间；durationMs 使用单调时钟，不保证等于底层 HTTP 请求耗时。
 

@@ -1,4 +1,4 @@
-import { contentText, validateToolArguments, type Message, type ToolCall } from "@earendil-works/pi-ai";
+import { contentText, validateToolArguments, type JsonObject, type Message, type ToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionEvents } from "../extensions/events.js";
 import {
   validateToolResourceClaims,
@@ -119,7 +119,8 @@ export class ToolCallExecutor {
       try {
         args = validateToolArguments(
           { name: tool.name, description: tool.description, parameters: tool.parameters },
-          { ...input.call, arguments: args },
+          // Extension arguments are untrusted until this schema validation succeeds.
+          { ...input.call, arguments: args as ToolCall["arguments"] },
         ) as Record<string, unknown>;
       } catch (error) {
         immediateResult = errorResult(error);
@@ -200,7 +201,7 @@ export class ToolCallExecutor {
       safeExecutionEvent(ui, { type: "tool_started", id: prepared.call.id, name: prepared.call.name,
         assistantEntryId: prepared.assistantEntryId, args: prepared.args, phase: "running" });
       result = await this.invoke(prepared, signal, ui);
-      result.details = { ...result.details as ToolResultMetadata, durationMs: performance.now() - started };
+      result.details = { ...result.details as JsonObject, durationMs: performance.now() - started };
       return result;
     } catch (cause) {
       error = cause;
@@ -282,13 +283,15 @@ export class ToolCallExecutor {
       }
     }
     const { images: _images, fileObservation, ...raw } = settled;
+    const metadata = { raw, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed",
+      ...(!settled.isError && fileObservation ? { fileObservation } : {}) } satisfies ToolResultMetadata;
     return {
       role: "toolResult",
       toolCallId: prepared.call.id,
       toolName: prepared.call.name,
       content: [{ type: "text", text: modelContent }, ...structuredClone(modelImages ?? [])],
-      details: { raw, outcome: prepared.denied ? "denied" : settled.isError ? "failed" : "completed",
-        ...(!settled.isError && fileObservation ? { fileObservation } : {}) } satisfies ToolResultMetadata,
+      // Pi requires JSON metadata; use the same representation as the durable journal.
+      details: JSON.parse(JSON.stringify(metadata)) as JsonObject,
       isError: settled.isError,
       timestamp: Date.now(),
     };

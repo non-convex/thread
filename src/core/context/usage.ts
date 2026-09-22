@@ -187,6 +187,12 @@ export function estimateMessageTokens(message: Message): number {
 
   if (message.role === "user") return estimateTextAndImageContentTokens(message.content);
   if (message.role === "toolResult") return estimateTextAndImageContentTokens(message.content);
+  if (message.role === "system") {
+    return estimateTextAndImageContentTokens(message.content) +
+      (message.sections ? estimateTextTokens(safeJsonStringify(message.sections)) : 0) +
+      estimateToolsTokens(message.toolsAdded) +
+      (message.toolsRemoved ? estimateTextTokens(safeJsonStringify(message.toolsRemoved)) : 0);
+  }
 
   for (const block of message.content) {
     if (block.type === "text") {
@@ -254,21 +260,8 @@ export function estimateContextTokens(context: Context | readonly Message[]): Co
   if (isMessageArray(context)) return estimateMessages(context);
 
   const estimate = estimateMessages(context.messages);
-  if (estimate.lastUsageIndex !== null) {
-    const addedNames = new Set(
-      context.messages
-        .slice(estimate.lastUsageIndex + 1)
-        .filter((message) => message.role === "toolResult")
-        .flatMap((message) => message.addedToolNames ?? []),
-    );
-    const addedToolTokens = estimateToolsTokens(context.tools?.filter((tool) => addedNames.has(tool.name)));
-    return {
-      tokens: estimate.tokens + addedToolTokens,
-      usageTokens: estimate.usageTokens,
-      trailingTokens: estimate.trailingTokens + addedToolTokens,
-      lastUsageIndex: estimate.lastUsageIndex,
-    };
-  }
+  // Transcript system messages now carry tool changes and are counted above.
+  if (estimate.lastUsageIndex !== null) return estimate;
 
   const prefixTokens =
     (context.systemPrompt ? estimateTextTokens(context.systemPrompt) : 0) + estimateToolsTokens(context.tools);

@@ -151,7 +151,8 @@ export class PiModelClient implements ModelClient {
         }
         return stream.result();
       }),
-      { enabled: true, maxRetries, baseDelayMs }, options.signal,
+      // Preserve Thread's exponential schedule instead of Pi's default 60-second delay cap.
+      { enabled: true, maxRetries, baseDelayMs, maxAgentDelayMs: Number.MAX_SAFE_INTEGER }, options.signal,
       {
         onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
           scheduledAttempt = attempt;
