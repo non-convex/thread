@@ -114,6 +114,8 @@ export class PiModelClient implements ModelClient {
       () => observeModelAttempt(++attempt, options, async (options) => {
         const stream = this.models.streamSimple(this.model, replayContext, {
           signal: options.signal,
+          // Explicit auto enables connection-scoped context continuation, not just WebSocket transport.
+          ...(this.model.api === "openai-codex-responses" ? { transport: "auto" as const } : {}),
           ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
           ...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
           maxRetries: 0, // Retry above so observers see every attempt.

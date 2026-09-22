@@ -235,6 +235,8 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 ## 取消、完成与预算
 
+内置 Codex 订阅客户端显式使用 `transport: "auto"`，让 Pi 在同一 WebSocket 连接上通过 `previous_response_id` 续接匹配的上下文，只发送新增输入。Pi 0.85.1 省略该选项时虽也会选择 WebSocket，却不会启用增量上下文。首个请求、连接重建或上下文前缀不匹配时仍发送完整输入；WebSocket 失败时沿用 Pi 的 SSE 回退机制。服务端 prompt cache 命中率与是否增量上传是两个独立指标。
+
 内置模型客户端对 Pi 识别的可重试服务端/网络错误，以及 `unknown certificate verification error`，默认最多重试 10 次（不含首次请求），等待从 500ms 开始逐次翻倍；请求的 `maxRetries` 和 `retryBaseDelayMs` 可覆盖默认值。重试沿用相同的请求上下文，等待支持取消，主 agent 的 TUI 会显示重试次数和等待时间；持续失败时返回原始错误。证书错误的识别由 `patches/@earendil-works%2Fpi-ai@0.85.1.patch` 补入 Pi 现有重试器，`bun install` 自动应用，升级 Pi 时需同步检查补丁。重试仍执行正常的 TLS 证书验证。
 
 主 agent、Worker 和 Dreamer 的每次模型请求直接使用各自的 `ModelClient.maxOutputTokens`（自定义模型配置中的 `maxTokens`）作为输出上限，不再额外限制为 16,384 tokens 或上下文容量的 20%。内置模型适配器仍按剩余上下文调整请求额度；采用数值思考预算的协议在模型总输出上限内分配思考 tokens。
