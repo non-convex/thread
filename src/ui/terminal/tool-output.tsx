@@ -1,16 +1,27 @@
-import { MouseButton, type TextRenderable } from "@opentui/core";
+import { MouseButton, StyledText, fg, type TextRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { TranscriptTool } from "../state.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
 import { bold, STATUS_ICONS } from "./theme.js";
 import { cleanToolText, formatToolText, presentTool, toolArguments, toolPreview } from "./tool-presentation.js";
+import type { TranscriptExpansion } from "./transcript-expansion.js";
 
-export function ToolOutputView(props: { tool: TranscriptTool; content: string; resources: ThreadViewResources }) {
+function DiffTextView(props: { content: StyledText }) {
+  let node: TextRenderable | undefined;
+  // OpenTUI Solid 0.5.7 stringifies the content prop, so assign styled text
+  // through the native setter after the element has mounted.
+  createEffect(() => { if (node) node.content = props.content; });
+  return <text ref={(value) => { node = value; }} width="100%" flexShrink={0} wrapMode="char" />;
+}
+
+export function ToolOutputView(props: {
+  tool: TranscriptTool; content: string; resources: ThreadViewResources; expansion: TranscriptExpansion;
+}) {
   const theme = props.resources.theme;
   const renderer = useRenderer();
-  const [expanded, setExpanded] = createSignal(false);
+  const expanded = props.expansion.expanded;
   const [titleLines, setTitleLines] = createSignal(1);
   const titleRows = () => props.tool.name === "bash" ? 3 : 1;
   let titleText: TextRenderable | undefined;
@@ -30,10 +41,13 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
   const preview = createMemo(() => toolPreview(body(), bodyWidth(), previewRows(), tailPreview()));
   const result = createMemo(() => formatToolText(props.content));
   const output = createMemo(() => presentation().diff ? body() : expanded() ? result() : preview().text);
-  const diffLines = createMemo(() => {
+  const diffText = createMemo(() => {
     const lines = body().split("\n");
-    // Colour original lines so wrapped continuations retain their addition/removal colour.
-    return expanded() ? lines : lines.slice(0, previewRows());
+    const visible = expanded() ? lines : lines.slice(0, previewRows());
+    // One native text buffer, even for a large expanded diff. Each original line
+    // keeps its colour across wrapped continuations.
+    return new StyledText(visible.map((line, index) => fg(line.startsWith("+") ? theme.diffAdded
+      : line.startsWith("-") ? theme.diffRemoved : theme.muted)(`${line || " "}${index < visible.length - 1 ? "\n" : ""}`)));
   });
   const duration = () => props.tool.durationMs === undefined ? "" : `${(props.tool.durationMs / 1000).toFixed(1)}s`;
   return (
@@ -46,7 +60,7 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
       onMouseUp={(event) => {
         if (event.button !== MouseButton.LEFT || renderer.getSelection()?.getSelectedText()) return;
         event.stopPropagation();
-        setExpanded((value) => !value);
+        props.expansion.toggle();
       }}
     >
       <box flexDirection="row" width="100%" flexShrink={0}>
@@ -85,9 +99,7 @@ export function ToolOutputView(props: { tool: TranscriptTool; content: string; r
             <Show when={presentation().diff} fallback={
               <text flexShrink={0} fg={failed() ? theme.error : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
             }>
-              <For each={diffLines()}>
-                {(line) => <text width="100%" flexShrink={0} wrapMode="char" fg={line.startsWith("+") ? theme.diffAdded : line.startsWith("-") ? theme.diffRemoved : theme.muted}>{line || " "}</text>}
-              </For>
+              <DiffTextView content={diffText()} />
             </Show>
           </box>
           <Show when={!expanded() && preview().clipped}>

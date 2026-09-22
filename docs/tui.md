@@ -69,9 +69,9 @@ border / borderStrong       轻边框只给卡片和浮层
 - 回复是 Markdown。OpenTUI 0.5.7 只在 `streaming` 模式下绘制 markdown 内容，因此历史回复同样开着 streaming；围栏 info 若是文件路径，会收成 OpenTUI 认识的 language id。
 - 思考在流式阶段用 spinner + `thinking` 色斜体；完成后改成 `thinkingDim`，默认最多约 5 行（按 40 列估算折行），点击整块展开。短思考没有折叠控件。
 - Compaction / 中断是一行 `◇` 摘要；有 detail 时点击展开 Markdown。
-- Worker 任务是圆角卡片，边框颜色跟 `running` / `completed` / `failed` / `cancelled` 走。默认只显示标题和状态摘要，点击后在卡片内复用 live block 渲染 trace。
+- Worker 任务是圆角卡片，边框颜色跟 `running` / `completed` / `failed` / `cancelled` 走。默认只显示标题和状态摘要，点击后在卡片内复用 live block 渲染 trace；trace 使用最多 20 行的独立滚动区，默认跟随末尾，只挂载其视口附近的块。
 
-实时 Turn 与历史 Turn 进入同一个 transcript 组件。回合按 Turn 身份、工具按 tool call ID 保持组件身份，数据更新不依赖新对象的引用相等。`turn_finished` 到来时，历史快照和 live 状态一起更新；已显示的工具不会因为转成历史而卸载重建，也不会重新排序到工具结果落盘的位置。
+实时 Turn 与历史 Turn 进入同一个 transcript 组件。用户消息、回合标题和内容块扁平化后按稳定 ID 挂载，工具沿用 tool call ID，数据更新不依赖新对象的引用相等。`turn_finished` 到来时，历史快照和 live 状态一起更新；视口内的工具不会因为转成历史而卸载重建，也不会重新排序到工具结果落盘的位置。
 
 ## 工具输出
 
@@ -92,7 +92,9 @@ border / borderStrong       轻边框只给卡片和浮层
 
 Diff 配色独立于成功／错误状态色。暗色主题使用 `#7FA58A`／`#B58686`，明度低于正文，避免过于醒目；亮色主题使用 `#527D5C`／`#9B6161`。这里沿用现有的 unified diff 文本和 hunk 标题，不额外引入语法高亮或行号。
 
-点击工具标题或结果区域均可展开、折叠结果。所有工具展开时只增加已保存的结果内容，不显示完整参数 JSON，也不加 `Parameters`、`Result` 或 `Changes` 标题。`edit`、`write` 有 diff 时直接展开带颜色的修改内容，不重复展示输入的旧文本、新文本或写入正文，也不再附上重复的成功确认；失败或没有 diff 时保留工具返回的结果文本。选择结果文字不会触发展开切换，Worker 卡片内的工具使用相同组件。展开状态在本次 Turn 转成历史时保留，不写入 Session Tree；离开会话或重启后使用默认折叠状态。
+点击工具标题或结果区域均可展开、折叠结果。所有工具展开时只增加已保存的结果内容，不显示完整参数 JSON，也不加 `Parameters`、`Result` 或 `Changes` 标题。`edit`、`write` 有 diff 时直接展开带颜色的修改内容，不重复展示输入的旧文本、新文本或写入正文，也不再附上重复的成功确认；失败或没有 diff 时保留工具返回的结果文本。选择结果文字不会触发展开切换，Worker 卡片内的工具使用相同组件。工具、思考、compaction 和 Worker 卡片的展开状态按块 ID 保存在当前视图中，滚出视口再返回或本次 Turn 转成历史时保留，不写入 Session Tree；离开会话或重启后使用默认折叠状态。
+
+Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行后仍保持颜色；展开长 diff 不会为每一行创建独立的原生文本缓冲区。
 
 界面的折叠不改变模型上下文，也不恢复工具本身已经截断的内容。完整已保存结果、后续分页和 Bash 的捕获限制是不同概念，界面分别提示。文件 diff 的计算有大小和时间预算，超过预算时保留修改成功结果，并明确提示没有生成 diff。
 
@@ -154,7 +156,9 @@ TUI 和 agent 执行解耦。所有展示事件经 `safeUiEvent` 进入 `UiEvent
 
 动画共用一个 100ms 时钟。状态行耗时和所有 spinner 读同一个 signal，避免每个工具自己 `setInterval` 把 OpenTUI 顶到 max FPS。
 
-Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动条隐藏。鼠标滚轮有单独的加速度曲线。
+Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动条隐藏。鼠标滚轮有单独的加速度曲线。`viewportCulling` 只裁剪绘制，不能限制已创建的原生对象，因此 `transcript-window.tsx` 另外按消息／工具块做虚拟列表：只挂载视口及上下各一屏的缓冲区，其余内容由两个高度占位块代替。不能按整回合保活，否则单个长回合仍会耗尽 OpenTUI 的句柄。
+
+尚未挂载的块使用估算高度，挂载后缓存实际高度；终端宽度变化时重测。高度修正保留首个可见块和块内偏移，末尾阅读保持自动跟随；向上阅读时，新输出不把阅读位置拉回底部。鼠标和 PageUp／PageDown 的滚动在下一帧布局前处理，避免同时到来的流式更新覆盖滚动操作。虚拟列表不裁剪历史数据，也不改变模型上下文，只限制界面控件的生命周期。
 
 ## 代码位置
 
@@ -166,6 +170,7 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/ask-input.ts`：当前提问的选项、自由回答和翻页。
 - `src/ui/images.ts`：路径附件和附件 ID；图片限制、缩放和编码由 `src/core/images/prepare.ts` 共享。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。
+- `src/ui/terminal/transcript-window.tsx` / `transcript-expansion.ts`：历史与 Worker trace 的视口挂载、实测高度、滚动定位和展开状态。
 - `src/ui/terminal/transcript-projection.ts`：session log → `TranscriptItem`，按原调用位置合并结果。
 - `src/ui/terminal/tool-presentation.ts` / `tool-output.tsx`：工具参数、结果摘要、预览与展开。
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。

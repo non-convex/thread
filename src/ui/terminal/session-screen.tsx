@@ -1,5 +1,5 @@
 import type { KeyBinding, ScrollBoxRenderable } from "@opentui/core";
-import { Show, type Accessor } from "solid-js";
+import { createSignal, Show, type Accessor } from "solid-js";
 import { isSlashCommandInput } from "../../app/input-router.js";
 import type { LiveTurn, TranscriptItem, UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
@@ -59,6 +59,7 @@ export function SessionScreen(props: {
   const state = props.state;
   const draft = props.draft;
   const theme = props.resources.theme;
+  const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const hasAttachments = () => draft.attachments().length > 0 || draft.busy();
   // Status + bordered composer + optional attachment row + footer.
   const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments());
@@ -96,10 +97,12 @@ export function SessionScreen(props: {
         <WelcomeView resources={props.resources} />
       </box>
     }>
-      <scrollbox ref={props.setScroll} position="absolute" top={0} right={0} bottom={controlsHeight()} left={0}
+      <scrollbox ref={(value) => { setScroll(value); props.setScroll(value); }} position="absolute" top={0} right={0} bottom={controlsHeight()} left={0}
         stickyScroll={true} stickyStart="bottom" viewportCulling={true} scrollAcceleration={wheelScrollAcceleration}
         verticalScrollbarOptions={{ visible: false }} paddingTop={1}>
-        <TranscriptTurnsView items={props.transcript()} liveTurn={props.liveTurn()} resources={props.resources} />
+        <Show when={state().sessionId} keyed>
+          {() => <TranscriptTurnsView items={props.transcript()} liveTurn={props.liveTurn()} resources={props.resources} scroll={scroll} />}
+        </Show>
       </scrollbox>
     </Show>
     <Show when={floatingHeight()}>

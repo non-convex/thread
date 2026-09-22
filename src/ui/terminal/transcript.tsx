@@ -1,12 +1,14 @@
-import { MouseButton } from "@opentui/core";
-import { createMemo, createSignal, For, Match, Show, Switch, type Accessor, type JSX } from "solid-js";
+import { MouseButton, type ScrollBoxRenderable } from "@opentui/core";
+import { createMemo, createSignal, Match, Show, Switch, type Accessor } from "solid-js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, italic, STATUS_ICONS } from "./theme.js";
-import { groupTranscriptTurns, projectLiveUser, type TranscriptTurnGroup } from "./transcript-projection.js";
+import { groupTranscriptTurns, projectLiveUser } from "./transcript-projection.js";
 import { normalizeMarkdownForTerminal, ThinkingView } from "./transcript-content.js";
 import { ToolOutputView } from "./tool-output.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
+import { createTranscriptExpansion, type TranscriptExpansion } from "./transcript-expansion.js";
+import { TranscriptWindow } from "./transcript-window.js";
 
 function elapsedLabel(startedAt: number | undefined, finishedAt: number | undefined): string | undefined {
   if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return undefined;
@@ -33,26 +35,6 @@ function MarkdownReply(props: {
   );
 }
 
-function TurnBlock(props: { label: string; resources: ThreadViewResources; children: JSX.Element }) {
-  const theme = props.resources.theme;
-  return (
-    <box flexDirection="column" width="100%">
-      <box
-        flexDirection="column"
-        width="100%"
-        paddingX={2}
-        paddingTop={1}
-        paddingBottom={1}
-      >
-        <text height={1} wrapMode="none" fg={theme.accent} attributes={bold} marginBottom={1}>
-          ▍{props.label}
-        </text>
-        {props.children}
-      </box>
-    </box>
-  );
-}
-
 function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   return (
@@ -73,8 +55,10 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
   );
 }
 
-function CompactionInfo(props: { content: string; detail?: string | undefined; resources: ThreadViewResources }) {
-  const [expanded, setExpanded] = createSignal(false);
+function CompactionInfo(props: {
+  content: string; detail?: string | undefined; resources: ThreadViewResources; expansion: TranscriptExpansion;
+}) {
+  const expanded = props.expansion.expanded;
   const expandable = () => Boolean(props.detail?.trim());
   const theme = props.resources.theme;
   return (
@@ -83,7 +67,7 @@ function CompactionInfo(props: { content: string; detail?: string | undefined; r
       width="100%"
       marginBottom={1}
       onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && expandable()) setExpanded((value) => !value);
+        if (event.button === MouseButton.LEFT && expandable()) props.expansion.toggle();
       }}
     >
       <box flexDirection="row" width="100%" height={1}>
@@ -111,14 +95,20 @@ function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResource
   return { icon: "−", color: theme.muted };
 }
 
-function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: ThreadViewResources }) {
-  const [expanded, setExpanded] = createSignal(false);
+type ExpansionStore = ReturnType<typeof createTranscriptExpansion>;
+
+function AgentTaskCardView(props: {
+  card: Accessor<AgentTaskCard>; resources: ThreadViewResources; expansion: TranscriptExpansion; expansions: ExpansionStore;
+}) {
+  const expanded = props.expansion.expanded;
+  const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const summary = () => props.card().summary;
   const elapsed = () => `${(summary().elapsedMs / 1000).toFixed(1)}s`;
   const usage = () => summary().usage?.totalTokens ?? 0;
   const status = () => taskStatus(summary(), props.resources.theme);
   return (
     <box
+      id={`task-view:${summary().taskId}`}
       flexDirection="column"
       width="100%"
       border={true}
@@ -128,7 +118,7 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
       marginBottom={1}
     >
       <box flexDirection="row" width="100%" height={1} onMouseUp={(event) => {
-        if (event.button === MouseButton.LEFT) setExpanded((value) => !value);
+        if (event.button === MouseButton.LEFT) props.expansion.toggle();
       }}>
         <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
         <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.softText} attributes={bold}>
@@ -140,7 +130,13 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
       </box>
       <Show when={expanded()}>
         <box flexDirection="column" width="100%" paddingLeft={2} paddingTop={1}>
-          <TranscriptItems items={props.card().trace} resources={props.resources} />
+          <scrollbox id={`task-trace:${summary().taskId}`} ref={setScroll} height={Math.max(3, Math.min(20, props.card().trace.length * 8))}
+            width="100%" flexShrink={0} stickyScroll={true} stickyStart="bottom" viewportCulling={true}
+            verticalScrollbarOptions={{ visible: false }}>
+            <TranscriptWindow items={props.card().trace} scroll={scroll}>
+              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} />}
+            </TranscriptWindow>
+          </scrollbox>
           <Show when={summary().error}>
             {(error: Accessor<string>) => <text fg={props.resources.theme.error} wrapMode="word">{error()}</text>}
           </Show>
@@ -150,7 +146,9 @@ function AgentTaskCardView(props: { card: Accessor<AgentTaskCard>; resources: Th
   );
 }
 
-function LiveThinkingView(props: { block: Accessor<TranscriptItem>; resources: ThreadViewResources }) {
+function LiveThinkingView(props: {
+  block: Accessor<TranscriptItem>; resources: ThreadViewResources; expansion: TranscriptExpansion;
+}) {
   const block = props.block;
   const theme = props.resources.theme;
   const duration = () => elapsedLabel(block().startedAt, block().finishedAt);
@@ -162,6 +160,7 @@ function LiveThinkingView(props: { block: Accessor<TranscriptItem>; resources: T
           content={block().content}
           heading={duration() ? `thought ${duration()}` : "thinking"}
           resources={props.resources}
+          expansion={props.expansion}
         />
       }
     >
@@ -178,8 +177,11 @@ function LiveThinkingView(props: { block: Accessor<TranscriptItem>; resources: T
   );
 }
 
-function TranscriptItemView(props: { block: Accessor<TranscriptItem>; resources: ThreadViewResources }) {
+function TranscriptItemView(props: {
+  block: Accessor<TranscriptItem>; resources: ThreadViewResources; expansions: ExpansionStore;
+}) {
   const block = props.block;
+  const expansion = props.expansions(block().id);
   return (
     <Switch fallback={
       <box flexDirection="column" width="100%" marginBottom={1}>
@@ -197,49 +199,35 @@ function TranscriptItemView(props: { block: Accessor<TranscriptItem>; resources:
       </box>
     }>
       <Match when={block().kind === "thinking"}>
-        <LiveThinkingView block={block} resources={props.resources} />
+        <LiveThinkingView block={block} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "tool"}>
-        <ToolOutputView tool={block().tool!} content={block().content} resources={props.resources} />
+        <ToolOutputView tool={block().tool!} content={block().content} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "compaction" || block().kind === "interrupted"}>
-        <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} />
+        <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
-        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} />
+        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} expansion={expansion} expansions={props.expansions} />
       </Match>
     </Switch>
   );
 }
 
-function TranscriptItems(props: { items: readonly TranscriptItem[]; resources: ThreadViewResources }) {
-  const byId = createMemo(() => new Map(props.items.map((item) => [item.id, item])));
-  return <For each={[...byId().keys()]}>{(id) => {
-    const block = createMemo(() => byId().get(id)!);
-    return <TranscriptItemView block={block} resources={props.resources} />;
-  }}</For>;
-}
-
-function TranscriptTurnGroupView(props: { group: TranscriptTurnGroup; resources: ThreadViewResources }) {
-  return (
-    <>
-      <Show when={props.group.user}>
-        {(user: Accessor<TranscriptItem>) => <UserMessageCard item={user()} resources={props.resources} />}
-      </Show>
-      <Show when={props.group.items.length > 0}>
-        <TurnBlock label="thread" resources={props.resources}>
-          <TranscriptItems items={props.group.items} resources={props.resources} />
-        </TurnBlock>
-      </Show>
-    </>
-  );
+interface TranscriptRow {
+  id: string;
+  kind: "user" | "heading" | "item";
+  item?: TranscriptItem;
+  last?: boolean;
 }
 
 export function TranscriptTurnsView(props: {
   items: readonly TranscriptItem[];
   liveTurn?: LiveTurn | undefined;
   resources: ThreadViewResources;
+  scroll: Accessor<ScrollBoxRenderable | undefined>;
 }) {
+  const expansions = createTranscriptExpansion();
   const history = createMemo(() => groupTranscriptTurns(props.items));
   const groups = createMemo(() => {
     const byId = new Map(history().map((group) => [group.id, group]));
@@ -250,12 +238,36 @@ export function TranscriptTurnsView(props: {
     }
     return byId;
   });
-  // The same turn and tool keys survive the live-to-history handoff. Keep their
-  // components mounted, including user-controlled expansion and text selection.
-  return <For each={[...groups().keys()]}>{(id) => {
-    const group = createMemo(() => groups().get(id)!);
-    return <TranscriptTurnGroupView group={group()} resources={props.resources} />;
-  }}</For>;
+  const rows = createMemo(() => {
+    const output: TranscriptRow[] = [];
+    for (const group of groups().values()) {
+      if (group.user) output.push({ id: group.user.id, kind: "user", item: group.user });
+      if (group.items.length) output.push({ id: `${group.id}:heading`, kind: "heading" });
+      group.items.forEach((item, index) => output.push({
+        id: item.id, kind: "item", item, last: index === group.items.length - 1,
+      }));
+    }
+    return output;
+  });
+  // Stable block keys preserve the visible controls during live-to-history handoff;
+  // expansion state also survives eviction from the viewport.
+  return <TranscriptWindow items={rows()} scroll={props.scroll} estimateHeight={(row) => row.kind === "heading" ? 3 : 8}>
+    {(row) => <Switch>
+      <Match when={row().kind === "user"}>
+        <UserMessageCard item={row().item!} resources={props.resources} />
+      </Match>
+      <Match when={row().kind === "heading"}>
+        <box width="100%" paddingX={2} paddingTop={1} flexShrink={0}>
+          <text height={1} wrapMode="none" fg={props.resources.theme.accent} attributes={bold} marginBottom={1}>▍thread</text>
+        </box>
+      </Match>
+      <Match when={row().kind === "item"}>
+        <box width="100%" flexDirection="column" paddingX={2} paddingBottom={row().last ? 1 : 0} flexShrink={0}>
+          <TranscriptItemView block={() => row().item!} resources={props.resources} expansions={expansions} />
+        </box>
+      </Match>
+    </Switch>}
+  </TranscriptWindow>;
 }
 
 

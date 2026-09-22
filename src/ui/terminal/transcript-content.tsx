@@ -1,5 +1,6 @@
 import { MouseButton } from "@opentui/core";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
+import type { TranscriptExpansion } from "./transcript-expansion.js";
 import type { ThreadViewResources } from "./resources.js";
 import { dimItalic, italic, STATUS_ICONS } from "./theme.js";
 
@@ -58,9 +59,10 @@ export function ThinkingView(props: {
   content: string;
   heading?: string;
   resources: ThreadViewResources;
+  expansion: TranscriptExpansion;
 }) {
   const theme = props.resources.theme;
-  const [expanded, setExpanded] = createSignal(false);
+  const expanded = props.expansion.expanded;
   const content = createMemo(() => props.content.trim());
   const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
   const collapsible = () => estimatedLines() > COLLAPSED_THINKING_LINES;
@@ -72,7 +74,7 @@ export function ThinkingView(props: {
       marginBottom={1}
       onMouseDown={(event) => {
         if (event.button === MouseButton.LEFT && collapsible()) {
-          setExpanded((value) => !value);
+          props.expansion.toggle();
         }
       }}
     >
