@@ -317,6 +317,31 @@ Further reading:
 - [Pasting clipboard images into the TUI](./docs/tui-image-paste.md) (Chinese)
 - [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 
+## External projects
+
+Thread uses the following open-source components and model:
+
+| Project | Role in Thread |
+| --- | --- |
+| [pi-ai](https://github.com/earendil-works/pi/tree/main/packages/ai) | Model discovery, provider authentication, and streaming model calls. Thread implements its own agent loop and Session Tree. |
+| [OpenTUI](https://github.com/anomalyco/opentui) and [SolidJS](https://github.com/solidjs/solid) | Terminal rendering, layout, and reactive UI through `@opentui/core`, `@opentui/solid`, and `solid-js`. |
+| [zvec](https://github.com/alibaba/zvec), via its [Node.js bindings](https://github.com/zvec-ai/zvec-node) | Local BM25 keyword and vector indexes for Session Recall. |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | Runs the local embedding model on CPU through `onnxruntime-node`. |
+| [Hugging Face Tokenizers.js](https://github.com/huggingface/tokenizers.js) | Tokenizes recall text and splits it within the embedding model's input budget. |
+| [multilingual-e5-small](https://huggingface.co/Xenova/multilingual-e5-small) | The pinned ONNX Q8 embedding model used for multilingual semantic recall. |
+| [Bun](https://bun.sh) | Application runtime, package management, builds, standalone packaging, and image processing. |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | The external `rg` executable used by the workspace `grep` tool. |
+| [fs-native-extensions](https://github.com/holepunchto/fs-native-extensions) | Operating-system file locks for project history and credential storage. |
+| [jsdiff](https://github.com/kpdecker/jsdiff) (`diff`) | Generates change previews for the built-in file-editing tools. |
+| [htmlparser2](https://github.com/fb55/htmlparser2) and [Turndown](https://github.com/mixmark-io/turndown) | Extract text from HTML and convert HTML to Markdown for `webfetch`. |
+| [string-width](https://github.com/sindresorhus/string-width) | Measures terminal display columns for tool-output wrapping and previews. |
+
+The source is written in [TypeScript](https://www.typescriptlang.org/), which also provides development-time type checking. The table lists directly used components rather than their transitive dependencies.
+
+Web search uses external services separately from these local components: `websearch` calls [Exa](https://exa.ai) by default, or [Parallel](https://parallel.ai) when configured. Search queries are sent to the selected service; Session Recall indexing and embedding computation run locally.
+
+Context-token estimation also includes code adapted from [Pi](https://github.com/earendil-works/pi), licensed under MIT, Copyright (c) 2025 Mario Zechner. Source files retain the attribution.
+
 ## License
 
 [MIT](./LICENSE)

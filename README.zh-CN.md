@@ -312,6 +312,31 @@ src/ui/                 plain 与全屏终端界面
 - [把剪贴板里的图交给模型](./docs/tui-image-paste.md)
 - [给模型用的 grep](./docs/grep.md)
 
+## 使用的外部项目
+
+Thread 使用以下开源组件和模型：
+
+| 项目 | 在 Thread 中的用途 |
+| --- | --- |
+| [pi-ai](https://github.com/earendil-works/pi/tree/main/packages/ai) | 模型发现、provider 认证和流式模型调用。Agent 循环与 Session Tree 由 Thread 自己实现。 |
+| [OpenTUI](https://github.com/anomalyco/opentui) 与 [SolidJS](https://github.com/solidjs/solid) | 通过 `@opentui/core`、`@opentui/solid` 和 `solid-js` 实现终端渲染、布局与响应式界面。 |
+| [zvec](https://github.com/alibaba/zvec) 及其 [Node.js 绑定](https://github.com/zvec-ai/zvec-node) | 为 Session Recall 提供本地 BM25 关键词索引和向量索引。 |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | 通过 `onnxruntime-node` 在本机 CPU 上运行 embedding 模型。 |
+| [Hugging Face Tokenizers.js](https://github.com/huggingface/tokenizers.js) | 为召回文本分词，并按 embedding 模型的输入预算切片。 |
+| [multilingual-e5-small](https://huggingface.co/Xenova/multilingual-e5-small) | 本地多语言语义召回使用的 embedding 模型，采用固定版本的 ONNX Q8 权重。 |
+| [Bun](https://bun.sh) | 应用运行时、包管理、构建、独立可执行文件打包和图片处理。 |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | 工作区 `grep` 工具调用的外部 `rg` 程序。 |
+| [fs-native-extensions](https://github.com/holepunchto/fs-native-extensions) | 为项目历史与凭据存储提供操作系统文件锁。 |
+| [jsdiff](https://github.com/kpdecker/jsdiff)（`diff`） | 为内置文件编辑工具生成修改预览。 |
+| [htmlparser2](https://github.com/fb55/htmlparser2) 与 [Turndown](https://github.com/mixmark-io/turndown) | 为 `webfetch` 提取 HTML 文本，并将 HTML 转换为 Markdown。 |
+| [string-width](https://github.com/sindresorhus/string-width) | 计算终端显示列宽，用于工具输出的折行与预览。 |
+
+源码使用 [TypeScript](https://www.typescriptlang.org/) 编写，并通过它进行开发阶段的类型检查。上表列出直接使用的组件，不展开它们的间接依赖。
+
+网页搜索另外使用外部服务：`websearch` 默认调用 [Exa](https://exa.ai)，也可以配置为 [Parallel](https://parallel.ai)。查询会发送给所选服务；Session Recall 的索引和 embedding 计算则在本地运行。
+
+上下文 token 估算还改编了 [Pi](https://github.com/earendil-works/pi) 的部分代码，采用 MIT 许可，Copyright (c) 2025 Mario Zechner。源文件保留了对应署名。
+
 ## License
 
 [MIT](./LICENSE)
