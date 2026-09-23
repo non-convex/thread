@@ -109,6 +109,7 @@ export class ThreadApp {
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
     const { search, globalMemoryPath, commitAttribution, projectInstructions = true, ...core } = options;
+    const threadHome = getThreadHome();
     const skills = core.skills ?? { paths: [skillsDirectory()] };
     const paths = "paths" in skills ? skills.paths.map((directory) => path.resolve(core.rootPath, directory)) : [];
     const tools = core.tools ?? ["read", "view_image", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
@@ -116,14 +117,15 @@ export class ThreadApp {
     const fileCheckpoints = core.fileCheckpoints ?? true;
     const runtimeOptions = snapshotRuntimeOptions({
       ...core, tools, skills, fileCheckpoints,
-      writableExternalDirectories: [...(core.writableExternalDirectories ?? []), ...paths],
+      writableExternalDirectories: [...(core.writableExternalDirectories ?? []), threadHome, ...paths],
       systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         `# Working directory\n\nCurrent project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
         fileEditingPrompt(fileCheckpoints),
+        `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Do not directly rewrite active session logs, databases, or lock files; use the owning service or perform maintenance after Thread has stopped.`,
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
       ...(search === false ? {} : { search: search ?? {} }),
-      ...(globalMemoryPath === false ? {} : { globalMemoryPath: globalMemoryPath ?? path.join(getThreadHome(), GLOBAL_MEMORY_FILE) }),
+      ...(globalMemoryPath === false ? {} : { globalMemoryPath: globalMemoryPath ?? path.join(threadHome, GLOBAL_MEMORY_FILE) }),
     });
     if (projectInstructions) {
       const projectText = await loadProjectInstructions(runtimeOptions.rootPath);

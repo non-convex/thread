@@ -117,7 +117,11 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 把游标中的搜索条件和分页位置展开为有效参数，宿主无需解码私有游标。文件访问前仍检查实际路径是否落在批准的资源范围，写入排队后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
 
-`write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 仍受项目内的任务 `writeScope` 限制。
+裸 `ThreadRuntime` 的 `write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 仍受项目内的任务 `writeScope` 限制。
+
+CLI 和 `ThreadApp` 默认把实际的 Thread 数据目录加入主 agent 的可写目录：设置了 `THREAD_HOME` 时使用该目录，否则使用 `~/.thread`。这项授权覆盖整个目录及其子目录，不限于 Skill，因而可以用内置 `edit`、`write` 修改 `config.json` 等 UTF-8 文件。系统提示词同时给出绝对路径，避免模型把它误当成项目内的 `.thread`。独立于该目录配置的外部文件仍需另外授权；裸 `ThreadRuntime` 不自动开放 Thread 数据目录，Worker 与 Dreamer 的权限也不变。
+
+目录授权保留现有的真实路径检查、写入版本检查、同路径协调、全局记忆更新检查和宿主策略，不会把项目外文件加入项目 checkpoint，`/rewind` 不会恢复这些外部修改。授权也不提供与 runtime 自身的日志追加、状态落盘或数据库写入之间的事务协调。提示词要求避免直接改写正在使用的会话日志、数据库和锁文件；这类维护应通过对应服务或在 Thread 停止后进行。配置可能含有凭据，应尽量只读取和修改相关部分。CLI 模型配置在启动时加载，修改 `config.json` 后需要重启 Thread。
 
 `skills: { paths: [...] }` 只在启动时扫描声明的目录。相对路径以 `rootPath` 为基准，多个目录按声明顺序加载；同一文件去重，同名 Skill 保留先声明项并报告诊断。runtime 不自动扫描 `${THREAD_HOME}/skills` 或其他全局路径。宿主也可传入已加载的 `LoadedSkills`，形如 `{ skills, diagnostics }`。
 
@@ -175,7 +179,7 @@ worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeS
 
 开启 `fileCheckpoints: true` 后，内置文件编辑工具会保存每轮首次修改前的文件内容。worker 的记录归属于主 agent 的父 turn；bash、脚本和自定义工具的任意文件修改不会因此自动获得 checkpoint。
 
-文件 checkpoint 只覆盖项目内的文件。授权的项目外目录（包括全局 Skill 安装目录）可以编辑，但不进入项目文件备份，`rewind()` 不会还原这些外部文件。
+文件 checkpoint 只覆盖项目内的文件。授权的项目外目录（包括 Thread 数据目录和全局 Skill 安装目录）可以编辑，但不进入项目文件备份，`rewind()` 不会还原这些外部文件。
 
 ```ts
 // 默认行为跟随创建实例时的 fileCheckpoints。
