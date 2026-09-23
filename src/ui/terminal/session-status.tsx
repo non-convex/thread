@@ -3,7 +3,7 @@ import { statusLineParts, turnChangeCounts, type UiState } from "../state.js";
 import type { TerminalMeta } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText, tuiAnimationTime } from "./spinner.js";
-import { bold, contextMeter, contextMeterColor, formatTokenCount } from "./theme.js";
+import { contextMeter, contextMeterColor, formatTokenCount } from "./theme.js";
 
 function cacheHitLabel(percent: number | null): string {
   return percent === null ? "cache —" : `cache ${percent}%`;
@@ -62,7 +62,7 @@ export function Footer(props: {
       </Show>
 
       <box flexGrow={1} minWidth={1} />
-      <text height={1} wrapMode="none" flexShrink={0} fg={theme().accent} attributes={bold}>{meta().modelName}</text>
+      <text height={1} wrapMode="none" flexShrink={0} fg={theme().nameAccent}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
         <text height={1} wrapMode="none" fg={theme().muted}> · {meta().thinkingLevel}</text>
         <Show when={!narrow()}>

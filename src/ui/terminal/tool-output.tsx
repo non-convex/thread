@@ -68,11 +68,11 @@ export function ToolOutputView(props: {
           <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
-        <text flexShrink={0} height={1} fg={theme.accent} attributes={bold}>{props.tool.name}</text>
+        <text flexShrink={0} height={1} fg={theme.nameAccent} attributes={bold}>{props.tool.name}</text>
         {/* Clip on the parent: text measurement may round past its own maxHeight. */}
         <box marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
           maxHeight={titleRows()} overflow="hidden">
-          <text width="100%" flexShrink={0} wrapMode="word" fg={theme.softText}
+          <text width="100%" flexShrink={0} wrapMode="word" fg={theme.toolCallText}
             ref={(node) => { titleText = node; }}
             on:line-info-change={() => setTitleLines(titleText?.virtualLineCount ?? 1)}
           >{args()}</text>

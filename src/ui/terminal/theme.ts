@@ -5,6 +5,7 @@ export interface ThreadTerminalTheme {
   surface: string;
   surfaceHigh: string;
   text: string;
+  toolCallText: string;
   softText: string;
   muted: string;
   faint: string;
@@ -15,6 +16,7 @@ export interface ThreadTerminalTheme {
   accent: string;
   accentDim: string;
   accentStrong: string;
+  nameAccent: string;
   spark: string;
   sparkAlt: string;
   success: string;
@@ -26,12 +28,13 @@ export interface ThreadTerminalTheme {
   selectionText: string;
 }
 
-// Keep the original neutral backgrounds; mint, cyan and blue-grey define the foreground hierarchy.
+// Keep neutral backgrounds and mint hierarchy, with warm accents for tool/model names.
 const darkTheme: ThreadTerminalTheme = {
   background: "#0B0E14",
   surface: "#161B22",
   surfaceHigh: "#1C2128",
   text: "#C0CACF",
+  toolCallText: "#AAB7BE",
   softText: "#98A7AE",
   muted: "#7D8B95",
   faint: "#606D78",
@@ -42,6 +45,7 @@ const darkTheme: ThreadTerminalTheme = {
   accent: "#80CCB2",
   accentDim: "#70A996",
   accentStrong: "#ADE6CF",
+  nameAccent: "#C8936D",
   spark: "#83C4D4",
   sparkAlt: "#B4DEC1",
   success: "#90BD9C",
@@ -58,6 +62,7 @@ const lightTheme: ThreadTerminalTheme = {
   surface: "#F6F8FA",
   surfaceHigh: "#EFF1F3",
   text: "#2B3B3E",
+  toolCallText: "#3D4F54",
   softText: "#4F626A",
   muted: "#63747C",
   faint: "#75838D",
@@ -68,6 +73,7 @@ const lightTheme: ThreadTerminalTheme = {
   accent: "#26765F",
   accentDim: "#4A7766",
   accentStrong: "#165E4B",
+  nameAccent: "#EA580C",
   spark: "#2E7385",
   sparkAlt: "#386F52",
   success: "#497653",
