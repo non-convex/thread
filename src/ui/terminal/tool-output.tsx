@@ -72,7 +72,7 @@ export function ToolOutputView(props: {
         {/* Clip on the parent: text measurement may round past its own maxHeight. */}
         <box marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
           maxHeight={titleRows()} overflow="hidden">
-          <text width="100%" flexShrink={0} wrapMode="word" fg={theme.text}
+          <text width="100%" flexShrink={0} wrapMode="word" fg={theme.softText}
             ref={(node) => { titleText = node; }}
             on:line-info-change={() => setTitleLines(titleText?.virtualLineCount ?? 1)}
           >{args()}</text>
@@ -97,7 +97,7 @@ export function ToolOutputView(props: {
             height={expanded() ? "auto" : preview().text.split("\n").length} overflow="hidden"
             onSizeChange={function () { setBodyWidth(this.width); }}>
             <Show when={presentation().diff} fallback={
-              <text flexShrink={0} fg={failed() ? theme.error : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
+              <text flexShrink={0} fg={failed() ? theme.error : expanded() ? theme.softText : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
             }>
               <DiffTextView content={diffText()} />
             </Show>
