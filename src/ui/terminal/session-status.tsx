@@ -85,7 +85,7 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
   const hasChanges = () => changes().additions > 0 || changes().deletions > 0;
   const noticeLevel = () => state().notice?.level;
   const color = () => state().busy
-    ? theme().spark
+    ? theme().runningAccent
     : noticeLevel() === "error"
       ? theme().error
       : noticeLevel() === "success"
@@ -95,15 +95,15 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <box flexDirection="row" flexBasis={0} flexGrow={1} minWidth={0} height={1} overflow="hidden">
         <Show when={state().busy}>
-          <SpinnerText fg={theme().spark} />
+          <SpinnerText fg={theme().runningAccent} />
           <text width={1} height={1}> </text>
         </Show>
-        <Show when={parts().elapsed}>
-          <text height={1} wrapMode="none" fg={theme().faint}>{parts().elapsed} </text>
-        </Show>
-        <text flexBasis={0} flexGrow={1} flexShrink={1} minWidth={0} height={1} wrapMode="none" fg={color()} truncate={true}>
+        <text flexShrink={1} minWidth={0} height={1} wrapMode="none" fg={color()} truncate={true}>
           {parts().main}
         </text>
+        <Show when={parts().elapsed}>
+          <text marginLeft={2} height={1} flexShrink={0} wrapMode="none" fg={theme().faint}>{parts().elapsed}</text>
+        </Show>
       </box>
       <Show when={hasChanges()}>
         <box id="turn-change-counts" flexDirection="row" flexShrink={0} height={1} marginX={1}>
@@ -116,7 +116,7 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
       <box flexDirection="row" flexBasis={hasChanges() ? 0 : "auto"} flexGrow={hasChanges() ? 1 : 0}
         minWidth={0} height={1} justifyContent="flex-end" overflow="hidden">
         <Show when={state().busy}>
-          <text height={1} wrapMode="none" fg={theme().faint}>esc interrupt</text>
+          <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme().faint}>esc interrupt</text>
         </Show>
       </box>
     </box>

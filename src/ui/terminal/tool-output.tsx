@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { TranscriptTool } from "../state.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
-import { bold, STATUS_ICONS } from "./theme.js";
+import { STATUS_ICONS } from "./theme.js";
 import { cleanToolText, formatToolText, presentTool, toolArguments, toolPreview } from "./tool-presentation.js";
 import type { TranscriptExpansion } from "./transcript-expansion.js";
 
@@ -68,7 +68,7 @@ export function ToolOutputView(props: {
           <SpinnerText fg={theme.spark} />
           <text width={1} height={1}> </text>
         </Show>
-        <text flexShrink={0} height={1} fg={theme.nameAccent} attributes={bold}>{props.tool.name}</text>
+        <text flexShrink={0} height={1} fg={theme.toolNameAccent}>{props.tool.name}</text>
         {/* Clip on the parent: text measurement may round past its own maxHeight. */}
         <box marginLeft={2} flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}
           maxHeight={titleRows()} overflow="hidden">

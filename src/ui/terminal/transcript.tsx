@@ -258,7 +258,7 @@ export function TranscriptTurnsView(props: {
       </Match>
       <Match when={row().kind === "heading"}>
         <box width="100%" paddingX={2} paddingTop={1} flexShrink={0}>
-          <text height={1} wrapMode="none" fg={props.resources.theme.accentStrong} attributes={bold} marginBottom={1}>▍thread</text>
+          <text height={1} wrapMode="none" fg={props.resources.theme.accentDim} marginBottom={1}>▍thread</text>
         </box>
       </Match>
       <Match when={row().kind === "item"}>

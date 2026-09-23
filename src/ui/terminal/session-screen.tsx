@@ -121,7 +121,7 @@ export function SessionScreen(props: {
       flexDirection="column" backgroundColor={theme.background}>
       <box flexShrink={0} width="100%"><Status state={props.state} resources={props.resources} /></box>
       <box flexShrink={0} flexDirection="column" marginX={1} border={true} borderStyle="rounded"
-        borderColor={state().busy ? theme.spark : theme.borderStrong} backgroundColor={theme.surfaceHigh}>
+        borderColor={state().busy ? theme.runningAccent : theme.borderStrong} backgroundColor={theme.surfaceHigh}>
         <Show when={hasAttachments()}>
           <Row width="100%" paddingLeft={1} paddingRight={1}>
             <Line flexGrow={1} fg={theme.muted}>{attachmentSummary(draft.attachments(), draft.busy())}</Line>

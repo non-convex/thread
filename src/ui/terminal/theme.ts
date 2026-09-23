@@ -17,6 +17,8 @@ export interface ThreadTerminalTheme {
   accentDim: string;
   accentStrong: string;
   nameAccent: string;
+  toolNameAccent: string;
+  runningAccent: string;
   spark: string;
   sparkAlt: string;
   success: string;
@@ -46,6 +48,8 @@ const darkTheme: ThreadTerminalTheme = {
   accentDim: "#70A996",
   accentStrong: "#ADE6CF",
   nameAccent: "#C8936D",
+  toolNameAccent: "#B49782",
+  runningAccent: "#9BB8BF",
   spark: "#83C4D4",
   sparkAlt: "#B4DEC1",
   success: "#90BD9C",
@@ -74,6 +78,8 @@ const lightTheme: ThreadTerminalTheme = {
   accentDim: "#4A7766",
   accentStrong: "#165E4B",
   nameAccent: "#EA580C",
+  toolNameAccent: "#966D4F",
+  runningAccent: "#446770",
   spark: "#2E7385",
   sparkAlt: "#386F52",
   success: "#497653",
