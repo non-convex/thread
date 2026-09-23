@@ -74,6 +74,8 @@ try {
 
 `ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回原有的不可用结果；TUI 为同一个工具绑定问题面板。
 
+coding 应用始终在主 agent 的系统提示词中加入启动时确定的项目工作目录，使用 `rootPath` 解析后的绝对路径。CLI 默认使用启动目录；指定 `--root` 时使用指定的项目目录。这段信息独立于 `AGENTS.md`，文件缺失、内容为空或设置 `projectInstructions: false` 都不会关闭注入。直接使用 `ThreadRuntime.open()` 的宿主仍自行决定是否提供这段信息。
+
 coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共享给主 agent 和 worker；`projectInstructions: false` 可关闭读取。只读取根目录这一份文件，不遍历祖先、子目录或全局指令目录。缺失或空文件不追加内容；文件须为项目内的 UTF-8 普通文件，上限 32 KiB，超限或无法读取时报错，不截断规则。修改文件后重新打开应用才会生效，同一实例内新建会话或重新启用 worker 仍使用启动快照。
 
 创建实例时会复制配置数据。之后修改原始 options 中的提示词、工具定义、Skill 路径、已加载 Skill 或 worker 限制，不会悄悄重配正在使用的实例；明确的模型切换使用 `setModel()` 等操作。工具的执行函数仍绑定宿主提供的原始实例，支持带内部状态的类实现。注入的模型客户端、工具资源、交互服务及嵌入客户端仍由宿主负责其生命周期；关闭 runtime 不会关闭共享模型客户端。

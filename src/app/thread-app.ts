@@ -117,7 +117,9 @@ export class ThreadApp {
     const runtimeOptions = snapshotRuntimeOptions({
       ...core, tools, skills, fileCheckpoints,
       writableExternalDirectories: [...(core.writableExternalDirectories ?? []), ...paths],
-      systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, fileEditingPrompt(fileCheckpoints),
+      systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+        `# Working directory\n\nCurrent project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
+        fileEditingPrompt(fileCheckpoints),
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
       ...(search === false ? {} : { search: search ?? {} }),
