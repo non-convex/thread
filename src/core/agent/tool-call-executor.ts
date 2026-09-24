@@ -22,7 +22,6 @@ export interface PreparedToolCall {
   toolIndex: number;
   call: ToolCall;
   args: Record<string, unknown>;
-  replay: AgentTool["replay"];
   policy: ToolExecutionPolicy<Record<string, unknown>>;
   resources: readonly ToolResourceClaim[];
   tool?: AgentTool;
@@ -47,6 +46,7 @@ export interface ToolExecutorOptions {
   askPresenter?: () => AskPresenter | undefined;
   writableExternalPaths?: readonly string[];
   writableExternalDirectories?: readonly string[];
+  protectedWritePaths?: readonly string[];
   fileHistory?: (executionId: string) => FileEditTracker;
   globalMemory?: import("../global-memory.js").GlobalMemoryAccess;
   toolPolicy?: HostToolPolicy;
@@ -91,12 +91,10 @@ export class ToolCallExecutor {
     let args = input.call.arguments as Record<string, unknown>;
     let immediateResult: ToolResult | undefined;
     let denied = false;
-    let replay: AgentTool["replay"] = "never";
 
     if (!tool) {
       immediateResult = { content: `Unknown tool: ${input.call.name}`, isError: true };
     } else {
-      replay = tool.replay;
       try {
         args = validateToolArguments(
           { name: tool.name, description: tool.description, parameters: tool.parameters },
@@ -131,6 +129,7 @@ export class ToolCallExecutor {
       rootPath: this.rootPath,
       writableExternalPaths: Object.freeze([...(this.options.writableExternalPaths ?? [])]),
       writableExternalDirectories: Object.freeze([...(this.options.writableExternalDirectories ?? [])]),
+      protectedWritePaths: Object.freeze([...(this.options.protectedWritePaths ?? [])]),
       signal: input.signal,
     });
     let policy = tool?.execution as ToolExecutionPolicy<Record<string, unknown>> | undefined;
@@ -173,7 +172,6 @@ export class ToolCallExecutor {
       toolCallId: input.call.id,
       toolName: input.call.name,
       effectiveArgs: args,
-      replay,
     });
 
     return {
@@ -183,7 +181,6 @@ export class ToolCallExecutor {
       toolIndex: input.toolIndex,
       call: input.call,
       args,
-      replay,
       denied,
       policy,
       resources,
@@ -238,6 +235,7 @@ export class ToolCallExecutor {
         ...(this.options.fileHistory ? { fileHistory: this.options.fileHistory(prepared.journal.executionId) } : {}),
         rootPath: this.rootPath,
         fileReads: this.fileReads,
+        protectedWritePaths: this.options.protectedWritePaths ?? [],
         acceptsImages: this.options.acceptsImages === true,
         ...(this.options.globalMemory ? { globalMemory: this.options.globalMemory } : {}),
         ...(this.options.writeScope ? { writeScope: structuredClone(this.options.writeScope) } : {}),
@@ -255,7 +253,7 @@ export class ToolCallExecutor {
           assistantEntryId: prepared.assistantEntryId,
           toolCallId: prepared.call.id,
         },
-        ...(ui ? { onUiEvent: ui } : {}),
+        ...(ui ? { onExecutionEvent: ui } : {}),
         ...(ask ? { ask } : {}),
       };
       try {

@@ -1,10 +1,9 @@
 import type { ExecutionEvent } from "../core/runtime/events.js";
+import type { CommandEvent } from "../app/events.js";
 
 /** Presentation events for TUI commands and execution progress. */
-export type UiEvent = ExecutionEvent
-  | { type: "agent_task_trace"; taskId: string; revision: number; event: ExecutionEvent }
-  | { type: "command_started"; name: string }
-  | { type: "command_finished"; name: string; ok: boolean };
+export type UiEvent = ExecutionEvent | CommandEvent
+  | { type: "agent_task_trace"; taskId: string; revision: number; event: ExecutionEvent };
 export type UiEventSink = (event: UiEvent) => void;
 
 export type UiEventBatchSink = (events: readonly UiEvent[]) => void;
@@ -62,9 +61,4 @@ export class UiEventBatcher {
   dispose(): void {
     this.flush();
   }
-}
-
-export function safeUiEvent(sink: UiEventSink | undefined, event: UiEvent): void {
-  if (!sink) return;
-  try { sink(event); } catch { /* Rendering cannot change execution semantics. */ }
 }

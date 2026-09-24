@@ -210,7 +210,6 @@ export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
       }),
     ),
   }),
-  replay: "safe",
   prepare: prepareGrep,
   execution: fileAccess("read", "subtree"),
   async execute(args, context) {

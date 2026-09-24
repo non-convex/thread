@@ -139,7 +139,6 @@ export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
     command: Type.String(),
     timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: BASH_MAX_TIMEOUT_MS })),
   }),
-  replay: "never",
   execution: {
     effect: "process",
     mode: "parallel",

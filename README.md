@@ -285,6 +285,8 @@ bun run build
 
 Optional observability integrations can use `runtime.subscribe(listener, { captureModelContent: true })` and public history queries. The same model and tool events cover the main agent, workers, compaction, and Dreamer. The coding app can load an adapter with `--extension`; its returned cleanup function runs after runtime shutdown. See [the event contract](docs/runtime.md#事件和扩展) and [the standalone usage extension](examples/observability.ts).
 
+Execution-transform hooks registered with `runtime.on()` apply to the main agent only; `toolPolicy` and subscriptions cover every agent. Built-in file writes protect the runtime's actual state directory, and the coding app also protects default project data, credentials, and credential locks. These checks do not sandbox shell commands or arbitrary custom-tool I/O. Public API details, including explicit-session history search and command events, are documented in the [runtime guide](docs/runtime.md).
+
 Main code boundaries:
 
 ```text

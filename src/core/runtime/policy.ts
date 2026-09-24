@@ -30,5 +30,6 @@ export type HostToolPolicy = (call: HostToolCall) => HostToolDecision | Promise<
 
 export interface HostExecutionOptions {
   toolPolicy?: HostToolPolicy;
+  protectedWritePaths?: readonly string[];
   sessionIdForTurn?: (turnId: string) => string | undefined;
 }

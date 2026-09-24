@@ -9,6 +9,7 @@ import { ToolRegistry } from "../tools/types.js";
 export const DREAMER_PROFILE_ID = "dreamer";
 export const DEFAULT_DREAMER_THINKING_LEVEL: ModelThinkingLevel = "high";
 export const DREAMER_MAX_RUNTIME_MS = 5 * 60_000;
+export const DREAMER_MAX_STEPS = 20;
 
 export const DREAMER_SYSTEM_PROMPT = `You are Dreamer, Thread's background curator for sparse, durable global memory.
 

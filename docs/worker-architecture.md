@@ -72,6 +72,10 @@ completed ──request_revision──▶ running
 
 Worker 失败、达到运行时限或被取消时，不恢复文件；`wait_tasks` 的等待时限只结束本次等待。主 agent 必须检查共享目录中的部分修改；需要撤销内置 `edit`、`write` 修改时使用 `/rewind`；bash 修改不被跟踪。
 
+Worker 默认最多 100 个模型步骤、60 分钟。上下文溢出时以 `Worker context exhausted` 明确失败，提示主 agent 拆分任务或缩小读取范围，不自动压缩或重试同一任务。主 agent、Worker 和 Dreamer 共用模型结果校验：返回工具调用但 stop reason 不是 `toolUse` 时结束执行，未放行的工具不会启动。流式阶段已经完成的读取结果仍保留。
+
+主 agent 的 `runtime.on()` 扩展钩子不作用于 Worker；宿主 `toolPolicy` 和 runtime 状态路径保护覆盖 Worker，`writeScope` 不能授权修改受保护状态。
+
 ## 执行与记录
 
 主 agent 和 worker 共用 `AgentStepRunner`，但使用不同 journal：

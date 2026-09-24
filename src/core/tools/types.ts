@@ -30,6 +30,8 @@ export interface ToolContext {
   writableExternalPaths?: readonly string[];
   /** Directory trees outside rootPath that this agent may write. */
   writableExternalDirectories?: readonly string[];
+  /** Managed files and directory trees that built-in file tools must never overwrite. */
+  protectedWritePaths?: readonly string[];
   /** Omitted: ordinary workspace policy. Empty: no built-in file writes are allowed. */
   writeScope?: readonly import("./path-safety.js").FileWriteScope[];
   signal: AbortSignal;
@@ -49,7 +51,7 @@ export interface ToolContext {
     taskId?: string;
     agentId?: string;
   };
-  onUiEvent?: import("../runtime/events.js").ExecutionEventSink;
+  onExecutionEvent?: import("../runtime/events.js").ExecutionEventSink;
   /**
    * Present when the host can display a question and return an answer. Without
    * a presenter, the coding app's ask tool returns an unavailable result.
@@ -64,7 +66,6 @@ export interface AgentTool<
   name: string;
   description: string;
   parameters: TSchema;
-  replay: "safe" | "never";
   /** Resolve effective arguments once, after schema validation and extension rewriting. No tool side effects. */
   prepare?(args: TArgs, context: ToolPlanningContext): TPrepared | Promise<TPrepared>;
   execution: ToolExecutionPolicy<TPrepared>;

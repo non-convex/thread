@@ -312,7 +312,7 @@ Thread 会在发出事件时调用订阅函数。如果这个函数花很久做�
 
 所以，看到一个名为 `beforeSomething` 或 `onSomething` 的接口时，先看它的约定，不能只根据名字判断行为。
 
-Thread 当前把两种用途分得比较明确：`subscribe()` 用于只读观察；`on()` 注册的扩展钩子可以参与处理流程。例如，`before_context` 可以调整将要交给模型的上下文。
+Thread 当前把两种用途分得比较明确：`subscribe()` 用于只读观察；`on()` 注册的扩展钩子可以参与主 agent 的处理流程，不作用于 Worker 和 Dreamer。例如，`before_context` 可以调整将要交给模型的上下文。
 
 对于工具权限，Thread 又提供了专门的 `toolPolicy`。它能取得准备后的参数和资源声明，让宿主作出允许或拒绝的决定。
 

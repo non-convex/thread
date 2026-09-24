@@ -8,7 +8,9 @@
 
 `src/app/` 持有 coding 默认提示词、命令、应用扩展、配置文件加载与用户选择的保存；`src/cli/` 和 `src/ui/` 负责启动和展示。核心保留模型配置类型、状态回调的数据结构及共用能力，不能导入应用代码，类型依赖也遵守同一方向。
 
-仓库是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`，共用安装依赖与发布流程。MCP 实现后同样归入核心。
+仓库是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`，共用安装依赖与发布流程。`thread` 在 runtime API 之外提供 `ThreadApp`、配置辅助函数和应用扩展类型；repository、projection、runner 和 scheduler 等内部可写对象不再由包入口导出。MCP 实现后同样归入核心。
+
+`bun run check` 执行类型检查和静态依赖边界检查，包括类型导入、重导出及动态导入：core 只能依赖 core 或外部包，app 只能依赖 app、core 或外部包，runtime 入口只指向 core。CI 使用同一个命令，并执行构建；不自动运行独立宿主示例。
 
 ## 运行离线示例
 
@@ -82,9 +84,13 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 `prompt()` 将输入当作模型输入，例如 `"/new"` 会原样进入会话。创建会话使用 `createSession()`；斜杠命令、picker 和输入框属于客户端。
 
+`PromptOptions` 只接受 `signal`、`maxSteps`、`timeoutMs`、`images` 和 `onEvent`，执行时也只转发这些公开字段。文本增量从 `assistant_text_delta` 事件读取。`ThreadApp.handleInput()` 另有 `onCommandEvent`，只发送 `command_started`、`command_finished`；所有模型执行事件通过 `app.runtime.subscribe()` 或公开的 `onEvent` 观察。
+
 ## 选择工具与加载 Skill
 
 `tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。
+
+`AgentTool` 不再声明 `replay`；是否执行取决于模型结果、工具策略、资源调度和持久化屏障，重启后不会自动重放结果不确定的工具。自定义工具如需发出执行事件，使用 `ToolContext.onExecutionEvent`，不依赖 UI 类型。
 
 为减少工具结果进入 live context 的体积，几个常用工具默认返回有限内容：
 
@@ -119,7 +125,9 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 裸 `ThreadRuntime` 的 `write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 仍受项目内的任务 `writeScope` 限制。
 
-CLI 和 `ThreadApp` 默认把实际的 Thread 数据目录加入主 agent 的可写目录：设置了 `THREAD_HOME` 时使用该目录，否则使用 `~/.thread`。这项授权覆盖整个目录及其子目录，不限于 Skill，因而可以用内置 `edit`、`write` 修改 `config.json` 等 UTF-8 文件。系统提示词同时给出绝对路径，避免模型把它误当成项目内的 `.thread`。独立于该目录配置的外部文件仍需另外授权；裸 `ThreadRuntime` 不自动开放 Thread 数据目录，Worker 与 Dreamer 的权限也不变。
+CLI 和 `ThreadApp` 默认把实际的 Thread 数据目录加入主 agent 的可写目录：设置了 `THREAD_HOME` 时使用该目录，否则使用 `~/.thread`。可以用内置 `edit`、`write` 修改 `config.json`、Skill 和全局记忆，但 `projects/`、`auth.json`、`auth.json.lock` 受保护，拒绝内置文件写入。系统提示词同时给出绝对路径，避免模型把它误当成项目内的 `.thread`。独立于该目录配置的外部文件仍需另外授权；裸 `ThreadRuntime` 不自动开放 Thread 数据目录，Worker 与 Dreamer 的原有权限限制继续生效。
+
+每个 runtime 的实际项目状态目录始终受保护，包括项目内部的自定义 `stateDirectory`。宿主可通过 `protectedWritePaths` 增加禁止写入的文件或目录树，相对路径以进程当前目录为基准。保护优先于工作区、外部写入授权和宿主策略的允许结果，覆盖主 agent、Worker 和 Dreamer；预检和实际写入时都会检查解析后的路径，等待写入队列后也会复查。启动时记录的真实目标和配置别名均纳入保护。关闭 checkpoint 不会关闭此检查；Bash 和任意自定义文件写入不受这一内置文件工具边界约束。
 
 目录授权保留现有的真实路径检查、写入版本检查、同路径协调、全局记忆更新检查和宿主策略，不会把项目外文件加入项目 checkpoint，`/rewind` 不会恢复这些外部修改。授权也不提供与 runtime 自身的日志追加、状态落盘或数据库写入之间的事务协调。提示词要求避免直接改写正在使用的会话日志、数据库和锁文件；这类维护应通过对应服务或在 Thread 停止后进行。配置可能含有凭据，应尽量只读取和修改相关部分。CLI 模型配置在启动时加载，修改 `config.json` 后需要重启 Thread。
 
@@ -209,7 +217,8 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `prompt(sessionId, input, options?)` | 执行并返回 `TurnResult`，包含 turn、结果和模型消息 |
 | `setModel(model)` / `setThinkingLevel(level)` | 模型在空闲时切换；思考偏好可以随时调整，从下一轮生效 |
 | `openSession(sessionId)` | 保存下次启动应恢复的会话，不改变显式 prompt 的目标 |
-| `searchHistory(queries, options?)` | 查询已启用的 Recall，支持 limit 和取消信号 |
+| `searchHistory(sessionId, queries, options?)` | 搜索整个项目历史；以传入会话标注当前路径，支持 limit 和取消信号 |
+| `contextSnapshot(sessionId)` | 一次构建返回 `{ messages, usage }`；没有模型时 usage 为 undefined |
 | `compact(sessionId)` / `rewind(sessionId, target, options?)` | 压缩目标会话上下文，或回退 live tip；是否恢复文件由 `restoreFiles` 决定 |
 | `interrupt(sessionId)` | 取消指定会话的当前执行，并等待结算；不会取消其他会话 |
 | `subscribe(listener)` | 订阅实时执行事件，返回取消订阅函数 |
@@ -306,6 +315,8 @@ const unsubscribe = runtime.subscribe((event) => {
 
 `captureModelContent` 默认 false，在每次模型调用开始时决定是否捕获；未选择它的订阅者不会收到 input/response。已有工具参数、工具结果和文本增量仍可见，该选项不是权限隔离。导出器应自行决定内容采集、脱敏、截断、采样和保留策略。普通 `prompt({ onEvent })` 回调不包含完整模型 input/response。
 
+`prompt()`、`invokeSkill()` 和 `compact()` 均使用同一公开参数白名单。旧的 `onUiEvent`、上层 `onTextDelta` 和内部执行事件出口不是公开选项，即使 JavaScript 调用者额外传入也不会接入执行链。底层 `ModelClient` 的 `ModelRequestOptions.onTextDelta` 仍用于实现模型流。
+
 ### 请求前缀诊断
 
 缓存命中率降低时，可以显式开启 provider 请求前缀诊断。CLI 使用一个独立的 JSONL 文件，不把诊断写进对话或模型上下文：
@@ -342,7 +353,11 @@ const unsubscribe = runtime.subscribe((event) => {
 
 外部适配器只需依赖 `thread/runtime` 的订阅和公共查询；Langfuse/OTel SDK、凭据、数据映射、网络队列和 flush 都由适配器管理。宿主应先等待 `runtime.close()` 收齐终态，再取消订阅并等待适配器 flush/close；runtime 不关闭宿主共享的遥测客户端。
 
-coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(specifier)`。ExtensionAPI 提供相同的 subscribe、listSessions、readSession、readHistory、agentTaskDetailsForTurn。CLI 相对路径仍以启动目录为基准；app.loadExtension 相对路径以 runtime.rootPath 为基准。扩展的 activate/default 函数可返回异步清理函数：应用在 runtime 收尾之后调用它，清理失败不改变任务结果，CLI 仍受原有 5 秒关闭期限约束。`on()` 是可干预执行的扩展钩子；观测使用 subscribe。
+coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(specifier)`。ExtensionAPI 提供相同的 subscribe、listSessions、readSession、readHistory、agentTaskDetailsForTurn。CLI 相对路径仍以启动目录为基准；app.loadExtension 相对路径以 runtime.rootPath 为基准。扩展的 activate/default 函数可返回异步清理函数：应用在 runtime 收尾之后调用它，清理失败不改变任务结果，CLI 仍受原有 5 秒关闭期限约束。
+
+`on()` 是仅作用于主 agent 的执行钩子：`turn_start`、`before_context`、`before_tool_call`、`tool_result`、`turn_end` 不会转发给 Worker 或 Dreamer。`before_context` 也用于主 agent 的压缩上下文装配。跨 agent 的工具授权使用携带执行身份的 `toolPolicy`；跨 agent 的观测使用 `subscribe()`。
+
+`tool_result` 只改写模型可见的 `modelContent` 和 `modelImages`；持久化 `details.raw` 保留原始工具文本，修改传入的 `raw` 副本不会改写它。钩子失败时会保留原文并附加错误提示，因此它不是日志脱敏或保密边界。需要确保敏感数据不进入模型及日志时，应在工具返回结果之前处理数据。
 
 [独立用量扩展示例](../examples/observability.ts) 同时可用于嵌入宿主与 `--extension`，只导入公共 runtime 类型，按 attempt 优先统计，避免重复计算。
 

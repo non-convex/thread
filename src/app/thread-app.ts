@@ -7,7 +7,8 @@ import { snapshotRuntimeOptions, type ThreadRuntimeOptions } from "../core/runti
 import { skillsDirectory } from "../core/skills/loader.js";
 import { createAskTool } from "../core/tools/ask.js";
 import { fileEditingPrompt } from "../core/tools/file-editing-prompt.js";
-import { safeUiEvent } from "../ui/events.js";
+import { emitCommandEvent } from "./events.js";
+import { getAuthFilePath } from "../core/auth/credential-store.js";
 import { agentCommand } from "./commands/agents.js";
 import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
 import { routeThreadCommand } from "./commands/registry.js";
@@ -48,7 +49,6 @@ export class ThreadApp {
       newSession: (options) => this.runCommand("new", options, async () => {
         const session = await runtime.createSession(options);
         this.selectedSessionId = session.id;
-        safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: session.id, liveTipTurnId: null, reason: "new" });
         const warnings = runtime.agentProfileDiagnostics.filter((item) => item.profileId === "main").map((item) => `Warning: ${item.message}`);
         return ephemeral([`Created empty Session ${session.id} from Root; workspace unchanged`, ...warnings].join("\n"), true);
       }),
@@ -92,8 +92,6 @@ export class ThreadApp {
             : ephemeral("(no user turns on the current live path)") };
         }
         const candidate = await runtime.rewind(this.selectedSessionId, args[0]!, options);
-        safeUiEvent(options.onUiEvent, { type: "session_changed", sessionId: this.selectedSessionId,
-          liveTipTurnId: runtime.readSession(this.selectedSessionId).liveTipTurnId, reason: "rewind" });
         return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
@@ -118,10 +116,11 @@ export class ThreadApp {
     const runtimeOptions = snapshotRuntimeOptions({
       ...core, tools, skills, fileCheckpoints,
       writableExternalDirectories: [...(core.writableExternalDirectories ?? []), threadHome, ...paths],
+      protectedWritePaths: [...(core.protectedWritePaths ?? []), path.join(threadHome, "projects"), getAuthFilePath(), `${getAuthFilePath()}.lock`],
       systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         `# Working directory\n\nCurrent project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
         fileEditingPrompt(fileCheckpoints),
-        `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Do not directly rewrite active session logs, databases, or lock files; use the owning service or perform maintenance after Thread has stopped.`,
+        `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Project state directories, auth.json, and its lock file are protected from built-in writes. Use the owning service to manage runtime state; config.json, skills, and global memory remain editable.`,
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
       ...(search === false ? {} : { search: search ?? {} }),
@@ -176,14 +175,14 @@ export class ThreadApp {
   }
 
   private async runCommand(name: string, options: InputOptions, execute: () => Promise<CommandResult>): Promise<InputResult> {
-    safeUiEvent(options.onUiEvent, { type: "command_started", name });
+    emitCommandEvent(options.onCommandEvent, { type: "command_started", name });
     let ok = false;
     try {
       const result = await execute();
       ok = true;
       return { kind: "command", result };
     } finally {
-      safeUiEvent(options.onUiEvent, { type: "command_finished", name, ok });
+      emitCommandEvent(options.onCommandEvent, { type: "command_finished", name, ok });
     }
   }
 

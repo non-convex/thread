@@ -3,9 +3,8 @@ import type { SessionTreeService } from "../session-tree/service.js";
 import type { Turn } from "../session-tree/model.js";
 import type { HistoryPathStatus, ReadOptions, SessionTurnDetail } from "./types.js";
 
-export function pathClassifier(tree: SessionTreeService): (turn: Turn) => HistoryPathStatus {
-  const sessionId = tree.activeSession.id;
-  const current = new Set(tree.livePath().map((turn) => turn.id));
+export function pathClassifier(tree: SessionTreeService, sessionId: string): (turn: Turn) => HistoryPathStatus {
+  const current = new Set(tree.livePath(sessionId).map((turn) => turn.id));
   return (turn) => turn.sessionId !== sessionId ? "other-session"
     : current.has(turn.id) ? "current-path" : "current-session-off-path";
 }
@@ -17,7 +16,7 @@ function textBlocks(message: Message, thinking: boolean): string[] {
     : block.type === "thinking" && thinking ? [block.thinking] : []);
 }
 
-export function readTurn(tree: SessionTreeService, id: string, options: ReadOptions = {}): SessionTurnDetail | undefined {
+export function readTurn(tree: SessionTreeService, sessionId: string, id: string, options: ReadOptions = {}): SessionTurnDetail | undefined {
   const matches = [...tree.projection.turns.values()].filter((turn) => turn.id === id || turn.id.startsWith(id));
   if (matches.length === 0) return undefined;
   if (matches.length > 1) throw new Error(`Turn prefix is ambiguous: ${id}`);
@@ -52,16 +51,16 @@ export function readTurn(tree: SessionTreeService, id: string, options: ReadOpti
   }
   return { sessionId: turn.sessionId, turnId: turn.id, startedAt: turn.startedAt,
     ...(turn.finishedAt === undefined ? {} : { finishedAt: turn.finishedAt }), status: turn.status,
-    pathStatus: pathClassifier(tree)(turn), text: lines.join("\n\n"), omitted: [...omitted] };
+    pathStatus: pathClassifier(tree, sessionId)(turn), text: lines.join("\n\n"), omitted: [...omitted] };
 }
 
-export function readPath(tree: SessionTreeService, id: string, options: ReadOptions = {}): SessionTurnDetail[] {
-  const selected = readTurn(tree, id, options);
+export function readPath(tree: SessionTreeService, sessionId: string, id: string, options: ReadOptions = {}): SessionTurnDetail[] {
+  const selected = readTurn(tree, sessionId, id, options);
   if (!selected) return [];
   const saved = tree.livePath(selected.sessionId);
   const path = saved.some((turn) => turn.id === selected.turnId) ? saved : tree.pathToTurn(selected.turnId);
   const index = path.findIndex((turn) => turn.id === selected.turnId);
   const before = Math.max(0, Math.min(10, Math.floor(options.before ?? 0)));
   const after = Math.max(0, Math.min(10, Math.floor(options.after ?? 0)));
-  return path.slice(Math.max(0, index - before), index + after + 1).map((turn) => readTurn(tree, turn.id, options)!);
+  return path.slice(Math.max(0, index - before), index + after + 1).map((turn) => readTurn(tree, sessionId, turn.id, options)!);
 }

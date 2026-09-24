@@ -67,7 +67,7 @@ System Prompt → Global Memory → Live Context
 
 ## 写入边界
 
-Main 与 Dreamer 继续使用普通 `read`、`write`、`edit`。Main 保留工作区权限，并额外获准写入 `.THREAD.md` 这一精确绝对路径，而不是整个 `THREAD_HOME`。Dreamer 的内置文件工具则只允许读写这个记忆文件，项目文件、相邻文件和其他外部文件均被执行边界拒绝；不能通过符号链接扩大权限。宿主的工具策略仍可进一步拒绝调用，不能放宽这一限制。
+Main 与 Dreamer 继续使用普通 `read`、`write`、`edit`。裸 runtime 为 Main 额外授权 `.THREAD.md` 这一精确绝对路径；coding 应用另行授权 Thread 数据目录，但保护项目状态、凭据和锁文件，见 [runtime 写入边界](./runtime.md#选择工具与加载-skill)。Dreamer 的内置文件工具只允许读写这个记忆文件，项目文件、相邻文件和其他外部文件均被执行边界拒绝；不能通过符号链接扩大权限。runtime 的受保护状态路径同样不可写，宿主工具策略也不能放宽这些限制。
 
 Main 和 Dreamer 对全局记忆的读写在同一进程内按实际文件路径协调，包含不同 runtime。每个 Main 回合、每个 Dreamer 批次分别记录自己读到的文件内容；这份观察独立于 Session 的固定快照。修改必须基于较早模型步骤中的读取，不能在同一条模型回复里同时读取并提交已经生成的修改。读取发现文件不存在后，可以在下一步创建。
 
@@ -81,13 +81,15 @@ Dreamer 不重复提取这类明确指令。它可以把用户与 Agent 的互�
 
 ## Dreamer 调度
 
-Dreamer 默认使用 `high` thinking，不限制 model step，单次最多运行 5 分钟，同时最多一个实例。它只有 `read`、`write`、`edit` 三个工具，并使用进程内临时 journal；运行轨迹不会成为 Agent Task 或 Session Tree 历史。
+Dreamer 默认使用 `high` thinking，每个审阅批次最多 20 个模型步骤，一次启动最多运行 5 分钟，同时最多一个实例。嵌入宿主可用 `dreamer.maxSteps` 调整每批次步骤上限。它只有 `read`、`write`、`edit` 三个工具，并使用进程内临时 journal；运行轨迹不会成为 Agent Task 或 Session Tree 历史。主 agent 的 `runtime.on()` 扩展钩子不作用于 Dreamer；宿主 `toolPolicy` 和 `subscribe()` 仍覆盖它。
 
 每个结束的前台 turn 会作为一个独立单元加入待审阅队列。累计 10 个结束 turn 后，调度器从 Main 进入空闲状态的时刻开始计时；只有 Main 连续空闲 10 分钟才会启动 Dreamer。Compaction 不再单独触发 Dreamer，也不会把被压缩消息重复加入待审阅队列。
 
 启动时只估算由待处理 turn 生成的审阅消息：如果不超过 Dreamer 模型上下文窗口的 50%，就作为一个批次审阅；如果超过，则按完整 turn 贪心拆成多个批次，每批最多占 50%。单个 turn 本身超限时，对它的格式化内容做保留首尾的截断。一次启动产生的所有批次共享同一个 5 分钟总时限和待处理快照；运行期间新加入的 turn 留给下一轮。
 
 新用户输入会取消尚未到期的空闲计时，但不会中止已经运行的 Dreamer；两者可以并行。每个批次成功后只移除该批覆盖的完整 turn；当前批次失败或总时限到期时，当前批次和后续批次仍保留，并设置独立的重试延迟。关闭或禁用 Dreamer 才会取消运行并清除待审阅内容。
+
+达到步骤上限、上下文溢出，或模型返回工具调用但 stop reason 不是 `toolUse` 时，该批次明确失败并保留待审阅材料。已经完成的记忆修改不回滚；错误通过 Dreamer 状态和运行结束事件报告。
 
 ## 审阅材料与稀疏原则
 

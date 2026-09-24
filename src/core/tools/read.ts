@@ -110,7 +110,6 @@ export const readTool: AgentTool<ReadArgs> = {
     offset: Type.Optional(Type.Integer({ minimum: 1, description: "1-indexed line to start from; default 1." })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: READ_MAX_LIMIT, description: `Maximum lines to return; default ${READ_DEFAULT_LIMIT}.` })),
   }),
-  replay: "safe",
   prepare: (args, context) => prepareFilePath(args, context),
   execution: fileAccess("read"),
   async execute(args, context) {

@@ -48,7 +48,6 @@ export function createSkillTool(skills: () => readonly Skill[]): AgentTool<{ nam
     parameters: Type.Object({
       name: Type.String({ description: "Skill name exactly as listed in available_skills." }),
     }),
-    replay: "safe",
     execution: {
       effect: "read",
       mode: "parallel",

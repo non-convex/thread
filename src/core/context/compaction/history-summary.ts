@@ -44,12 +44,12 @@ export function generateHistorySummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
-  onUiEvent?: ExecutionEventSink;
+  onExecutionEvent?: ExecutionEventSink;
   reasoning?: ThinkingLevel;
 }): Promise<string> {
   return requestSummary({
     model: options.model,
-    ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+    ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
     purpose: "history_summary",
     context: options.context,
     signal: options.signal,

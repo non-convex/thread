@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context, Usage } from "@earendil-works/pi-ai";
-import { AgentStepRunner } from "../agent/step-runner.js";
+import { AgentStepRunner, assertModelStepSucceeded } from "../agent/step-runner.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
@@ -64,6 +64,7 @@ export class WorkerTaskRunner {
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
     const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
       acceptsImages: profile.model.acceptsImages === true,
+      protectedWritePaths: this.executionOptions.protectedWritePaths ?? [],
       ...(this.fileHistory ? { fileHistory: () => this.fileHistory!.forTurn(task.parentTurnId) } : {}),
       ...(this.executionOptions.toolPolicy ? { toolPolicy: this.executionOptions.toolPolicy } : {}),
       agentId: profile.id,
@@ -85,14 +86,16 @@ export class WorkerTaskRunner {
         const result = await stepRunner.run(context, journal, {
           signal,
           step,
-          ...(taskUi ? { onUiEvent: taskUi } : {}),
+          ...(taskUi ? { onExecutionEvent: taskUi } : {}),
         });
         addUsage(usage, result.response.usage);
         await this.repository.append({ type: "run_progress", taskId, revision, usage: structuredClone(usage) });
         this.updated(taskId, ui);
         finalResponse = responseText(result.response) || finalResponse;
-        if (result.response.stopReason === "aborted") throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
-        if (result.response.stopReason === "error") throw new Error(result.response.errorMessage ?? "Worker model request failed");
+        if (stepRunner.isContextOverflow(result.response)) {
+          throw new Error("Worker context exhausted; split the task or use narrower reads before delegating again");
+        }
+        assertModelStepSucceeded(result, signal);
         if (result.calls.length === 0) break;
         if (step === limits.maxSteps) throw new Error(`Worker exceeded ${limits.maxSteps} model steps`);
       }

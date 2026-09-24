@@ -84,8 +84,6 @@ export class SessionTreeRepository {
     return this.log.write(() => writeFile(path.join(this.treePath, "tree.json"), content, "utf8"));
   }
 
-  flush(): Promise<void> { return this.log.flush(); }
-
   close(): Promise<void> {
     return this.closing ??= (async () => {
       let failure: unknown;

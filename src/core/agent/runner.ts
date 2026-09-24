@@ -5,7 +5,7 @@ import type { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import { userContentDisplay } from "../session-tree/user-content.js";
-import { runtimeEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
+import { runtimeEventSink, safeExecutionEvent } from "../runtime/events.js";
 import { executionDeadline, RuntimeLimitError, validateExecutionLimits, type RuntimeLimit } from "../runtime/limits.js";
 import type { RunTurnOptions, TurnRunner } from "./turn-runner.js";
 
@@ -22,8 +22,8 @@ export class AgentRunner {
     private readonly tree: SessionTreeService,
     private readonly runner: TurnRunner,
     private readonly extensions: ExtensionEvents,
-    private readonly agentTasks?: AgentTaskOrchestrator,
-    private readonly fileCheckpoints = true,
+    private readonly agentTasks: AgentTaskOrchestrator | undefined,
+    private readonly fileCheckpoints: boolean,
   ) {}
 
   async run(input: string, options: RunTurnOptions): Promise<TurnResult> {
@@ -41,8 +41,8 @@ export class AgentRunner {
     options.signal.throwIfAborted();
     const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints);
     options = this.withEvents(options, planned.sessionId, planned.id);
-    const display = userContentDisplay(planned.content ?? planned.input);
-    safeExecutionEvent(options.onUiEvent, {
+    const display = userContentDisplay(planned.content);
+    safeExecutionEvent(options.onExecutionEvent, {
       type: "turn_preparing",
       input: display,
       sessionId: planned.sessionId,
@@ -50,7 +50,7 @@ export class AgentRunner {
     options.signal.throwIfAborted();
     // Admit the turn durably before extensions, model requests or tool effects.
     const turn = await this.tree.startPlannedTurn(planned);
-    safeExecutionEvent(options.onUiEvent, {
+    safeExecutionEvent(options.onExecutionEvent, {
       type: "turn_started",
       turnId: turn.id,
       userEntryId: turn.userEntryId,
@@ -90,7 +90,7 @@ export class AgentRunner {
     }
     const settled = await this.tree.finishTurn(turn.id, outcome, error);
     await this.extensions.emit("turn_end", { turnId: turn.id, outcome }).catch(() => undefined);
-    safeExecutionEvent(options.onUiEvent, {
+    safeExecutionEvent(options.onExecutionEvent, {
       type: "turn_finished",
       timestamp: settled.finishedAt ?? Date.now(),
       output: contentText(this.tree.messagesForTurn(turn.id).findLast((message) => message.role === "assistant")?.content ?? [], ""),
@@ -98,7 +98,7 @@ export class AgentRunner {
       ...(outcome === "failed" && error ? { error: error.message } : {}),
       ...(error instanceof RuntimeLimitError ? { limit: error.limit } : {}),
     });
-    safeExecutionEvent(options.onUiEvent, {
+    safeExecutionEvent(options.onExecutionEvent, {
       type: "session_changed",
       sessionId: settled.sessionId,
       liveTipTurnId: settled.id,
@@ -113,7 +113,7 @@ export class AgentRunner {
   async compactCurrent(options: RunTurnOptions): Promise<CompactionResult> {
     validateExecutionLimits(options);
     const deadline = executionDeadline(options.signal, options.timeoutMs);
-    const sessionId = options.sessionId ?? this.tree.activeSession.id;
+    const sessionId = options.sessionId;
     const turnId = this.tree.projection.liveTips.get(sessionId);
     try {
       const bounded = { ...options, signal: deadline.signal };
@@ -124,14 +124,9 @@ export class AgentRunner {
   }
 
   private withEvents(options: RunTurnOptions, sessionId: string, turnId: string): RunTurnOptions {
-    if (!options.onEvent && !options.onUiEvent) return options;
-    const domain = runtimeEventSink({ sessionId, turnId, executionId: turnId, agentId: "main" }, options.onEvent, options.captureModelContent, options.promptCacheDiagnostics);
-    const onUiEvent: ExecutionEventSink = (event) => {
-      domain(event);
-      safeExecutionEvent(options.onUiEvent, event);
-    };
-    onUiEvent.captureModelContent = () => options.captureModelContent?.() ?? false;
-    onUiEvent.promptCacheDiagnostics = () => options.promptCacheDiagnostics?.();
-    return { ...options, onUiEvent };
+    return { ...options, onExecutionEvent: runtimeEventSink(
+      { sessionId, turnId, executionId: turnId, agentId: "main" },
+      options.onEvent, options.captureModelContent, options.promptCacheDiagnostics,
+    ) };
   }
 }

@@ -46,7 +46,7 @@ const add: AgentTool<{ left: number; right: number }> = {
   name: "add",
   description: "Add two numbers using a capability provided by the host",
   parameters: Type.Object({ left: Type.Number(), right: Type.Number() }),
-  replay: "safe",
+
   execution: { effect: "read", mode: "parallel", resources: () => [] },
   async execute({ left, right }, context) {
     context.signal.throwIfAborted();

@@ -1,14 +1,12 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { PromptOptions } from "../core/runtime/options.js";
 import type { TurnResult } from "../core/agent/runner.js";
 import { parseCommandLine } from "./commands/parser.js";
 import { clearDisplayResult, type CommandResult } from "./commands/types.js";
-import type { UiEventSink } from "../ui/events.js";
+import type { CommandEventSink } from "./events.js";
 
-export interface InputOptions {
+export interface InputOptions extends PromptOptions {
   signal: AbortSignal;
-  onTextDelta?: (delta: string) => void;
-  onUiEvent?: UiEventSink;
-  images?: readonly ImageContent[];
+  onCommandEvent?: CommandEventSink;
 }
 
 export type InputResult =

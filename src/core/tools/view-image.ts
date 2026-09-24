@@ -40,7 +40,6 @@ export const viewImageTool: AgentTool<ViewImageArgs> = {
       description: "high (default) resizes large images; original preserves pixel dimensions.",
     })),
   }),
-  replay: "safe",
   prepare: (args, context) => prepareFilePath(args, context),
   execution: fileAccess("read"),
   async execute(args, context) {

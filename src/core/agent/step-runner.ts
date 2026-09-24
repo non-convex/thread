@@ -17,9 +17,18 @@ export interface AgentStepResult {
 export interface AgentStepOptions {
   signal: AbortSignal;
   step: number;
-  onTextDelta?: (delta: string) => void;
-  onUiEvent?: ExecutionEventSink;
+  onExecutionEvent?: ExecutionEventSink;
   onAssistantPersisted?: (response: AssistantMessage) => void | Promise<void>;
+}
+
+/** Outer loops share failure semantics; context-overflow recovery remains their own decision. */
+export function assertModelStepSucceeded({ response, calls }: AgentStepResult, signal: AbortSignal): void {
+  signal.throwIfAborted();
+  if (response.stopReason === "aborted") throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
+  if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
+  if (calls.length > 0 && response.stopReason !== "toolUse") {
+    throw new Error(`Model returned tool calls with stop reason ${response.stopReason}; pending calls were not released`);
+  }
 }
 
 async function persistBatchResults(
@@ -54,16 +63,16 @@ export class AgentStepRunner {
     if (options.step === 1) this.loopGuard.reset();
     if (this.model.acceptsImages !== true) context = { ...context, messages: context.messages.map(messageWithoutImages) };
     this.toolRunner.observeModelContext(context.messages);
-    options = { ...options, onUiEvent: executionEventSink(journal.identity, options.onUiEvent) };
+    options = { ...options, onExecutionEvent: executionEventSink(journal.identity, options.onExecutionEvent) };
     let assistantEntryId = journal.planAssistantEntryId();
-    safeExecutionEvent(options.onUiEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });
+    safeExecutionEvent(options.onExecutionEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });
     const toolBatch = new ToolExecutionBatch({
       journal,
       assistantEntryId,
       signal: options.signal,
       runner: this.toolRunner,
       loopGuard: this.loopGuard,
-      ...(options.onUiEvent ? { ui: options.onUiEvent } : {}),
+      ...(options.onExecutionEvent ? { ui: options.onExecutionEvent } : {}),
     });
     try {
       const response = await streamModel(this.model, context, {
@@ -71,14 +80,13 @@ export class AgentStepRunner {
         maxTokens: this.model.maxOutputTokens,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         onTextDelta: (delta) => {
-          try { options.onTextDelta?.(delta); } catch { /* A legacy text observer cannot cancel the turn. */ }
-          safeExecutionEvent(options.onUiEvent, { type: "assistant_text_delta", step: options.step, delta, entryId: assistantEntryId });
+          safeExecutionEvent(options.onExecutionEvent, { type: "assistant_text_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onThinkingDelta: (delta) => {
-          safeExecutionEvent(options.onUiEvent, { type: "assistant_thinking_delta", step: options.step, delta, entryId: assistantEntryId });
+          safeExecutionEvent(options.onExecutionEvent, { type: "assistant_thinking_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onToolCallProgress: (progress) => {
-          safeExecutionEvent(options.onUiEvent, { type: "assistant_tool_call_progress", step: options.step,
+          safeExecutionEvent(options.onExecutionEvent, { type: "assistant_tool_call_progress", step: options.step,
             ...progress, entryId: assistantEntryId });
         },
         onToolCallComplete: (call, contentIndex) => toolBatch.observe(call, contentIndex),
@@ -86,7 +94,7 @@ export class AgentStepRunner {
           const nextEntryId = journal.planAssistantEntryId();
           await toolBatch.restartForModelRetry(new Error(`Model attempt failed before retry ${attempt}`), nextEntryId);
           assistantEntryId = nextEntryId;
-          safeExecutionEvent(options.onUiEvent, {
+          safeExecutionEvent(options.onExecutionEvent, {
             type: "model_retry_scheduled",
             step: options.step,
             entryId: assistantEntryId,
@@ -97,9 +105,9 @@ export class AgentStepRunner {
           });
         },
         onRetryAttemptStart: (attempt, maxAttempts) => {
-          safeExecutionEvent(options.onUiEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts, entryId: assistantEntryId });
+          safeExecutionEvent(options.onExecutionEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts, entryId: assistantEntryId });
         },
-      }, options.onUiEvent, { purpose: "agent", entryId: () => assistantEntryId });
+      }, options.onExecutionEvent, { purpose: "agent", entryId: () => assistantEntryId });
       const calls: IndexedToolCall[] = response.content.flatMap((content, contentIndex) =>
         content.type === "toolCall" ? [{ contentIndex, call: content }] : []
       );

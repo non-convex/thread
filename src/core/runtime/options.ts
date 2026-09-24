@@ -1,9 +1,10 @@
-import type { CacheRetention, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { CacheRetention, ImageContent, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import path from "node:path";
 import type { ModelClient } from "../agent/model-client.js";
 import type { ModelCatalog } from "../agent/model-catalog.js";
 import type { AgentProfileDiagnostic } from "../agent/profile.js";
-import type { RunTurnOptions } from "../agent/turn-runner.js";
+import type { RuntimeEventSink } from "./events.js";
+import type { ExecutionLimits } from "./limits.js";
 import type { WorkerProfileSettings } from "../agent-task/profile.js";
 import type { ModelSelectionConfig } from "../config/model-config.js";
 import type { ThreadState } from "./state.js";
@@ -44,6 +45,8 @@ export interface ThreadRuntimeOptions {
   writableExternalPaths?: readonly string[];
   /** External directory trees writable by the main agent's built-in file tools. */
   writableExternalDirectories?: readonly string[];
+  /** Files or directory trees denied to built-in file writes, in addition to this runtime's state directory. */
+  protectedWritePaths?: readonly string[];
   worker?: {
     enabled: boolean;
     model?: ModelClient;
@@ -55,13 +58,20 @@ export interface ThreadRuntimeOptions {
     model?: ModelClient;
     defaultModel?: ModelSelectionConfig;
     thinkingLevel?: ModelThinkingLevel;
+    /** Model steps per review batch. Default: 20. */
+    maxSteps?: number;
   };
   agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
   state?: ThreadState;
   onStateChange?: (state: ThreadState) => void;
 }
 
-export type PromptOptions = Omit<RunTurnOptions, "signal" | "sessionId" | "captureModelContent" | "promptCacheDiagnostics"> & { signal?: AbortSignal };
+export interface PromptOptions extends ExecutionLimits {
+  signal?: AbortSignal;
+  images?: readonly ImageContent[];
+  /** Observation without complete model inputs/responses. Use subscribe to opt into content capture. */
+  onEvent?: RuntimeEventSink;
+}
 
 export interface RewindOptions {
   signal?: AbortSignal;
@@ -91,7 +101,7 @@ export function snapshotTool(tool: AgentTool): AgentTool {
   validateToolExecutionPolicy(tool.execution);
   if (typeof tool.execute !== "function") throw new Error(`Tool ${tool.name} must provide execute()`);
   return {
-    name: tool.name, description: tool.description, parameters: snapshotSchema(tool.parameters), replay: tool.replay,
+    name: tool.name, description: tool.description, parameters: snapshotSchema(tool.parameters),
     ...(tool.prepare ? { prepare: tool.prepare.bind(tool) } : {}),
     execution: { effect: tool.execution.effect, mode: tool.execution.mode, resources: tool.execution.resources.bind(tool.execution) },
     execute: tool.execute.bind(tool),
@@ -113,6 +123,7 @@ export function snapshotRuntimeOptions(options: ThreadRuntimeOptions): RuntimeOp
     ...(options.search ? { search: { ...options.search } } : {}),
     ...(options.writableExternalPaths ? { writableExternalPaths: options.writableExternalPaths.map((item) => path.resolve(item)) } : {}),
     ...(options.writableExternalDirectories ? { writableExternalDirectories: options.writableExternalDirectories.map((item) => path.resolve(item)) } : {}),
+    ...(options.protectedWritePaths ? { protectedWritePaths: options.protectedWritePaths.map((item) => path.resolve(item)) } : {}),
     ...(options.state ? { state: structuredClone(options.state) } : {}),
     ...(options.agentProfileDiagnostics ? { agentProfileDiagnostics: structuredClone(options.agentProfileDiagnostics) } : {}),
     ...(options.worker ? { worker: {

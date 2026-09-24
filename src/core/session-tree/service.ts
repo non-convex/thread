@@ -42,12 +42,10 @@ export interface PlannedTurn {
   parentTurnId: string | null;
   userEntryId: string;
   input: string;
-  /** Final user content; absent on PlannedTurn values created by older embedding code. */
-  content?: UserMessage["content"];
+  content: UserMessage["content"];
   status: "running";
   startedAt: number;
-  /** Missing on values created by older embedding code; defaults to true. */
-  fileCheckpoints?: boolean;
+  fileCheckpoints: boolean;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
@@ -71,10 +69,6 @@ export class SessionTreeService {
 
   get activeSession(): ProjectSession {
     return this.projection.activeSession();
-  }
-
-  get activeLiveTip(): string | null {
-    return this.projection.liveTips.get(this.activeSession.id) ?? null;
   }
 
   async initialize(): Promise<{ created: boolean; interruptedTurnIds: string[] }> {
@@ -135,7 +129,7 @@ export class SessionTreeService {
     return matches[0]!;
   }
 
-  planTurn(input: string, images: readonly ImageContent[] = [], sessionId = this.activeSession.id, fileCheckpoints = true): PlannedTurn {
+  planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
     const session = this.resolveSession(sessionId);
@@ -152,14 +146,10 @@ export class SessionTreeService {
     };
   }
 
-  async startTurn(input: string): Promise<Turn> {
-    return this.startPlannedTurn(this.planTurn(input));
-  }
-
   async startPlannedTurn(
     planned: PlannedTurn,
   ): Promise<Turn> {
-    const content = planned.content ?? planned.input;
+    const content = planned.content;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
     this.requireIdle();
     if (!this.projection.sessions.has(planned.sessionId) ||
@@ -173,7 +163,7 @@ export class SessionTreeService {
       userEntryId: planned.userEntryId,
       status: "running",
       startedAt: planned.startedAt,
-      fileCheckpoints: planned.fileCheckpoints ?? true,
+      fileCheckpoints: planned.fileCheckpoints,
     };
     const userEntry: MessageEntry = {
       id: turn.userEntryId,
@@ -269,7 +259,7 @@ export class SessionTreeService {
     return structuredClone(this.projection.turns.get(turnId)!);
   }
 
-  async moveLiveTipForRewind(turnId: string | null, sessionId = this.activeSession.id): Promise<void> {
+  async moveLiveTipForRewind(turnId: string | null, sessionId: string): Promise<void> {
     this.requireIdle();
     await this.repository.append(() => ({
       type: "live_tip_changed",
@@ -279,7 +269,7 @@ export class SessionTreeService {
     }), true);
   }
 
-  livePath(sessionId = this.activeSession.id): Turn[] {
+  livePath(sessionId: string): Turn[] {
     return livePath(this.projection, sessionId);
   }
 
@@ -297,7 +287,7 @@ export class SessionTreeService {
       .map((entry) => structuredClone(entry.message));
   }
 
-  rewindCandidates(sessionId = this.activeSession.id): RewindCandidate[] {
+  rewindCandidates(sessionId: string): RewindCandidate[] {
     return this.livePath(sessionId).map((turn) => {
       const entry = this.projection.entries.get(turn.userEntryId);
       if (!entry || entry.type !== "message" || entry.message.role !== "user") {
@@ -314,7 +304,7 @@ export class SessionTreeService {
     });
   }
 
-  resolveRewindCandidate(idOrPrefix: string, sessionId = this.activeSession.id): RewindCandidate {
+  resolveRewindCandidate(idOrPrefix: string, sessionId: string): RewindCandidate {
     const matches = this.rewindCandidates(sessionId).filter((candidate) =>
       candidate.turnId.startsWith(idOrPrefix) || candidate.userEntryId.startsWith(idOrPrefix)
     );

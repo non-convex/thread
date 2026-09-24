@@ -54,7 +54,6 @@ export interface ToolExecutionEntry extends EntryBase {
   toolCallId: string;
   toolName: string;
   effectiveArgs: Record<string, unknown>;
-  replay: "safe" | "never";
 }
 
 export interface RetainedTurn {

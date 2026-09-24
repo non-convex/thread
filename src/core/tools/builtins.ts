@@ -20,7 +20,6 @@ export const writeTool: AgentTool<{ path: string; content: string }> = {
     path: Type.String({ description: "File to create or replace." }),
     content: Type.String({ description: "Full file contents." }),
   }),
-  replay: "never",
   prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
   execution: fileAccess("write"),
   async execute(args, context) {

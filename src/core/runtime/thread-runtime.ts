@@ -1,5 +1,6 @@
 import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AgentRunner, type TurnResult } from "../agent/runner.js";
+import type { RunTurnOptions } from "../agent/turn-runner.js";
 import type { ModelClient } from "../agent/model-client.js";
 import { PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
 import type { ModelCatalog } from "../agent/model-catalog.js";
@@ -47,6 +48,7 @@ export class ThreadRuntime {
   readonly initialSessionId: string;
   private readonly tree: SessionTreeService;
   private readonly files: FileHistoryService;
+  private readonly protectedWritePaths: readonly string[];
   private readonly recallService: SessionRecallService | undefined;
   private readonly profiles: AgentProfileRegistry;
   private readonly tasks: AgentTaskOrchestrator;
@@ -77,6 +79,7 @@ export class ThreadRuntime {
     this.tree = values.tree;
     this.initialSessionId = values.tree.activeSession.id;
     this.files = values.fileHistory;
+    this.protectedWritePaths = values.protectedWritePaths;
     this.repository = values.repository;
     this.builder = new ContextBuilder(this.tree);
     this.recallService = values.recall;
@@ -94,10 +97,13 @@ export class ThreadRuntime {
     if (dreamer && !this.memory) throw new Error("Dreamer requires globalMemoryPath");
     this.profiles = new AgentProfileRegistry([worker, dreamer].filter((profile): profile is AgentProfile => !!profile), options.agentProfileDiagnostics);
     this.tasks = new AgentTaskOrchestrator(values.taskRepository, this.profiles, this.rootPath, this.workerSettings, this.files, {
+      protectedWritePaths: this.protectedWritePaths,
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
       sessionIdForTurn: (turnId) => this.tree.projection.turns.get(turnId)?.sessionId,
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
+      protectedWritePaths: this.protectedWritePaths,
+      ...(options.dreamer?.maxSteps !== undefined ? { maxSteps: options.dreamer.maxSteps } : {}),
       onEvent: runtimeEventSink({ executionId: "dreamer", agentId: "dreamer", sessionId: null, turnId: null },
         (event) => this.publish(event), () => this.captureModelContent(), () => this.promptCacheDiagnostics()),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
@@ -164,9 +170,9 @@ export class ThreadRuntime {
     const turns = this.tree.livePath(session.id);
     const running = this.tree.projection.runningTurnsBySession.get(session.id);
     return structuredClone({ session, liveTipTurnId: this.tree.projection.liveTips.get(session.id) ?? null,
-      turns, entries: turns.flatMap((turn) => this.tree.entriesForTurn(turn.id)),
+      turns, entries: turns.flatMap((turn) => this.tree.projection.entriesByTurn.get(turn.id) ?? []),
       tasks: turns.flatMap((turn) => this.agentTaskDetailsForTurn(turn.id)),
-      activeTurn: running ? { turn: running, entries: this.tree.entriesForTurn(running.id),
+      activeTurn: running ? { turn: running, entries: this.tree.projection.entriesByTurn.get(running.id) ?? [],
         tasks: this.agentTaskDetailsForTurn(running.id) } : null });
   }
 
@@ -200,10 +206,10 @@ export class ThreadRuntime {
     });
   }
 
-  searchHistory(queries: readonly string[], options: { limit?: number; signal?: AbortSignal } = {}) {
-    return this.operate(undefined, options.signal, (signal) => {
+  searchHistory(sessionId: string, queries: readonly string[], options: { limit?: number; signal?: AbortSignal } = {}) {
+    return this.operate(sessionId, options.signal, (signal) => {
       if (!this.recallService) throw new Error("Session recall is disabled");
-      return this.recallService.search(queries, options.limit ?? 8, signal);
+      return this.recallService.search(this.tree.resolveSession(sessionId).id, queries, options.limit ?? 8, signal);
     });
   }
 
@@ -213,13 +219,7 @@ export class ThreadRuntime {
       if (!this.model) throw new Error("No model configured");
       if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
       const runner = this.createAgentRunner(session.id);
-      const result = await runner.run(input, { ...options, sessionId: session.id, signal,
-        captureModelContent: () => this.captureModelContent(),
-        promptCacheDiagnostics: () => this.promptCacheDiagnostics(),
-        onEvent: (event) => {
-          this.publish(event);
-          if (event.type !== "model_cache_diagnostic") safeRuntimeEvent(options.onEvent, withoutModelContent(event));
-        } });
+      const result = await runner.run(input, this.runOptions(session.id, signal, options));
       this.dreamer?.recordTurn(this.tree.messagesForTurn(result.turn.id));
       return result;
     });
@@ -235,13 +235,7 @@ export class ThreadRuntime {
     return this.operate(sessionId, options.signal, (signal) => {
       const session = this.tree.resolveSession(sessionId);
       if (!this.model) throw new Error("Compaction requires a configured model");
-      return this.createAgentRunner(session.id).compactCurrent({ ...options, sessionId: session.id, signal,
-        captureModelContent: () => this.captureModelContent(),
-        promptCacheDiagnostics: () => this.promptCacheDiagnostics(),
-        onEvent: (event) => {
-          this.publish(event);
-          if (event.type !== "model_cache_diagnostic") safeRuntimeEvent(options.onEvent, withoutModelContent(event));
-        } });
+      return this.createAgentRunner(session.id).compactCurrent(this.runOptions(session.id, signal, options));
     });
   }
 
@@ -270,20 +264,25 @@ export class ThreadRuntime {
 
   contextMessages(sessionId: string): Message[] {
     this.assertOpen();
-    return this.builder.build(undefined, this.tree.resolveSession(sessionId).id).messages;
+    return this.builder.build({ sessionId: this.tree.resolveSession(sessionId).id }).messages;
   }
 
   contextUsage(sessionId: string) {
+    return this.contextSnapshot(sessionId).usage;
+  }
+
+  /** Build messages and their usage together so clients need only one context projection. */
+  contextSnapshot(sessionId: string) {
     this.assertOpen();
-    if (!this.model) return undefined;
     const session = this.tree.resolveSession(sessionId);
-    const messages = this.contextMessages(session.id);
+    const messages = this.builder.build({ sessionId: session.id }).messages;
+    if (!this.model) return { messages, usage: undefined };
     const { requestTokens } = contextBudget({
       systemPrompt: this.systemPromptFor(session.id),
       messages: this.model.acceptsImages ? messages : messages.map(messageWithoutImages),
       tools: this.toolRegistry.modelDefinitions(),
     }, messages);
-    return { requestTokens, contextWindow: this.model.contextWindow };
+    return { messages, usage: { requestTokens, contextWindow: this.model.contextWindow } };
   }
 
   subscribe(listener: RuntimeEventSink, options: RuntimeSubscriptionOptions = {}): () => void {
@@ -311,6 +310,7 @@ export class ThreadRuntime {
     return () => { this.assertIdle(); dispose(); };
   }
 
+  /** Execution transforms for the main agent only. Policies and subscriptions cover all agents. */
   on<K extends ExtensionEventType>(type: K, handler: ExtensionHandler<K>): () => void {
     this.assertOpen();
     return this.extensions.on(type, handler);
@@ -526,8 +526,25 @@ export class ThreadRuntime {
       tools: this.toolRegistry, extensions: this.extensions, agentTasks: this.tasks, askPresenter: () => this.askPresenter,
       writableExternalPaths: [...(this.options.writableExternalPaths ?? []), ...(this.memory ? [this.memory.filePath] : [])],
       writableExternalDirectories: this.options.writableExternalDirectories ?? [],
+      protectedWritePaths: this.protectedWritePaths,
       ...(this.memory ? { globalMemoryPath: this.memory.filePath } : {}),
       ...(this.options.toolPolicy ? { toolPolicy: this.options.toolPolicy } : {}), profileId: MAIN_AGENT_PROFILE_ID });
+  }
+
+  /** Copy the public allowlist explicitly: JavaScript callers can still supply extra properties. */
+  private runOptions(sessionId: string, signal: AbortSignal, options: PromptOptions): RunTurnOptions {
+    return {
+      sessionId, signal,
+      ...(options.images ? { images: options.images } : {}),
+      ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      captureModelContent: () => this.captureModelContent(),
+      promptCacheDiagnostics: () => this.promptCacheDiagnostics(),
+      onEvent: (event) => {
+        this.publish(event);
+        if (event.type !== "model_cache_diagnostic") safeRuntimeEvent(options.onEvent, withoutModelContent(event));
+      },
+    };
   }
 
   private systemPromptFor(sessionId: string): string {

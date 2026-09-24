@@ -11,7 +11,7 @@ export async function requestSummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
-  onUiEvent?: ExecutionEventSink;
+  onExecutionEvent?: ExecutionEventSink;
   maxTokens: number;
   label: string;
   purpose: "history_summary" | "progress_summary";
@@ -25,7 +25,7 @@ export async function requestSummary(options: {
         signal: options.signal,
         maxTokens: options.maxTokens,
         ...(options.reasoning ? { reasoning: options.reasoning } : {}),
-      }, options.onUiEvent, { purpose: options.purpose });
+      }, options.onExecutionEvent, { purpose: options.purpose });
       if (response.stopReason === "aborted") {
         throw new DOMException(response.errorMessage ?? `${options.label} aborted`, "AbortError");
       }

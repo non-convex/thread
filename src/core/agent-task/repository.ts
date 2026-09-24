@@ -35,6 +35,5 @@ export class AgentTaskRepository {
     }), flush);
   }
 
-  flush(): Promise<void> { return this.log.flush(); }
   close(): Promise<void> { return this.log.close(); }
 }

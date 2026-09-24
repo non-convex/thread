@@ -35,7 +35,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     name: "delegate_tasks",
     description: "Delegate one or two independent implementation tasks with non-overlapping write scopes. Workers edit the current project workspace directly, so their changes are immediately visible.",
     parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 2 }) }),
-    replay: "never",
+
     execution: { effect: "process", mode: "sequential", resources: () => noResources() },
     async execute(args, context) {
       try {
@@ -43,7 +43,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
           parentTurnId: context.invocation.executionId,
           toolCallId: context.invocation.toolCallId,
           signal: context.signal,
-          ...(context.onUiEvent ? { ui: context.onUiEvent } : {}),
+          ...(context.onExecutionEvent ? { ui: context.onExecutionEvent } : {}),
         });
         return ok({ tasks: summaries, note: "Workers are editing the shared workspace. Do not edit their write scopes while they run; inspect current files after they complete." });
       } catch (error) { return fail(error); }
@@ -58,7 +58,6 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
       returnWhen: Type.Union([Type.Literal("first"), Type.Literal("all")]),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Maximum time to wait in milliseconds. Default: 60000. Does not change worker runtime limits." })),
     }),
-    replay: "never",
     execution: { effect: "process", mode: "sequential", resources: () => noResources() },
     async execute(args, context) {
       try {
@@ -72,12 +71,12 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     name: "request_revision",
     description: "Continue a completed worker in the same shared workspace with concrete review feedback. The task specification and write scope remain fixed.",
     parameters: Type.Object({ taskId: Type.String(), feedback: Type.String() }),
-    replay: "never",
+
     execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
     async execute(args, context) {
       try {
         ownTask(orchestrator, args.taskId, context);
-        return ok(await orchestrator.requestRevision(args.taskId, args.feedback, context.signal, context.onUiEvent));
+        return ok(await orchestrator.requestRevision(args.taskId, args.feedback, context.signal, context.onExecutionEvent));
       } catch (error) { return fail(error); }
     },
   };
@@ -86,7 +85,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     name: "cancel_task",
     description: "Interrupt a running task. Files already changed in the shared workspace are preserved and must be reviewed by the main agent.",
     parameters: Type.Object({ taskId: Type.String(), reason: Type.String() }),
-    replay: "never",
+
     execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
     async execute(args, context) {
       try {

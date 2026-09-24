@@ -27,7 +27,7 @@ export const editTool: AgentTool<EditArgs> = {
       description: "Non-overlapping replacements in one file. Merge overlapping or nested changes into one edit.",
     }),
   }, { additionalProperties: false }),
-  replay: "never",
+
   prepare: (args, context) => prepareFilePath(args, context, { forWrite: true }),
   execution: fileAccess("write"),
   async execute(args, context) {

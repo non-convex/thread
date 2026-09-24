@@ -164,7 +164,7 @@ const search: ThreadCommand = {
       text: "/thread search ",
       hint: "Enter a search query, then press Enter.",
     });
-    const result = await context.runtime.searchHistory(args, { limit: 20, signal: context.signal });
+    const result = await context.runtime.searchHistory(context.selectedSessionId, args, { limit: 20, signal: context.signal });
     const content = result.hits.length
       ? result.hits.map((hit) =>
         `${short(hit.turnId)} session=${short(hit.sessionId)} ${hit.pathStatus} kind=${hit.kind} ${hit.sources.join(", ")}\n  ${hit.snippet}`

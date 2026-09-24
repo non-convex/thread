@@ -47,7 +47,7 @@ export function generateProgressSummary(options: {
   model: ModelClient;
   context: Context;
   signal: AbortSignal;
-  onUiEvent?: ExecutionEventSink;
+  onExecutionEvent?: ExecutionEventSink;
   previousSummary?: string;
   reasoning?: ThinkingLevel;
 }): Promise<string> {
@@ -56,7 +56,7 @@ export function generateProgressSummary(options: {
     : PROGRESS_REQUEST;
   return requestSummary({
     model: options.model,
-    ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+    ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
     purpose: "progress_summary",
     context: {
       ...options.context,

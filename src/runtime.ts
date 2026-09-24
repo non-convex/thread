@@ -27,7 +27,11 @@ export {
 } from "./core/agent/model-catalog.js";
 export { PiModelClient, type ModelClient, type ModelRequestOptions, type ModelRetryCallbacks } from "./core/agent/model-client.js";
 export type { TurnResult } from "./core/agent/runner.js";
-export type { AgentProfile } from "./core/agent/profile.js";
+export type { AgentProfile, AgentProfileDiagnostic } from "./core/agent/profile.js";
+export type { WorkerProfileSettings, WorkerLimits } from "./core/agent-task/profile.js";
+export type { SessionRecallOptions } from "./core/session-recall/service.js";
+export type { RecallSearchResult, RecallSearchHit } from "./core/session-recall/types.js";
+export type { ExtensionEventMap, ExtensionEventType, ExtensionHandler } from "./core/extensions/events.js";
 export type { AgentTool, ToolContext, ToolResult, ToolResultMetadata, ToolOutcome } from "./core/tools/types.js";
 export type { FileWriteScope } from "./core/tools/path-safety.js";
 export type {

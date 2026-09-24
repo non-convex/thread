@@ -60,7 +60,6 @@ export const listTool: AgentTool<ListArgs> = {
       }),
     ),
   }),
-  replay: "safe",
   prepare: (args, context) => prepareFilePath(args, context, { defaultPath: "." }),
   execution: fileAccess("read", "subtree"),
   async execute(args, context) {

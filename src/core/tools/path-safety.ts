@@ -59,6 +59,15 @@ export function samePath(left: string, right: string): boolean {
   return comparable(left) === comparable(right);
 }
 
+/** Protected state takes precedence over workspace and external write grants. */
+export async function assertWritablePath(target: string, protectedPaths: readonly string[] = []): Promise<void> {
+  for (const protectedPath of protectedPaths) {
+    if (isPathInside(await canonicalTarget(protectedPath), target)) {
+      throw new Error(`Built-in file tools cannot modify protected runtime state: ${target}`);
+    }
+  }
+}
+
 /** Compare the resolved target to declared paths; directory aliases cannot expand a scope. */
 export async function assertFileWriteScope(rootPath: string, target: string, scopes: readonly FileWriteScope[]): Promise<void> {
   const root = await realPath(rootPath);

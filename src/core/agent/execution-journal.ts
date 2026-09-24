@@ -1,6 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionTreeService } from "../session-tree/service.js";
-import type { AgentTool } from "../tools/types.js";
 import type { ExecutionIdentity } from "../runtime/policy.js";
 
 export interface ToolExecutionFact {
@@ -9,7 +8,6 @@ export interface ToolExecutionFact {
   toolCallId: string;
   toolName: string;
   effectiveArgs: Record<string, unknown>;
-  replay: AgentTool["replay"];
 }
 
 /** Shared journal operations. The owning execution is admitted before the step runner starts. */

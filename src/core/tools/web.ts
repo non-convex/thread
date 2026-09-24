@@ -161,7 +161,6 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
         }),
       ),
     }),
-    replay: "never",
     execution: {
       effect: "read",
       mode: "parallel",
@@ -226,7 +225,6 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
       offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Character offset from a previous response; default 0." })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: WEB_FETCH_OUTPUT_LIMIT_CHARACTERS, description: `Maximum page characters; default ${WEB_FETCH_DEFAULT_CHARACTERS}.` })),
     }),
-    replay: "never",
     execution: {
       effect: "read",
       mode: "parallel",

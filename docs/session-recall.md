@@ -317,3 +317,7 @@ zvec、Jieba 字典和 ONNX 所需的原生库随程序一起打包，运行时�
 RSS 表示进程当时驻留在物理内存中的页面大小。两者相加约 871 MiB，其中共享页可能重复计算；这个值也不是峰值。模型下载只有约 135 MB，并不意味着运行时只占用这么多内存。
 
 这些数据来自小型固定样本，不能作为大型项目的耗时或内存上限，也不代表其他平台的实测结果。
+
+## 调用会话与路径标注
+
+搜索始终覆盖整个项目历史。嵌入 API 使用 `searchHistory(sessionId, queries, options?)` 显式选择路径标注的参照会话；`session_search` 和 `session_read` 从工具执行身份取得该会话。`current-path`、`current-session-off-path`、`other-session` 因而相对于调用者，不依赖上次 `openSession()` 保存的会话。

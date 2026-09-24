@@ -67,10 +67,6 @@ export class EventLog<R> {
     return pending;
   }
 
-  flush(): Promise<void> {
-    return this.write(async () => { await this.handle?.sync(); });
-  }
-
   close(): Promise<void> {
     return this.closing ??= Promise.resolve().then(async () => {
       try {

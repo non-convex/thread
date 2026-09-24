@@ -46,7 +46,7 @@ export class ContextCompactionService {
     turnId: string;
     reason: CompactionReason;
     signal: AbortSignal;
-    onUiEvent?: ExecutionEventSink;
+    onExecutionEvent?: ExecutionEventSink;
     systemTokens: number;
     tokensBefore: number;
   }): Promise<CompactionResult> {
@@ -71,7 +71,7 @@ export class ContextCompactionService {
       model: this.model,
       context: historySummaryContext(options.context, options.built.messages, plan.retainedUnits),
       signal: options.signal,
-      ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+      ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
     const progressTask = plan.partialTurnTrajectory && plan.partialTurnId
@@ -82,7 +82,7 @@ export class ContextCompactionService {
             plan.partialTurnTrajectory,
           ),
           signal: options.signal,
-          ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+          ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
           ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
           ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         })

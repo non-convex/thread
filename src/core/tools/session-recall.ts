@@ -82,7 +82,6 @@ export function createSessionSearchTool(recall: SessionRecallService): AgentTool
       queries: Type.Array(Type.String(), { minItems: 1, description: "Descriptions, keywords, or alternative phrasings of the same information need." }),
       limit: Type.Optional(Type.Number({ description: `Maximum turns to return (default ${DEFAULT_LIMIT}, maximum ${MAX_LIMIT}).` })),
     }),
-    replay: "safe",
     execution: {
       effect: "read",
       mode: "parallel",
@@ -91,8 +90,10 @@ export function createSessionSearchTool(recall: SessionRecallService): AgentTool
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();
+        const sessionId = context.invocation.sessionId;
+        if (!sessionId) throw new Error("Session recall requires an invoking session");
         const limit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(args.limit ?? DEFAULT_LIMIT)));
-        const result = await recall.search(args.queries, limit, context.signal);
+        const result = await recall.search(sessionId, args.queries, limit, context.signal);
         return { content: formatSearch(result), isError: false,
           details: { hits: result.hits.length, coverage: result.coverage, semantic: result.semantic, diagnostics: result.diagnostics } };
       } catch (error) {
@@ -127,7 +128,6 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
       after: Type.Optional(Type.Number({ description: "Include up to 10 later turns when the selected turn is on its Session's saved live path." })),
       offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "UTF-8 byte offset from the previous page; default 0. Keep all other read options unchanged." })),
     }),
-    replay: "safe",
     execution: {
       effect: "read",
       mode: "parallel",
@@ -136,7 +136,9 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
     async execute(args, context) {
       try {
         context.signal.throwIfAborted();
-        const details = recall.readPath(args.turnId, args);
+        const sessionId = context.invocation.sessionId;
+        if (!sessionId) throw new Error("Session recall requires an invoking session");
+        const details = recall.readPath(sessionId, args.turnId, args);
         return details.length ? presentReadPage(formatPath(details), args.offset ?? 0) : fail(new Error(`Unknown turn: ${args.turnId}`));
       } catch (error) {
         return fail(error);

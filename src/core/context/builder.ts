@@ -96,9 +96,10 @@ function appendEntryMessages(turns: RetainedTurn[], entries: readonly SessionEnt
 export class ContextBuilder {
   constructor(private readonly tree: SessionTreeService) {}
 
-  build(tipTurnId?: string, sessionId?: string): BuiltContext {
-    const turns = tipTurnId ? this.tree.pathToTurn(tipTurnId) : this.tree.livePath(sessionId);
-    const entries = turns.flatMap((turn) => this.tree.entriesForTurn(turn.id));
+  build(target: { turnId: string } | { sessionId: string }): BuiltContext {
+    const turns = "turnId" in target ? this.tree.pathToTurn(target.turnId) : this.tree.livePath(target.sessionId);
+    // Read immutable history locally; clone only the retained data in the returned projections.
+    const entries = turns.flatMap((turn) => this.tree.projection.entriesByTurn.get(turn.id) ?? []);
     let compactionIndex = -1;
     for (let index = entries.length - 1; index >= 0; index--) {
       if (entries[index]!.type === "compaction") {

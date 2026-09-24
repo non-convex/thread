@@ -277,7 +277,7 @@ export class ThreadTuiController {
     try {
       const result = await this.app.handleInput(input, {
         signal: active.signal,
-        onUiEvent: (event) => {
+        onCommandEvent: (event) => {
           if (!this.stopped && !this.disposed && (event.type === "command_started" || event.type === "command_finished")) {
             this.batcher.push(event);
           }
@@ -450,13 +450,12 @@ export class ThreadTuiController {
   }
 
   private refreshMeta(): void {
-    const messages = this.app.runtime.contextMessages(this.app.selectedSessionId);
+    const { messages, usage } = this.app.runtime.contextSnapshot(this.app.selectedSessionId);
     const scan = scanCacheUsage(messages);
     this.meta.modelName = this.app.runtime.model?.modelId ?? "no model";
     this.meta.thinkingLevel = this.app.runtime.thinkingLevel;
     this.meta.supportsThinking = this.app.runtime.supportsThinking;
     this.meta.acceptsImages = this.app.runtime.model?.acceptsImages === true;
-    const usage = this.app.runtime.contextUsage(this.app.selectedSessionId);
     this.meta.contextPercent = usage ? Math.min(999, Math.round(usage.requestTokens / usage.contextWindow * 100)) : 0;
     this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
     this.meta.cacheMissedTokens = scan.missedTokens;

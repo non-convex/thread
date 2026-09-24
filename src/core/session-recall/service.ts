@@ -131,7 +131,7 @@ export class SessionRecallService {
     while (this.background) await this.background;
   }
 
-  async search(queries: readonly string[], limit = 8, callerSignal?: AbortSignal): Promise<RecallSearchResult> {
+  async search(sessionId: string, queries: readonly string[], limit = 8, callerSignal?: AbortSignal): Promise<RecallSearchResult> {
     const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
     signal.throwIfAborted();
     const terms = [...new Set(queries.map((query) => query.trim()).filter(Boolean))];
@@ -139,7 +139,7 @@ export class SessionRecallService {
     if (!Number.isFinite(limit)) throw new Error("Search limit must be finite");
     const turns = this.endedTurns();
     const byId = new Map(turns.map((turn) => [turn.id, turn]));
-    const classify = pathClassifier(this.tree);
+    const classify = pathClassifier(this.tree, sessionId);
     this.activated = true;
     try { await this.serialized(() => this.syncKeywords(turns, signal)); }
     catch (error) { signal.throwIfAborted(); this.indexFailure = message(error); }
@@ -211,8 +211,8 @@ export class SessionRecallService {
     };
   }
 
-  read(turnId: string, options: ReadOptions = {}) { return readTurn(this.tree, turnId, options); }
-  readPath(turnId: string, options: ReadOptions = {}) { return readPath(this.tree, turnId, options); }
+  read(sessionId: string, turnId: string, options: ReadOptions = {}) { return readTurn(this.tree, sessionId, turnId, options); }
+  readPath(sessionId: string, turnId: string, options: ReadOptions = {}) { return readPath(this.tree, sessionId, turnId, options); }
 
   close(): Promise<void> {
     return this.closing ??= (async () => {

@@ -13,17 +13,16 @@ import type { RuntimeEventSink } from "../runtime/events.js";
 import { RuntimeLimitError, type ExecutionLimits } from "../runtime/limits.js";
 import type { ModelClient } from "./model-client.js";
 import { SessionTurnJournal } from "./execution-journal.js";
-import { AgentStepRunner } from "./step-runner.js";
+import { AgentStepRunner, assertModelStepSucceeded } from "./step-runner.js";
 import type { ToolCallExecutor } from "./tool-call-executor.js";
 
 export interface RunTurnOptions extends ExecutionLimits {
   signal: AbortSignal;
-  sessionId?: string;
+  sessionId: string;
   onEvent?: RuntimeEventSink;
   captureModelContent?: () => boolean;
   promptCacheDiagnostics?: () => import("./prompt-cache-diagnostics.js").PromptCacheDiagnostics | undefined;
-  onTextDelta?: (delta: string) => void;
-  onUiEvent?: ExecutionEventSink;
+  onExecutionEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];
 }
 
@@ -80,7 +79,7 @@ export class TurnRunner {
         throw new RuntimeLimitError("maxSteps", options.maxSteps);
       }
       let assembled = await this.assemble(turn.id);
-      const budget = this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
+      const budget = this.reportContextUsage(assembled.context, assembled.built.messages, options.onExecutionEvent);
       const threshold = Math.floor(this.model.contextWindow * COMPACTION_TRIGGER_RATIO);
       if (budget.requestTokens > threshold &&
           this.compaction.needsCompaction(assembled.built, budget.overheadTokens, turn.id)) {
@@ -91,7 +90,7 @@ export class TurnRunner {
         });
         if (compacted.compacted) {
           assembled = await this.assemble(turn.id);
-          this.reportContextUsage(assembled.context, assembled.built.messages, options.onUiEvent);
+          this.reportContextUsage(assembled.context, assembled.built.messages, options.onExecutionEvent);
         }
       }
       const journal = new SessionTurnJournal(this.tree, turn.id, turn.sessionId);
@@ -100,16 +99,15 @@ export class TurnRunner {
       const result = await this.stepRunner.run(assembled.context, journal, {
         signal: options.signal,
         step,
-        ...(options.onTextDelta ? { onTextDelta: options.onTextDelta } : {}),
-        ...(options.onUiEvent ? { onUiEvent: options.onUiEvent } : {}),
+        ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
         onAssistantPersisted: (response) => {
           continuedContextMessages.push(response);
           continuedSessionMessages.push(response);
-          if (options.onUiEvent) {
+          if (options.onExecutionEvent) {
             this.reportContextUsage(
               { ...assembled.context, messages: continuedContextMessages },
               continuedSessionMessages,
-              options.onUiEvent,
+              options.onExecutionEvent,
             );
           }
         },
@@ -124,7 +122,7 @@ export class TurnRunner {
         const overflowBudget = this.reportContextUsage(
           overflowContext.context,
           overflowContext.built.messages,
-          options.onUiEvent,
+          options.onExecutionEvent,
         );
         if (!this.compaction.needsCompaction(
           overflowContext.built,
@@ -145,32 +143,26 @@ export class TurnRunner {
         const recoveredBudget = this.reportContextUsage(
           overflowContext.context,
           overflowContext.built.messages,
-          options.onUiEvent,
+          options.onExecutionEvent,
         );
         if (recoveredBudget.requestTokens >= this.model.contextWindow) {
           throw new Error("Context remains above the model window after compaction; use /rewind or /new");
         }
         continue;
       }
-      if (response.stopReason === "aborted" || options.signal.aborted) {
-        throw new DOMException(response.errorMessage ?? "Aborted", "AbortError");
-      }
-      if (response.stopReason === "error") throw new Error(response.errorMessage ?? "Model request failed");
+      assertModelStepSucceeded(result, options.signal);
       if (calls.length === 0) break;
-      if (response.stopReason !== "toolUse") {
-        throw new Error(`Model returned tool calls with stop reason ${response.stopReason}; calls were not executed`);
-      }
       // A completed tool batch advances the run: later steps may recover from
       // another overflow, while repeated recovery without a batch is still blocked.
       overflowRecoveryUsed = false;
       if (toolBatchesSinceCompaction !== undefined) toolBatchesSinceCompaction++;
       continuedContextMessages.push(...results);
       continuedSessionMessages.push(...results);
-      if (options.onUiEvent) {
+      if (options.onExecutionEvent) {
         this.reportContextUsage(
           { ...assembled.context, messages: continuedContextMessages },
           continuedSessionMessages,
-          options.onUiEvent,
+          options.onExecutionEvent,
         );
       }
     }
@@ -179,17 +171,15 @@ export class TurnRunner {
 
   async compactActive(options: RunTurnOptions): Promise<CompactionResult> {
     this.tree.requireIdle();
-    const turnId = options.sessionId
-      ? this.tree.projection.liveTips.get(options.sessionId)
-      : this.tree.activeLiveTip;
+    const turnId = this.tree.projection.liveTips.get(options.sessionId);
     if (!turnId) return { compacted: false };
-    const built = this.builder.build(undefined, options.sessionId);
+    const built = this.builder.build({ sessionId: options.sessionId });
     const context = await this.extendContext(built, `compact_${Date.now()}`);
     return this.compactBuilt({ built, context }, options, { reason: "manual", turnId });
   }
 
   private async assemble(turnId: string): Promise<{ built: BuiltContext; context: Context }> {
-    const built = this.builder.build(turnId);
+    const built = this.builder.build({ turnId });
     return { built, context: await this.extendContext(built, turnId) };
   }
 
@@ -225,7 +215,7 @@ export class TurnRunner {
       sessionId: this.tree.projection.turns.get(invocation.turnId)?.sessionId ?? null,
       turnId: invocation.turnId,
       ...(invocation.reason !== "manual" ? { parentExecutionId: invocation.turnId } : {}),
-    }, options.onUiEvent);
+    }, options.onExecutionEvent);
     safeExecutionEvent(ui, { type: "compaction_started", reason: invocation.reason });
     try {
       const result = await this.compaction.compact({
@@ -234,7 +224,7 @@ export class TurnRunner {
         turnId: invocation.turnId,
         reason: invocation.reason,
         signal: options.signal,
-        onUiEvent: ui,
+        onExecutionEvent: ui,
         systemTokens: budget.overheadTokens,
         tokensBefore: budget.requestTokens,
       });

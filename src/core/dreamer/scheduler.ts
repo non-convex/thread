@@ -2,11 +2,12 @@ import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from 
 import { contentText, type Message } from "@earendil-works/pi-ai";
 import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
 import type { AgentProfile } from "../agent/profile.js";
-import { AgentStepRunner } from "../agent/step-runner.js";
+import { AgentStepRunner, assertModelStepSucceeded } from "../agent/step-runner.js";
 import { ToolCallExecutor } from "../agent/tool-call-executor.js";
 import { ExtensionEvents } from "../extensions/events.js";
 import type { HostToolPolicy } from "../runtime/policy.js";
-import { DREAMER_MAX_RUNTIME_MS } from "./profile.js";
+import { DREAMER_MAX_RUNTIME_MS, DREAMER_MAX_STEPS } from "./profile.js";
+import { validateExecutionLimits } from "../runtime/limits.js";
 import { createDreamerReviewBatches } from "./review.js";
 import { GlobalMemoryAccess } from "../global-memory.js";
 
@@ -17,6 +18,8 @@ export interface DreamerSchedulerOptions {
   idleTurns?: number;
   idleMs?: number;
   maxRuntimeMs?: number;
+  maxSteps?: number;
+  protectedWritePaths?: readonly string[];
   toolPolicy?: HostToolPolicy;
   onEvent?: ExecutionEventSink;
 }
@@ -39,6 +42,7 @@ export class DreamerScheduler {
   private readonly idleTurns: number;
   private readonly idleMs: number;
   private readonly maxRuntimeMs: number;
+  private readonly maxSteps: number;
   private readonly toolPolicy: HostToolPolicy | undefined;
 
   constructor(
@@ -51,6 +55,8 @@ export class DreamerScheduler {
     this.idleTurns = options.idleTurns ?? DREAMER_IDLE_TURNS;
     this.idleMs = options.idleMs ?? DREAMER_IDLE_MS;
     this.maxRuntimeMs = options.maxRuntimeMs ?? DREAMER_MAX_RUNTIME_MS;
+    this.maxSteps = options.maxSteps ?? DREAMER_MAX_STEPS;
+    validateExecutionLimits({ maxSteps: this.maxSteps, timeoutMs: this.maxRuntimeMs });
     this.toolPolicy = options.toolPolicy;
   }
 
@@ -162,6 +168,7 @@ export class DreamerScheduler {
       const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
         acceptsImages: profile.model.acceptsImages === true,
         writableExternalPaths: [this.memoryPath],
+        protectedWritePaths: this.options.protectedWritePaths ?? [],
         globalMemory: new GlobalMemoryAccess(this.memoryPath, true),
         ...(this.toolPolicy ? { toolPolicy: this.toolPolicy } : {}),
         agentId: profile.id,
@@ -179,13 +186,14 @@ export class DreamerScheduler {
             systemPrompt: profile.systemPrompt,
             messages: journal.conversationMessages(),
             tools: profile.tools.modelDefinitions(),
-          }, journal, { signal, step, onUiEvent: ui });
+          }, journal, { signal, step, onExecutionEvent: ui });
           output = contentText(result.response.content, "");
-          if (result.response.stopReason === "aborted") {
-            throw new DOMException(result.response.errorMessage ?? "Aborted", "AbortError");
+          if (runner.isContextOverflow(result.response)) {
+            throw new Error("Dreamer context exhausted; use narrower memory reads or a model with a larger context window");
           }
-          if (result.response.stopReason === "error") throw new Error(result.response.errorMessage ?? "Dreamer model request failed");
+          assertModelStepSucceeded(result, signal);
           if (result.calls.length === 0) break;
+          if (step >= this.maxSteps) throw new Error(`Dreamer exceeded ${this.maxSteps} model steps per review batch`);
         }
         signal.throwIfAborted();
         onBatchReviewed(batch.turnCount);

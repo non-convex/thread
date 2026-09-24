@@ -1,6 +1,7 @@
 import type { Context, ImageContent } from "@earendil-works/pi-ai";
 import type { ToolResult } from "../tools/types.js";
 
+/** Main-agent transforms only; worker and Dreamer executions use host policies instead. */
 export interface ExtensionEventMap {
   turn_start: { turnId: string; sessionId: string; input: string };
   before_context: { context: Context; turnId: string };
@@ -10,6 +11,7 @@ export interface ExtensionEventMap {
     denied?: boolean;
     denyReason?: string;
   };
+  /** Changes model-facing content only. Original tool output remains in durable details.raw. */
   tool_result: { toolName: string; raw: ToolResult; modelContent: string; modelImages?: readonly ImageContent[] };
   turn_end: { turnId: string; outcome: "completed" | "interrupted" | "failed" };
 }

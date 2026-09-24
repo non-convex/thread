@@ -5,7 +5,7 @@ export default function activate(api) {
     name: "echo_local",
     description: "Return text from a local example extension.",
     parameters: Type.Object({ text: Type.String() }),
-    replay: "safe",
+
     async execute(args) {
       return { content: args.text, isError: false };
     },

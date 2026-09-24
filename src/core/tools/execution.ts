@@ -1,5 +1,5 @@
 import path from "node:path";
-import { canonicalTarget, isPathInside, realPath, resolveWorkspacePath } from "./path-safety.js";
+import { assertWritablePath, canonicalTarget, isPathInside, realPath, resolveWorkspacePath } from "./path-safety.js";
 import type { ToolContext } from "./types.js";
 
 export type ToolEffect = "read" | "write" | "process" | "interactive";
@@ -23,6 +23,7 @@ export interface ToolPlanningContext {
   readonly rootPath: string;
   readonly writableExternalPaths?: readonly string[];
   readonly writableExternalDirectories?: readonly string[];
+  readonly protectedWritePaths?: readonly string[];
   readonly signal: AbortSignal;
 }
 
@@ -138,6 +139,7 @@ export async function prepareFilePath<T extends Record<string, unknown> & { path
     ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
     ...(context.writableExternalDirectories ? { allowedOutsideDirectories: context.writableExternalDirectories } : {}),
   }));
+  if (options.forWrite) await assertWritablePath(target, context.protectedWritePaths);
   context.signal.throwIfAborted();
   return { ...args, path: path.isAbsolute(input) || !isPathInside(root, target) ? target : path.relative(root, target) || "." };
 }
@@ -150,6 +152,7 @@ export async function resolveToolPath(context: ToolContext, input: string, forWr
     ...(context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),
     ...(context.writableExternalDirectories ? { allowedOutsideDirectories: context.writableExternalDirectories } : {}),
   });
+  if (forWrite) await assertWritablePath(target, context.protectedWritePaths);
   if (context.resources) {
     const actual = normalizeResourcePath(await canonicalTarget(target));
     const approved = context.resources.some((resource) => resource.namespace === "workspace" &&
