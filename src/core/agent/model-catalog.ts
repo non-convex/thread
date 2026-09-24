@@ -35,6 +35,8 @@ export interface ModelCatalogOptions {
   credentials?: CredentialStore;
   enabledProviderIds?: readonly string[];
   modelOverrides?: Readonly<Record<string, ModelOverrideConfig>>;
+  /** Filters list/listAll results without restricting explicit createClient selections. */
+  isModelVisible?: (model: ModelDescriptor) => boolean;
 }
 
 const modelKey = (provider: string, id: string) => `${provider}\0${id}`;
@@ -57,6 +59,7 @@ export class PiModelCatalog implements ModelCatalog {
     private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
     enabledProviderIds: readonly string[] = [],
     modelOverrides: Readonly<Record<string, ModelOverrideConfig>> = {},
+    private readonly isModelVisible?: (model: ModelDescriptor) => boolean,
   ) {
     this.configuredModelKeys = configuredModels && new Set(configuredModels.map((model) => modelKey(model.providerId, model.modelId)));
     this.enabledProviderIds = new Set(enabledProviderIds);
@@ -81,7 +84,8 @@ export class PiModelCatalog implements ModelCatalog {
       providerId: model.provider, modelId: model.id, name: model.name,
       contextWindow: this.modelOverrides.get(overrideKey(model.provider, model.id))?.contextWindow ?? model.contextWindow,
       maxOutputTokens: model.maxTokens, reasoning: model.reasoning, acceptsImages: model.input.includes("image"),
-    })).sort((a, b) => a.providerId.localeCompare(b.providerId) || a.modelId.localeCompare(b.modelId));
+    })).filter((model) => this.isModelVisible?.(model) ?? true)
+      .sort((a, b) => a.providerId.localeCompare(b.providerId) || a.modelId.localeCompare(b.modelId));
   }
 
   createClient(providerId: string, modelId: string): PiModelClient {
@@ -163,5 +167,5 @@ export function createConfiguredModelCatalog(providers: Record<string, CustomPro
     registerCustomProvider(models, providerId, config);
     return config.models.map((model) => ({ providerId, modelId: model.id }));
   });
-  return new PiModelCatalog(models, configuredModels, credentials, options.enabledProviderIds, options.modelOverrides);
+  return new PiModelCatalog(models, configuredModels, credentials, options.enabledProviderIds, options.modelOverrides, options.isModelVisible);
 }

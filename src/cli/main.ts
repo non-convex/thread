@@ -2,7 +2,7 @@
 import { stderr as errorOutput, stdout as output } from "node:process";
 import { resolve } from "node:path";
 import { ThreadApp } from "../app/thread-app.js";
-import { createConfiguredModelCatalog } from "../core/agent/model-catalog.js";
+import { createAppModelCatalog } from "../app/model-catalog.js";
 import type { AgentProfileDiagnostic } from "../core/agent/profile.js";
 import { WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
 import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
   const credentials = new ThreadCredentialStore();
   if (command) {
     const enabledProviderIds = (await credentials.list()).map((credential) => credential.providerId);
-    const catalog = createConfiguredModelCatalog({}, { credentials, enabledProviderIds });
+    const catalog = createAppModelCatalog({}, { credentials, enabledProviderIds });
     if (command.type === "login") await loginProvider(catalog, command.providerId);
     else if (command.type === "logout") {
       await logoutProvider(catalog, command.providerId);
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
   const terminalModule = usePlain ? undefined : await import("../ui/terminal/app.js");
   const loadedConfig = await loadThreadConfig(options.configPath);
   const enabledProviderIds = (await credentials.list()).map((credential) => credential.providerId);
-  const modelCatalog = createConfiguredModelCatalog(loadedConfig?.config.providers ?? {}, {
+  const modelCatalog = createAppModelCatalog(loadedConfig?.config.providers ?? {}, {
     credentials,
     enabledProviderIds,
     modelOverrides: loadedConfig?.config.modelOverrides ?? {},

@@ -20,6 +20,8 @@ These stages have different responsibilities. `AgentRunner` in `core/agent/runne
 
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 
+`app/model-catalog.ts` limits the coding app's OpenAI Codex model lists to GPT-6 Astra, Sol, and Luna. The core catalog accepts an optional `isModelVisible` predicate for `list()` and `listAll()`; without it, embedded hosts retain the complete catalog. This display filter does not restrict explicit `createClient()` selections or change provider authentication.
+
 ## Persistence and file changes
 
 The Session Tree and worker-task repositories own their record formats and projections. Both use `core/utils/event-log.ts` for ordered writes, durability barriers, interrupted-tail recovery and draining accepted writes during close. Projection updates remain synchronous; a durable append waits for its write before returning.

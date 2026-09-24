@@ -116,15 +116,17 @@ thread auth status
 thread --root /path/to/project
 ```
 
-Run `/model all` inside the TUI to choose an available model, or select one at startup:
+Run `/model` inside the TUI to choose a model. Thread's `openai-codex` lists show only GPT-6 Astra (`gpt-6-astra`), GPT-6 Sol (`gpt-6-sol`), and GPT-6 Luna (`gpt-6-luna`), including `/model all` and `/model list openai-codex`. Other providers keep their own model lists. Model definitions come from the bundled `pi-ai` catalog; signing in does not refresh it, and provider-side access still depends on your account.
+
+You can also select a model at startup:
 
 ```bash
-thread --root /path/to/project --provider openai-codex --model <model-id>
+thread --root /path/to/project --provider openai-codex --model gpt-6-sol
 ```
 
 Thread stores this login separately from Codex CLI in `~/.thread/auth.json` (or `$THREAD_HOME/auth.json`). Treat it like a password. Remove it with `thread logout openai-codex`.
 
-Built-in model metadata can be overridden in `~/.thread/config.json` without replacing its provider or authentication. For example, `"modelOverrides": { "openai-codex/gpt-5.6-sol": { "contextWindow": 500000 } }` changes Thread's local context budgeting, display, and compaction threshold. It cannot raise a limit enforced by the provider. When Thread falls back to `~/.pi/agent/models.json`, it also reads pi's nested `providers.<provider>.modelOverrides` format.
+Built-in model metadata can be overridden in `~/.thread/config.json` without replacing its provider or authentication. For example, `"modelOverrides": { "openai-codex/gpt-6-sol": { "contextWindow": 500000 } }` changes Thread's local context budgeting, display, and compaction threshold. It cannot raise a limit enforced by the provider. When Thread falls back to `~/.pi/agent/models.json`, it also reads pi's nested `providers.<provider>.modelOverrides` format.
 
 For an API key or compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, and set the environment variable named by `apiKeyEnv`. Custom providers can use `openai-responses`, `openai-completions`, or `anthropic-messages`.
 
