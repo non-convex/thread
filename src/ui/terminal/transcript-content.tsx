@@ -1,4 +1,4 @@
-import { MouseButton } from "@opentui/core";
+import { MouseButton, type TextRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { CopyText } from "./clipboard.js";
@@ -97,15 +97,6 @@ export function ReplyCopyButton(props: { content: string; resources: ThreadViewR
 }
 
 const COLLAPSED_THINKING_LINES = 5;
-const THINKING_ESTIMATE_COLUMNS = 40;
-
-function estimatedThinkingLines(content: string): number {
-  if (!content) return 0;
-  return content.split("\n").reduce(
-    (total, line) => total + Math.max(1, Math.ceil([...line].length / THINKING_ESTIMATE_COLUMNS)),
-    0,
-  );
-}
 
 export function ThinkingView(props: {
   content: string;
@@ -117,8 +108,14 @@ export function ThinkingView(props: {
   const renderer = useRenderer();
   const expanded = props.expansion.expanded;
   const content = createMemo(() => props.content.trim());
-  const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
-  const collapsible = () => estimatedLines() > COLLAPSED_THINKING_LINES;
+  // Wrapped rows at the current width. The collapsed parent clips drawing only,
+  // so the text node still measures every row; it reports again after a resize.
+  const [lines, setLines] = createSignal(0);
+  const measure = (node: TextRenderable) => {
+    node.on("line-info-change", () => setLines(node.virtualLineCount));
+    setLines(node.virtualLineCount);
+  };
+  const collapsible = () => lines() > COLLAPSED_THINKING_LINES;
   const heading = () => (props.heading ?? "thinking").trim();
   return (
     <box
@@ -142,7 +139,7 @@ export function ThinkingView(props: {
           attributes={dimItalic}
         >
           {collapsible()
-            ? `${heading()} ${expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed} ${estimatedLines()} lines`
+            ? `${heading()} ${expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed} ${lines()} lines`
             : heading()}
         </text>
       </box>
@@ -157,6 +154,7 @@ export function ThinkingView(props: {
               overflow="hidden"
             >
               <text
+                ref={measure}
                 fg={theme.thinkingDim}
                 attributes={italic}
                 wrapMode="word"
@@ -169,6 +167,7 @@ export function ThinkingView(props: {
         >
           <box flexDirection="column" width="100%">
             <text
+              ref={measure}
               fg={theme.thinkingDim}
               attributes={italic}
               wrapMode="word"
