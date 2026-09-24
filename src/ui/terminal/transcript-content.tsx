@@ -1,5 +1,7 @@
 import { MouseButton } from "@opentui/core";
-import { createMemo, Show } from "solid-js";
+import { useRenderer } from "@opentui/solid";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import type { CopyText } from "./clipboard.js";
 import type { TranscriptExpansion } from "./transcript-expansion.js";
 import type { ThreadViewResources } from "./resources.js";
 import { dimItalic, italic, STATUS_ICONS } from "./theme.js";
@@ -44,6 +46,56 @@ export function normalizeMarkdownForTerminal(content: string): string {
   );
 }
 
+export function ReplyCopyButton(props: { content: string; resources: ThreadViewResources; copyText: CopyText }) {
+  const theme = props.resources.theme;
+  const [status, setStatus] = createSignal<"idle" | "copying" | "written" | "attempted" | "failed">("idle");
+  let pressed = false;
+  let disposed = false;
+  let resetTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    disposed = true;
+    clearTimeout(resetTimer);
+  });
+  const copy = async () => {
+    if (status() === "copying") return;
+    clearTimeout(resetTimer);
+    setStatus("copying");
+    // Copy the source, preserving Markdown and content outside the viewport.
+    const result = await props.copyText(props.content);
+    if (disposed) return;
+    setStatus(result === "cancelled" ? "idle" : result);
+    if (result === "written" || result === "attempted") {
+      resetTimer = setTimeout(() => setStatus("idle"), 2_000);
+    }
+  };
+  const label = () => {
+    switch (status()) {
+      case "copying": return "… copying";
+      case "written": return "✓ copied";
+      case "attempted": return "↗ sent";
+      case "failed": return "! retry copy";
+      default: return "⧉ copy";
+    }
+  };
+  return <box flexDirection="row" width="100%" height={1} flexShrink={0} marginTop={1}>
+    <text height={1} flexShrink={0} wrapMode="none" selectable={false}
+      fg={status() === "written" ? theme.success : status() === "failed" ? theme.error : theme.muted}
+      onMouseDown={(event) => {
+        pressed = event.button === MouseButton.LEFT;
+        event.stopPropagation();
+      }}
+      onMouseDrag={() => { pressed = false; }}
+      onMouseOut={() => { pressed = false; }}
+      onMouseUp={(event) => {
+        const activate = pressed && event.button === MouseButton.LEFT && !event.isDragging;
+        pressed = false;
+        event.stopPropagation();
+        if (activate) void copy();
+      }}
+    >{label()}</text>
+  </box>;
+}
+
 const COLLAPSED_THINKING_LINES = 5;
 const THINKING_ESTIMATE_COLUMNS = 40;
 
@@ -62,6 +114,7 @@ export function ThinkingView(props: {
   expansion: TranscriptExpansion;
 }) {
   const theme = props.resources.theme;
+  const renderer = useRenderer();
   const expanded = props.expansion.expanded;
   const content = createMemo(() => props.content.trim());
   const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
@@ -72,8 +125,9 @@ export function ThinkingView(props: {
       flexDirection="column"
       width="100%"
       marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && collapsible()) {
+      onMouseUp={(event) => {
+        if (event.button === MouseButton.LEFT && collapsible() && !renderer.getSelection()?.getSelectedText()) {
+          event.stopPropagation();
           props.expansion.toggle();
         }
       }}
@@ -85,7 +139,6 @@ export function ThinkingView(props: {
           truncate={true}
           fg={theme.thinkingDim}
           attributes={dimItalic}
-          selectable={false}
         >
           {collapsible()
             ? `${heading()} ${expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed} ${estimatedLines()} lines`
@@ -107,7 +160,6 @@ export function ThinkingView(props: {
                 attributes={italic}
                 wrapMode="word"
                 marginLeft={2}
-                selectable={false}
               >
                 {content()}
               </text>
@@ -120,7 +172,6 @@ export function ThinkingView(props: {
               attributes={italic}
               wrapMode="word"
               marginLeft={2}
-              selectable={false}
             >
               {content()}
             </text>

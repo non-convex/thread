@@ -64,6 +64,12 @@
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
+文字可用鼠标拖选，再按 `Ctrl+C` 或 `Alt+C` 复制；输入框通过键盘选中的文字也支持复制。选区存在时，`Ctrl+C` 优先复制，不中断任务、清空输入或退出；`Esc` 先取消选区。没有选区时，`Ctrl+C` 保留原有的中断／清空／退出行为，`Alt+C` 不执行操作。终端若拦截复制快捷键，可用 `Alt+C`。欢迎页和文档页提供复制提示。
+
+复制复用 OpenTUI 的 clipboard service：本地优先写入系统剪贴板，后端不可用或失败时尝试终端 OSC 52；远程会话仅向终端请求复制。系统写入成功和已向终端发送请求分别提示，失败时保留选区供重试。鼠标选区保留到再次点击或按 `Esc`；拖选工具结果、思考、compaction 或 Worker 标题不会触发展开／折叠。
+
+每个回合只在最后一条无工具调用的最终回复末尾显示 `⧉ copy` 按钮，中间说明和带工具调用的回复不显示；Worker trace 同样只为最后一条无工具调用的回复显示按钮。按钮在完整回复落入历史后出现，流式输出、失败或中断的模型响应、空正文均不显示。最终回复含多个文本块时，仅在最后一个文本块下方放一个按钮，点击复制整条回复的原始 Markdown（包括屏幕外正文、代码块和链接），不包含思考、工具输出或按钮文字，无需先选中文字。写入期间显示 `… copying`，成功后显示两秒 `✓ copied`；仅向终端发送了复制请求时显示 `↗ sent`，失败时显示 `! retry copy` 并在状态区说明原因。拖选经过按钮不会触发复制，按钮也不会抢走输入框焦点。
+
 临时文档（`/thread history` 一类 ephemeral view）不叠在 session 上，而是换成 `DocumentScreen`：顶栏标题、Markdown 滚动区、底栏操作提示。这份内容不写入 Session Tree。
 
 ## Transcript

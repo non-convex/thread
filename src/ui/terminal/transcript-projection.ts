@@ -46,16 +46,24 @@ function projectTool(message: ToolMessage, fact?: ToolExecutionFact, call?: Tool
 }
 
 /** Tools stay at their call position, even when concurrent results finish in another order. */
-function messageBlocks(message: Message, entryId: string, tool: (id: string, call?: ToolCall) => LiveBlock[]): LiveBlock[] {
+function messageBlocks(
+  message: Message, entryId: string, tool: (id: string, call?: ToolCall) => LiveBlock[], finalResponse = false,
+): LiveBlock[] {
   if (message.role === "toolResult") return tool(message.toolCallId);
   if (message.role !== "assistant") return [];
+  const copyable = finalResponse && (message.stopReason === "stop" || message.stopReason === "length") &&
+    !message.content.some((block) => block.type === "toolCall");
+  const lastText = copyable ? message.content.findLastIndex((block) => block.type === "text" && block.text.trim()) : -1;
+  const replyCopyContent = copyable
+    ? message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n\n") : "";
   return message.content.flatMap((block, index): LiveBlock[] => {
     if (block.type === "toolCall") return tool(block.id, block);
     if (block.type === "thinking" && block.thinking.trim()) {
       return [{ id: `${entryId}:thinking:${index}`, kind: "thinking", content: block.thinking }];
     }
     if (block.type === "text" && block.text.trim()) {
-      return [{ id: `${entryId}:text:${index}`, kind: "assistant", content: block.text }];
+      return [{ id: `${entryId}:text:${index}`, kind: "assistant", content: block.text,
+        ...(index === lastText ? { replyCopyContent } : {}) }];
     }
     return [];
   });
@@ -63,6 +71,7 @@ function messageBlocks(message: Message, entryId: string, tool: (id: string, cal
 
 function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
   const { task } = input;
+  const finalAssistantId = task.trace.findLast((entry) => entry.kind === "message" && entry.message.role === "assistant")?.entryId;
   const facts = new Map(task.trace.filter((entry) => entry.kind === "tool_execution").map((entry) => [entry.fact.toolCallId, entry.fact]));
   const results = new Map(task.trace.flatMap((entry) => entry.kind !== "tool_execution" && entry.message.role === "toolResult"
     ? [[entry.message.toolCallId, entry.message] as const] : []));
@@ -74,10 +83,12 @@ function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
     return [projectTool(result, facts.get(id), call)];
   };
   return { summary: input.summary, trace: task.trace.flatMap((entry) => entry.kind === "tool_execution"
-    ? [] : messageBlocks(entry.message, entry.entryId, tool)) };
+    ? [] : messageBlocks(entry.message, entry.entryId, tool, entry.entryId === finalAssistantId)) };
 }
 
 export function projectTranscript(entries: readonly SessionEntry[], tasks: readonly AgentTaskHistoryProjection[] = []): TranscriptItem[] {
+  const finalAssistantIds = new Map(entries.flatMap((entry) => entry.type === "message" && entry.message.role === "assistant"
+    ? [[entry.turnId, entry.id] as const] : []));
   const facts = new Map(entries.filter((entry) => entry.type === "tool_execution").map((entry) => [entry.toolCallId, entry]));
   const results = new Map(entries.flatMap((entry) => entry.type === "message" && entry.message.role === "toolResult"
     ? [[entry.message.toolCallId, entry.message] as const] : []));
@@ -109,7 +120,7 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
     } else if (entry.message.role === "user") {
       output.push({ id: `${entry.turnId}:user`, kind: "user", content: userContentDisplay(entry.message.content) });
     } else {
-      output.push(...messageBlocks(entry.message, entry.id, tool));
+      output.push(...messageBlocks(entry.message, entry.id, tool, finalAssistantIds.get(entry.turnId) === entry.id));
     }
   }
   return output;

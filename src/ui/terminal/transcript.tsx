@@ -1,9 +1,11 @@
 import { MouseButton, type ScrollBoxRenderable } from "@opentui/core";
+import { useRenderer } from "@opentui/solid";
 import { createMemo, createSignal, Match, Show, Switch, type Accessor } from "solid-js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, italic, STATUS_ICONS } from "./theme.js";
 import { groupTranscriptTurns, projectLiveUser } from "./transcript-projection.js";
-import { normalizeMarkdownForTerminal, ThinkingView } from "./transcript-content.js";
+import { normalizeMarkdownForTerminal, ReplyCopyButton, ThinkingView } from "./transcript-content.js";
+import type { CopyText } from "./clipboard.js";
 import { ToolOutputView } from "./tool-output.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
@@ -58,6 +60,7 @@ function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewRes
 function CompactionInfo(props: {
   content: string; detail?: string | undefined; resources: ThreadViewResources; expansion: TranscriptExpansion;
 }) {
+  const renderer = useRenderer();
   const expanded = props.expansion.expanded;
   const expandable = () => Boolean(props.detail?.trim());
   const theme = props.resources.theme;
@@ -66,8 +69,11 @@ function CompactionInfo(props: {
       flexDirection="column"
       width="100%"
       marginBottom={1}
-      onMouseDown={(event) => {
-        if (event.button === MouseButton.LEFT && expandable()) props.expansion.toggle();
+      onMouseUp={(event) => {
+        if (event.button === MouseButton.LEFT && expandable() && !renderer.getSelection()?.getSelectedText()) {
+          event.stopPropagation();
+          props.expansion.toggle();
+        }
       }}
     >
       <box flexDirection="row" width="100%" height={1}>
@@ -99,7 +105,9 @@ type ExpansionStore = ReturnType<typeof createTranscriptExpansion>;
 
 function AgentTaskCardView(props: {
   card: Accessor<AgentTaskCard>; resources: ThreadViewResources; expansion: TranscriptExpansion; expansions: ExpansionStore;
+  copyText: CopyText;
 }) {
+  const renderer = useRenderer();
   const expanded = props.expansion.expanded;
   const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const summary = () => props.card().summary;
@@ -118,7 +126,10 @@ function AgentTaskCardView(props: {
       marginBottom={1}
     >
       <box flexDirection="row" width="100%" height={1} onMouseUp={(event) => {
-        if (event.button === MouseButton.LEFT) props.expansion.toggle();
+        if (event.button === MouseButton.LEFT && !renderer.getSelection()?.getSelectedText()) {
+          event.stopPropagation();
+          props.expansion.toggle();
+        }
       }}>
         <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
         <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.softText} attributes={bold}>
@@ -134,7 +145,7 @@ function AgentTaskCardView(props: {
             width="100%" flexShrink={0} stickyScroll={true} stickyStart="bottom" viewportCulling={true}
             verticalScrollbarOptions={{ visible: false }}>
             <TranscriptWindow items={props.card().trace} scroll={scroll}>
-              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} />}
+              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
             </TranscriptWindow>
           </scrollbox>
           <Show when={summary().error}>
@@ -179,6 +190,7 @@ function LiveThinkingView(props: {
 
 function TranscriptItemView(props: {
   block: Accessor<TranscriptItem>; resources: ThreadViewResources; expansions: ExpansionStore;
+  copyText: CopyText;
 }) {
   const block = props.block;
   const expansion = props.expansions(block().id);
@@ -196,6 +208,9 @@ function TranscriptItemView(props: {
           internalBlockMode="top-level"
           maxWidth={180}
         />
+        <Show when={!block().streaming && block().replyCopyContent}>
+          <ReplyCopyButton content={block().replyCopyContent!} resources={props.resources} copyText={props.copyText} />
+        </Show>
       </box>
     }>
       <Match when={block().kind === "thinking"}>
@@ -208,7 +223,8 @@ function TranscriptItemView(props: {
         <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
-        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} expansion={expansion} expansions={props.expansions} />
+        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} expansion={expansion}
+          expansions={props.expansions} copyText={props.copyText} />
       </Match>
     </Switch>
   );
@@ -225,6 +241,7 @@ export function TranscriptTurnsView(props: {
   items: readonly TranscriptItem[];
   liveTurn?: LiveTurn | undefined;
   resources: ThreadViewResources;
+  copyText: CopyText;
   scroll: Accessor<ScrollBoxRenderable | undefined>;
 }) {
   const expansions = createTranscriptExpansion();
@@ -263,7 +280,7 @@ export function TranscriptTurnsView(props: {
       </Match>
       <Match when={row().kind === "item"}>
         <box width="100%" flexDirection="column" paddingX={2} paddingBottom={row().last ? 1 : 0} flexShrink={0}>
-          <TranscriptItemView block={() => row().item!} resources={props.resources} expansions={expansions} />
+          <TranscriptItemView block={() => row().item!} resources={props.resources} expansions={expansions} copyText={props.copyText} />
         </box>
       </Match>
     </Switch>}
@@ -305,6 +322,7 @@ export function WelcomeView(props: { resources: ThreadViewResources }) {
         <text fg={theme.accentDim} height={1} wrapMode="none"> · Shift+Tab</text>
         <text fg={theme.muted} height={1} wrapMode="none"> change thinking level</text>
       </box>
+      <text fg={theme.muted} height={1} wrapMode="none">Drag to select · Ctrl+C / Alt+C copy · Esc clear selection</text>
     </box>
   );
 }

@@ -1,8 +1,11 @@
-import type { CliRenderer, HostClipboardService, KeyEvent, ScrollBoxRenderable, ThemeMode } from "@opentui/core";
-import { render, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid";
+import {
+  createClipboard, createRendererClipboardAdapter,
+  type ClipboardService, type CliRenderer, type HostClipboardService, type KeyEvent, type ScrollBoxRenderable, type ThemeMode,
+} from "@opentui/core";
+import { render, useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { isFloatingOverlay, moveSelection, overlaySelectionCount, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
-import { tryCreateHostClipboard } from "./clipboard.js";
+import { tryCreateHostClipboard, writeClipboardText, type CopyText } from "./clipboard.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import { createComposerDraft } from "./composer-state.js";
 import { isEnter } from "./ask-input.js";
@@ -16,9 +19,14 @@ export function ThreadRoot(props: {
   controller: ThreadTuiViewModel;
   resources: ThreadViewResources;
   hostClipboard?: HostClipboardService;
+  clipboard?: ClipboardService;
 }) {
+  const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
   const draft = createComposerDraft(props.controller, props.hostClipboard);
+  const copyAbort = new AbortController();
+  let copying = false;
+  onCleanup(() => copyAbort.abort());
   const [fullRevision, setFullRevision] = createSignal(0);
   const [liveRevision, setLiveRevision] = createSignal(0);
   const [suggestionIndex, setSuggestionIndex] = createSignal(0);
@@ -33,6 +41,25 @@ export function ThreadRoot(props: {
   const liveTurn = createMemo((): LiveTurn | undefined => { liveRevision(); return props.controller.state.liveTurn; });
   const screen = () => state().screen;
   const composerOpen = () => screen().type === "session" || isFloatingOverlay(screen());
+  const selectedText = () => renderer.getSelection()?.getSelectedText()
+    || (composerOpen() ? draft.editor?.getSelectedText() : "") || "";
+  const copyText: CopyText = async (text) => {
+    if (copying || !text || copyAbort.signal.aborted) return "cancelled";
+    copying = true;
+    try {
+      const result = await writeClipboardText(renderer, props.clipboard, text, copyAbort.signal);
+      if (result === "cancelled" || copyAbort.signal.aborted) return "cancelled";
+      props.controller.note(result === "written" ? "Copied to clipboard." : "Text sent to terminal clipboard.",
+        result === "written" ? "success" : "info");
+      return result;
+    } catch (error) {
+      if (copyAbort.signal.aborted) return "cancelled";
+      props.controller.note(`Copy failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return "failed";
+    } finally {
+      copying = false;
+    }
+  };
   const suggestions = createMemo(() => composerSuggestions({
     input: draft.text(), cursor: draft.cursor(), rootPath: props.controller.meta.rootPath,
     commands: props.controller.slashSuggestions, forcePaths: draft.forcePaths(),
@@ -73,6 +100,16 @@ export function ThreadRoot(props: {
   };
   usePaste((event) => { if (composerOpen()) draft.paste(event); });
   useKeyboard((key: KeyEvent) => {
+    // OpenTUI owns the mouse selection, so the terminal cannot copy it for us.
+    if (key.name === "c" && (key.ctrl || key.meta || key.option)) {
+      const text = selectedText();
+      if (text || !key.ctrl || key.shift) {
+        key.preventDefault();
+        props.controller.cancelIdleExitGesture();
+        if (text) void copyText(text);
+        return;
+      }
+    }
     if (key.ctrl && key.name === "c") {
       key.preventDefault();
       if (props.controller.interrupt()) return;
@@ -97,6 +134,12 @@ export function ThreadRoot(props: {
     if (key.shift && key.name === "tab" && screen().type === "session") {
       key.preventDefault();
       props.controller.cycleThinkingLevel();
+      return;
+    }
+    if (key.name === "escape" && selectedText()) {
+      key.preventDefault();
+      renderer.clearSelection();
+      if (composerOpen()) draft.editor?.clearSelection();
       return;
     }
     // Ask owns Escape and printable input: dismissing a question must not abort the turn.
@@ -153,7 +196,7 @@ export function ThreadRoot(props: {
     <Switch>
       <Match when={composerOpen() || screen().type === "ask"}>
         <SessionScreen controller={props.controller} state={state} transcript={transcript} liveTurn={liveTurn} meta={meta}
-          resources={props.resources} draft={draft} suggestions={suggestions} suggestionIndex={suggestionIndex}
+          resources={props.resources} copyText={copyText} draft={draft} suggestions={suggestions} suggestionIndex={suggestionIndex}
           overlaySelected={overlaySelected} overlayNavigated={overlayNavigated} composerHeight={composerHeight}
           terminalWidth={() => dimensions().width} setScroll={(value) => { sessionScroll = value; }} />
       </Match>
@@ -174,9 +217,11 @@ export async function mountThreadView(renderer: CliRenderer, controller: ThreadT
   const syntaxStyle = createThreadSyntaxStyle(theme);
   const resources: ThreadViewResources = { theme, syntaxStyle };
   const hostClipboard = tryCreateHostClipboard();
-  const disposeResources = async () => { await hostClipboard?.dispose().catch(() => undefined); syntaxStyle.destroy(); };
+  const clipboard = hostClipboard ? createClipboard({ host: hostClipboard, terminal: createRendererClipboardAdapter(renderer) }) : undefined;
+  const disposeResources = async () => { await clipboard?.dispose().catch(() => undefined); syntaxStyle.destroy(); };
   try {
-    await render(() => <ThreadRoot controller={controller} resources={resources} {...(hostClipboard ? { hostClipboard } : {})} />, renderer);
+    await render(() => <ThreadRoot controller={controller} resources={resources}
+      {...(hostClipboard ? { hostClipboard } : {})} {...(clipboard ? { clipboard } : {})} />, renderer);
     return { disposeResources };
   } catch (error) {
     await disposeResources();

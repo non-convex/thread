@@ -71,7 +71,7 @@ export function DocumentScreen(props: {
           internalBlockMode="top-level"
         />
       </scrollbox>
-      <ScreenFooter hint="↑/↓ scroll · esc back" state={props.state} resources={props.resources} />
+      <ScreenFooter hint="↑/↓ scroll · Ctrl+C / Alt+C copy selection · esc back" state={props.state} resources={props.resources} />
     </>
   );
 }

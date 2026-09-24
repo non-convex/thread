@@ -5,6 +5,7 @@ import type { LiveTurn, TranscriptItem, UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
 import type { ComposerDraft } from "./composer-state.js";
+import type { CopyText } from "./clipboard.js";
 import type { TerminalMeta, ThreadTuiViewModel } from "./view-model.js";
 import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
@@ -47,6 +48,7 @@ export function SessionScreen(props: {
   liveTurn: Accessor<LiveTurn | undefined>;
   meta: Accessor<TerminalMeta>;
   resources: ThreadViewResources;
+  copyText: CopyText;
   draft: ComposerDraft;
   suggestions: () => readonly ComposerSuggestion[];
   suggestionIndex: () => number;
@@ -101,7 +103,8 @@ export function SessionScreen(props: {
         stickyScroll={true} stickyStart="bottom" viewportCulling={true} scrollAcceleration={wheelScrollAcceleration}
         verticalScrollbarOptions={{ visible: false }} paddingTop={1}>
         <Show when={state().sessionId} keyed>
-          {() => <TranscriptTurnsView items={props.transcript()} liveTurn={props.liveTurn()} resources={props.resources} scroll={scroll} />}
+          {() => <TranscriptTurnsView items={props.transcript()} liveTurn={props.liveTurn()} resources={props.resources}
+            copyText={props.copyText} scroll={scroll} />}
         </Show>
       </scrollbox>
     </Show>

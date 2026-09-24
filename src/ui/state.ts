@@ -8,6 +8,8 @@ export interface TranscriptItem {
   id: string;
   kind: "user" | "assistant" | "thinking" | "tool" | "compaction" | "agent_task" | "interrupted";
   content: string;
+  /** Complete final response, attached only to its last text block after tool calls are known. */
+  replyCopyContent?: string;
   tool?: TranscriptTool;
   streaming?: boolean;
   startedAt?: number;

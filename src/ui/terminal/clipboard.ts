@@ -1,7 +1,10 @@
 import {
   createHostClipboard,
+  createRendererClipboardAdapter,
   type ClipboardReadResult,
+  type ClipboardService,
   type HostClipboardService,
+  type RendererClipboardBoundary,
 } from "@opentui/core";
 import {
   composerImageFromBytes,
@@ -23,6 +26,8 @@ export type HostClipboardContent =
   | { type: "image"; image: ComposerImage }
   | { type: "text"; text: string };
 
+export type CopyText = (text: string) => Promise<"written" | "attempted" | "cancelled" | "failed">;
+
 export function tryCreateHostClipboard(): HostClipboardService | undefined {
   try {
     return createHostClipboard({
@@ -33,6 +38,24 @@ export function tryCreateHostClipboard(): HostClipboardService | undefined {
   } catch {
     return undefined;
   }
+}
+
+export async function writeClipboardText(
+  renderer: RendererClipboardBoundary,
+  clipboard: ClipboardService | undefined,
+  text: string,
+  signal: AbortSignal,
+): Promise<"written" | "attempted" | "cancelled"> {
+  if (signal.aborted) return "cancelled";
+  const result = clipboard
+    ? await clipboard.writeText(text, { destination: "best-available", signal })
+    : { host: { status: "not-attempted" as const }, terminal: createRendererClipboardAdapter(renderer).writeText(text, "clipboard") };
+  if (signal.aborted || result.host.status === "cancelled") return "cancelled";
+  if (result.host.status === "written") return "written";
+  if (result.terminal.status === "attempted") return "attempted";
+  if (result.host.status === "failed") throw result.host.error;
+  if (result.host.status === "timed-out") throw new Error("Writing to the clipboard timed out");
+  throw new Error("Clipboard is unavailable. Use your terminal's native text selection to copy.");
 }
 
 export async function readHostClipboard(host: HostClipboardService): Promise<HostClipboardContent | undefined> {
