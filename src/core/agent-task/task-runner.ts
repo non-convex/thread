@@ -11,6 +11,8 @@ import type { WorkerLimits } from "./profile.js";
 import { taskSpecMessage } from "./prompt.js";
 import type { AgentTaskRepository } from "./repository.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
+import { ToolRegistry } from "../tools/types.js";
+import { fileEditingPrompt } from "../tools/file-editing-prompt.js";
 
 function emptyUsage(): Usage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -51,6 +53,17 @@ export class WorkerTaskRunner {
     ui?: ExecutionEventSink,
   ): Promise<void> {
     const task = this.repository.projection.require(taskId);
+    const tools = new ToolRegistry();
+    for (const name of task.spec.tools) {
+      const tool = profile.tools.get(name);
+      if (!tool) throw new Error(`Worker tool is unavailable: ${name}`);
+      tools.register(tool);
+    }
+    const systemPrompt = [
+      profile.systemPrompt,
+      task.spec.tools.some((name) => name === "write" || name === "edit" || name === "bash")
+        ? fileEditingPrompt(this.fileHistory?.captureEnabled ?? false) : "",
+    ].filter(Boolean).join("\n\n");
     const revision = task.runs.length;
     const startedAt = Date.now();
     const run: AgentTaskRun = { revision, startedAt };
@@ -62,7 +75,7 @@ export class WorkerTaskRunner {
     const journal = new AgentTaskJournal(this.repository, taskId, this.executionOptions.sessionIdForTurn?.(task.parentTurnId));
     const taskUi = executionEventSink(journal.identity, ui);
     if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
-    const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
+    const toolRunner = new ToolCallExecutor(this.rootPath, tools, new ExtensionEvents(), {
       acceptsImages: profile.model.acceptsImages === true,
       protectedWritePaths: this.executionOptions.protectedWritePaths ?? [],
       ...(this.fileHistory ? { fileHistory: () => this.fileHistory!.forTurn(task.parentTurnId) } : {}),
@@ -79,9 +92,9 @@ export class WorkerTaskRunner {
       for (let step = 1; step <= limits.maxSteps; step++) {
         signal.throwIfAborted();
         const context: Context = {
-          systemPrompt: profile.systemPrompt,
+          systemPrompt,
           messages: journal.messages,
-          tools: profile.tools.modelDefinitions(),
+          tools: tools.modelDefinitions(),
         };
         const result = await stepRunner.run(context, journal, {
           signal,

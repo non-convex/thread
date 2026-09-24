@@ -91,7 +91,7 @@ export class ThreadRuntime {
     this.modelSelection = new ModelSelection(this.tree.tree.id, options.cacheRetention,
       options.thinkingLevel ?? "medium", (state) => this.remember({ ...this.state, ...state }));
     const worker = options.worker?.enabled && options.worker.model
-      ? this.bindProfile(createWorkerProfile(options.worker.model, this.workerSettings, this.fileCheckpoints)) : undefined;
+      ? this.bindProfile(createWorkerProfile(options.worker.model, this.workerSettings)) : undefined;
     const dreamer = options.dreamer?.enabled && options.dreamer.model
       ? this.bindProfile(createDreamerProfile(options.dreamer.model, options.dreamer.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL)) : undefined;
     if (dreamer && !this.memory) throw new Error("Dreamer requires globalMemoryPath");
@@ -359,7 +359,7 @@ export class ThreadRuntime {
       if (!model) throw new Error("An enabled agent requires a model");
       if (id === DREAMER_PROFILE_ID && !this.dreamer) throw new Error("Dreamer requires globalMemoryPath");
       const profile = this.bindProfile(id === WORKER_PROFILE_ID
-        ? createWorkerProfile(model, this.workerSettings, this.fileCheckpoints)
+        ? createWorkerProfile(model, this.workerSettings)
         : createDreamerProfile(model, this.options.dreamer?.thinkingLevel ?? DEFAULT_DREAMER_THINKING_LEVEL));
       const old = this.profiles.get(id);
       this.profiles.set(profile);

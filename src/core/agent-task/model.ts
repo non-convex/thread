@@ -1,5 +1,6 @@
 import type { Message, Usage } from "@earendil-works/pi-ai";
 import type { ToolExecutionFact } from "../agent/execution-journal.js";
+import type { BuiltinToolName } from "../tools/builtins.js";
 import type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
 export type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
 
@@ -16,6 +17,9 @@ export interface WorkerTaskSpec {
   objective: string;
   guidance: string[];
   acceptanceCriteria: string[];
+  /** Exact built-in tools available to this task, including revisions. May be empty. */
+  tools: BuiltinToolName[];
+  /** Empty for tasks that must not modify files; required when write or edit is assigned. */
   writeScope: AgentTaskWriteScope[];
 }
 

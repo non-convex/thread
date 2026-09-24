@@ -1,4 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtins.js";
 import { noResources, singletonResource } from "../tools/execution.js";
 import type { AgentTool, ToolContext, ToolResult } from "../tools/types.js";
 import type { WorkerTaskSpec } from "./model.js";
@@ -24,16 +25,20 @@ const scopeSchema = Type.Object({
 
 const specSchema = Type.Object({
   title: Type.String(),
-  objective: Type.String(),
-  guidance: Type.Array(Type.String(), { minItems: 1, description: "Known file locations, agreed interfaces and design decisions, current user constraints, and the remaining work. The worker cannot see the main conversation." }),
-  acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }),
-  writeScope: Type.Array(scopeSchema, { minItems: 1 }),
+  objective: Type.String({ description: "The concrete task to implement, investigate, search, review, or otherwise complete." }),
+  guidance: Type.Array(Type.String(), { minItems: 1, description: "Relevant background, known files or sources, agreed interfaces and decisions, current user constraints, and the expected result. The worker cannot see the main conversation." }),
+  acceptanceCriteria: Type.Array(Type.String(), { minItems: 1, description: "Conditions for a satisfactory result. For investigations, specify what must be answered and what evidence is sufficient." }),
+  tools: Type.Array(Type.Union(BUILTIN_TOOL_NAMES.map((name) => Type.Literal(name))), {
+    uniqueItems: true,
+    description: "Built-in tools available to this task and its revisions. Names must be unique; [] gives no tools. Bash can modify files and is not constrained by writeScope.",
+  }),
+  writeScope: Type.Array(scopeSchema, { description: "Allowed file changes. Use [] when no file changes are intended; assigning write or edit requires a non-empty scope. Enforced for built-in file writes, not arbitrary bash commands." }),
 });
 
 export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): AgentTool[] {
   const delegate: AgentTool<{ tasks: WorkerTaskSpec[] }> = {
     name: "delegate_tasks",
-    description: "Delegate one or two independent implementation tasks with non-overlapping write scopes. Workers edit the current project workspace directly, so their changes are immediately visible.",
+    description: "Delegate one or two self-contained tasks with individually selected tools. Workers share the current project workspace; any file changes are immediately visible and declared write scopes must not overlap.",
     parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 2 }) }),
 
     execution: { effect: "process", mode: "sequential", resources: () => noResources() },
@@ -45,7 +50,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
           signal: context.signal,
           ...(context.onExecutionEvent ? { ui: context.onExecutionEvent } : {}),
         });
-        return ok({ tasks: summaries, note: "Workers are editing the shared workspace. Do not edit their write scopes while they run; inspect current files after they complete." });
+        return ok({ tasks: summaries, note: "Workers are running in the shared workspace with their assigned tools. Do not duplicate their work or edit their write scopes while they run; review their findings and any file changes after they complete." });
       } catch (error) { return fail(error); }
     },
   };
@@ -69,7 +74,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
 
   const revise: AgentTool<{ taskId: string; feedback: string }> = {
     name: "request_revision",
-    description: "Continue a completed worker in the same shared workspace with concrete review feedback. The task specification and write scope remain fixed.",
+    description: "Continue a completed worker in the same shared workspace with concrete feedback. The task specification, assigned tools, and write scope remain fixed.",
     parameters: Type.Object({ taskId: Type.String(), feedback: Type.String() }),
 
     execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },

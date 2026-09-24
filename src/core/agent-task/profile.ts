@@ -1,9 +1,9 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../agent/model-client.js";
 import type { AgentProfile } from "../agent/profile.js";
-import { registerWorkerTools } from "../tools/builtins.js";
+import { builtinTool, BUILTIN_TOOL_NAMES } from "../tools/builtins.js";
 import { ToolRegistry } from "../tools/types.js";
-import { workerSystemPrompt } from "./prompt.js";
+import { WORKER_SYSTEM_PROMPT } from "./prompt.js";
 
 export const WORKER_PROFILE_ID = "worker";
 
@@ -42,15 +42,14 @@ function resolveWorkerThinkingLevel(
 export function createWorkerProfile(
   model: ModelClient,
   settings: WorkerProfileSettings = DEFAULT_WORKER_SETTINGS,
-  fileCheckpoints = true,
 ): AgentProfile {
   const tools = new ToolRegistry();
-  registerWorkerTools(tools);
+  for (const name of BUILTIN_TOOL_NAMES) tools.register(builtinTool(name));
   return {
     id: WORKER_PROFILE_ID,
     model,
     thinkingLevel: resolveWorkerThinkingLevel(model, settings.thinkingLevel),
     tools,
-    systemPrompt: workerSystemPrompt(fileCheckpoints),
+    systemPrompt: WORKER_SYSTEM_PROMPT,
   };
 }

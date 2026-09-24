@@ -16,6 +16,7 @@ import type { AgentTaskRepository } from "./repository.js";
 import { WorkerTaskRunner } from "./task-runner.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
 import { validateExecutionLimits } from "../runtime/limits.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtins.js";
 
 export interface DelegateTaskContext {
   parentTurnId: string;
@@ -235,8 +236,16 @@ export class AgentTaskOrchestrator {
     const title = spec.title?.trim();
     const objective = spec.objective?.trim();
     if (!title || !objective) throw new Error(`${label} requires a title and objective`);
-    if (!Array.isArray(spec.guidance) || !Array.isArray(spec.acceptanceCriteria) || !Array.isArray(spec.writeScope) || spec.writeScope.length === 0) {
-      throw new Error(`${label} requires guidance, acceptanceCriteria and a non-empty writeScope`);
+    if (!Array.isArray(spec.guidance) || !Array.isArray(spec.acceptanceCriteria) || !Array.isArray(spec.tools) || !Array.isArray(spec.writeScope)) {
+      throw new Error(`${label} requires guidance, acceptanceCriteria, tools and writeScope arrays`);
+    }
+    const tools = [...spec.tools];
+    for (const name of tools) {
+      if (!BUILTIN_TOOL_NAMES.includes(name)) throw new Error(`${label} has an unknown built-in tool: ${name}`);
+    }
+    if (new Set(tools).size !== tools.length) throw new Error(`${label}.tools must not contain duplicates`);
+    if ((tools.includes("write") || tools.includes("edit")) && spec.writeScope.length === 0) {
+      throw new Error(`${label} requires a non-empty writeScope when write or edit is assigned`);
     }
     const writeScope = spec.writeScope.map((scope) => {
       const input = scope.path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -250,7 +259,7 @@ export class AgentTaskOrchestrator {
     if (guidance.length === 0 || acceptanceCriteria.length === 0) {
       throw new Error(`${label} requires at least one non-empty guidance item and acceptance criterion`);
     }
-    return { title, objective, guidance, acceptanceCriteria, writeScope };
+    return { title, objective, guidance, acceptanceCriteria, tools, writeScope };
   }
 }
 

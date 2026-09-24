@@ -8,7 +8,7 @@ import { grepTool } from "./grep.js";
 import { listTool } from "./list.js";
 import { readTool } from "./read.js";
 import { viewImageTool } from "./view-image.js";
-import type { ToolRegistry, AgentTool } from "./types.js";
+import type { AgentTool } from "./types.js";
 import { ok, fail } from "./results.js";
 import { webFetchTool, webSearchTool } from "./web.js";
 
@@ -54,12 +54,9 @@ const BUILTIN_TOOLS = {
 } as const satisfies Record<string, AgentTool>;
 
 export type BuiltinToolName = keyof typeof BUILTIN_TOOLS;
+export const BUILTIN_TOOL_NAMES: readonly BuiltinToolName[] = Object.keys(BUILTIN_TOOLS) as BuiltinToolName[];
 
 export function builtinTool(name: BuiltinToolName): AgentTool {
   if (!Object.hasOwn(BUILTIN_TOOLS, name)) throw new Error(`Unknown builtin tool: ${name}`);
   return BUILTIN_TOOLS[name];
-}
-
-export function registerWorkerTools(registry: ToolRegistry): void {
-  for (const tool of [readTool, viewImageTool, listTool, grepTool, writeTool, editTool, bashTool]) registry.register(tool);
 }

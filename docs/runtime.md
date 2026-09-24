@@ -115,7 +115,7 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 自定义工具实现公共 `AgentTool` 接口，提供名称、描述、参数 schema、执行策略和 `execute()`；可在创建时传入，或空闲时通过 `runtime.registerTool(tool)` 添加。内置工具和自定义工具使用同一参数校验、调度、宿主策略、取消信号和执行记录。可运行的自定义工具见离线示例中的 `add`。
 
-`view_image({ path, detail? })` 支持 PNG、JPEG、WebP、GIF、BMP；按文件内容识别格式并解码，动图只使用首帧。文件路径可以相对项目，也可以是项目外的绝对路径，沿用 `read` 的资源声明、宿主授权和路径复查。编码与 TUI 粘贴图片共享 `core/images/prepare.ts`，需要支持 `Bun.Image` 的运行时。CLI 和 Worker 默认注册此工具；嵌入宿主通过 `tools: ["view_image"]` 显式启用。当前模型必须声明 `acceptsImages: true`（自定义模型配置为 `input: ["text", "image"]`），否则工具明确返回错误，不声称已经看过图片。`original` 控制本地预处理，服务商仍可能按自身规则处理图片。
+`view_image({ path, detail? })` 支持 PNG、JPEG、WebP、GIF、BMP；按文件内容识别格式并解码，动图只使用首帧。文件路径可以相对项目，也可以是项目外的绝对路径，沿用 `read` 的资源声明、宿主授权和路径复查。编码与 TUI 粘贴图片共享 `core/images/prepare.ts`，需要支持 `Bun.Image` 的运行时。CLI 默认注册此工具；嵌入宿主通过 `tools: ["view_image"]` 显式启用，Worker 则仅在任务的 `tools` 中指定时启用。当前模型必须声明 `acceptsImages: true`（自定义模型配置为 `input: ["text", "image"]`），否则工具明确返回错误，不声称已经看过图片。`original` 控制本地预处理，服务商仍可能按自身规则处理图片。
 
 `ToolResult.content` 是文本说明；可选的 `images: ImageContent[]` 保存 `{ type: "image", mimeType, data }`，其中 `data` 是 base64 图片字节。执行器把两者合成模型可见的工具结果，像素随消息持久化并参与后续请求，`details.raw` 不重复保存图片字节。`ToolContext.acceptsImages` 表示当前执行模型的能力。`tool_result` 扩展可分别改写 `modelContent` 和 `modelImages`，设 `modelImages: []` 可移除附件。普通工具事件与终端只展示文本、尺寸和格式，不展示 base64；切换纯文本模型时，历史图片在请求中替换为提示，持久化图片保留。
 
@@ -123,7 +123,7 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 把游标中的搜索条件和分页位置展开为有效参数，宿主无需解码私有游标。文件访问前仍检查实际路径是否落在批准的资源范围，写入排队后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
 
-裸 `ThreadRuntime` 的 `write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 仍受项目内的任务 `writeScope` 限制。
+裸 `ThreadRuntime` 的 `write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 的内置 `write`、`edit` 仍受项目内的任务 `writeScope` 限制。
 
 CLI 和 `ThreadApp` 默认把实际的 Thread 数据目录加入主 agent 的可写目录：设置了 `THREAD_HOME` 时使用该目录，否则使用 `~/.thread`。可以用内置 `edit`、`write` 修改 `config.json`、Skill 和全局记忆，但 `projects/`、`auth.json`、`auth.json.lock` 受保护，拒绝内置文件写入。系统提示词同时给出绝对路径，避免模型把它误当成项目内的 `.thread`。独立于该目录配置的外部文件仍需另外授权；裸 `ThreadRuntime` 不自动开放 Thread 数据目录，Worker 与 Dreamer 的原有权限限制继续生效。
 
@@ -145,7 +145,11 @@ CLI 和 `ThreadApp` 自动把配置的 Skill 扫描目录加入可写目录，�
 
 MCP 属于未来的核心能力，将通过同一工具注册、策略、执行与取消机制接入。当前尚未实现 MCP 客户端或配置项。
 
-通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。执行边界见 [Worker 架构](./worker-architecture.md)。
+通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。主 agent 在委派时交代实现、调查、搜索或审查任务，无需选择固定角色。
+
+每项任务必填 `tools` 和 `writeScope`，两者都可为 `[]`。`tools` 只能选择 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`，不包含主 agent 的其他扩展工具；未知或重复名称会被拒绝。指定 `write` 或 `edit` 时，写入范围必须非空。每任务独立的工具注册表同时限定模型可见定义和实际执行，不会默认启用所有候选工具；返工沿用原任务的工具和范围。宿主策略与取消处理继续适用于这些调用。
+
+例如，代码调查可用 `tools: ["list", "grep", "read"]`，查阅网页可用 `tools: ["websearch", "webfetch"]`，均使用 `writeScope: []` 并要求返回证据。`bash` 可以修改文件，不受写入范围检查约束；无需执行命令的调查任务不应分配它。任务示例与执行边界见 [Worker 架构](./worker-architecture.md)。
 
 ## 内置文件编辑
 
@@ -165,7 +169,7 @@ MCP 属于未来的核心能力，将通过同一工具注册、策略、执行�
 
 匹配只容忍 LF、CRLF、CR 的表示差异，不忽略缩进、空白或 Unicode 字符。匹配区间外保留原始内容，包括 BOM、混合换行和末尾换行状态。替换文本使用匹配区间的首个换行风格；区间不含换行时采用文件首个换行风格，无换行文件采用 LF。无效 UTF-8 或含 NUL 的文件拒绝编辑。
 
-主 agent 和 worker 使用相同工具与共享写入入口，继续执行路径检查、写入范围检查、同路径协调、取消处理和可选 checkpoint。
+主 agent 和 worker 的内置文件工具使用共享写入入口，继续执行路径检查、写入范围检查、同路径协调、取消处理和可选 checkpoint；worker 仅可使用该任务选中的工具。
 
 ### 覆盖前的文件版本检查
 
@@ -183,7 +187,7 @@ MCP 属于未来的核心能力，将通过同一工具注册、策略、执行�
 
 `fileCheckpoints` 默认 `false`。关闭时，内置 `write` 和 `edit` 仍可工作，但不保存文件备份或追加 `file_edit` 记录；路径检查、取消处理、主 agent 与 worker 的同路径写入协调仍然生效。Session Tree 的会话和工具执行记录继续持久化，因此关闭文件 checkpoint 不等于使用内存会话。
 
-worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeScope`，拒绝修改范围外的实际路径；检查发生在文件备份和修改之前，进入同路径写入队列后再次确认目标。文件范围只允许该文件，目录范围允许其后代，符号链接不能扩大范围；返工沿用原任务范围。宿主策略放行不会跳过这项检查。它不限制任意 bash 命令或自定义工具的文件副作用，也不是操作系统沙箱。详见 [Worker 架构](./worker-architecture.md)。
+worker 的内置 `write` 和 `edit` 在共享写入入口校验任务的 `writeScope`，拒绝修改范围外的实际路径；检查发生在文件备份和修改之前，进入同路径写入队列后再次确认目标。文件范围只允许该文件，目录范围允许其后代，符号链接不能扩大范围；返工沿用原任务范围。宿主策略放行不会跳过这项检查。无写入任务使用 `writeScope: []`，并要求 worker 不修改文件；通常不授予 `write`、`edit` 或不必要的 `bash`。范围只约束内置文件写入；`bash` 不只读，即使范围为空也可能写文件，不受此项路径检查保护，更不是操作系统沙箱。详见 [Worker 架构](./worker-architecture.md)。
 
 开启 `fileCheckpoints: true` 后，内置文件编辑工具会保存每轮首次修改前的文件内容。worker 的记录归属于主 agent 的父 turn；bash、脚本和自定义工具的任意文件修改不会因此自动获得 checkpoint。
 
