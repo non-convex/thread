@@ -188,7 +188,7 @@ Stable information that applies across projects lives in one Markdown file, `${T
 
 | Agent | Enable with | Role |
 | --- | --- | --- |
-| `worker` | `/agent worker model <provider>/<model>` | Complete one or two independent leaf tasks with non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
+| `worker` | `/agent worker model <provider>/<model>` | Handle up to three independent tasks per delegation, with six workers running concurrently by default and non-overlapping write scopes in the shared workspace. The main agent reviews files and tests and can request revisions. |
 | `dreamer` | `/agent dreamer model <provider>/<model>` | Review interactions and execution traces in the background for well-supported implicit user patterns and lessons useful across projects, maintaining global memory. |
 
 Workers edit the current workspace directly. `writeScope` coordinates task ownership and is enforced by the built-in `write` and `edit` tools; it does not sandbox bash or arbitrary custom tools. Tasks belong to their parent turn. Finishing or interrupting the turn, closing Thread, or restarting cancels unfinished tasks while preserving files already written. Use `/rewind` to undo recorded built-in file edits. See [the worker architecture](./docs/worker-architecture.md).

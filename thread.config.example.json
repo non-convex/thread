@@ -20,7 +20,7 @@
         "id": "claude-haiku-4-5"
       },
       "thinkingLevel": "xhigh",
-      "maxConcurrent": 2,
+      "maxConcurrent": 6,
       "maxSteps": 100,
       "maxRuntimeMinutes": 60,
       "maxRevisions": 2

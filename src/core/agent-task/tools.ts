@@ -38,8 +38,8 @@ const specSchema = Type.Object({
 export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): AgentTool[] {
   const delegate: AgentTool<{ tasks: WorkerTaskSpec[] }> = {
     name: "delegate_tasks",
-    description: "Delegate one or two self-contained tasks with individually selected tools. Workers share the current project workspace; any file changes are immediately visible and declared write scopes must not overlap.",
-    parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 2 }) }),
+    description: "Delegate one to three self-contained tasks with individually selected tools. Workers share the current project workspace; any file changes are immediately visible and declared write scopes must not overlap.",
+    parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 3 }) }),
 
     execution: { effect: "process", mode: "sequential", resources: () => noResources() },
     async execute(args, context) {

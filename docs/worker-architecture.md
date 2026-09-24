@@ -4,7 +4,7 @@ Thread 的 worker 在主回合内临时运行，按主 agent 的委派承担实�
 
 ## 设计目标
 
-主 agent 可将一至两个边界明确的任务交给 worker。为了节省时间而委派时，应先确定自己或其他 worker 能同时推进什么，并计入交代任务和审查结果的成本。小查询、小改动和能快速解决的当前阻塞事项通常自己处理，紧密耦合的工作也留在主线程。另一种用途是隔离大量调查信息：worker 阅读和搜索后返回结论，这时即使需要等待，也可能值得委派。
+主 agent 每次可将一至三个边界明确的任务交给 worker，默认最多同时运行六个 worker。为了节省时间而委派时，应先确定自己或其他 worker 能同时推进什么，并计入交代任务和审查结果的成本。小查询、小改动和能快速解决的当前阻塞事项通常自己处理，紧密耦合的工作也留在主线程。另一种用途是隔离大量调查信息：worker 阅读和搜索后返回结论，这时即使需要等待，也可能值得委派。
 
 主 agent 仍负责总体设计、结果检查和用户沟通。实现任务要先确定所依赖的共享接口，再把任务内部的调查和实现选择留给 worker。调查任务则只需明确问题、范围和需要的证据，不要求主 agent 先完成调查或确定公共接口。
 
@@ -22,13 +22,13 @@ Thread 的 worker 在主回合内临时运行，按主 agent 的委派承担实�
 
 ## 主 agent 的四个任务工具
 
-CLI/TUI 使用 `/agent worker model <provider>/<model>` 选择模型并启用，`/agent worker on|off` 切换开关；配置文件使用 `agents.worker`。嵌入配置见 [runtime 指南](./runtime.md)。
+CLI/TUI 使用 `/agent worker model <provider>/<model>` 选择模型并启用，`/agent worker on|off` 切换开关；配置文件使用 `agents.worker`。`agents.worker.maxConcurrent` 控制总并发数，默认 6；单次委派最多 3 个任务。嵌入配置见 [runtime 指南](./runtime.md)。
 
 Worker 开启后，Thread 只注册四个任务工具：
 
 | 工具 | 用途 |
 | --- | --- |
-| `delegate_tasks` | 启动一至两个任务；需要写入的任务之间不得有重叠的 `writeScope` |
+| `delegate_tasks` | 每次启动一至三个任务，受总并发上限约束；需要写入的任务之间不得有重叠的 `writeScope` |
 | `wait_tasks` | 等待第一个或全部任务结束，或达到 `timeoutMs`（默认 60000 毫秒）；返回 `{ tasks, timedOut }`，包含状态、用量和最终回复。等待超时不取消 worker，再次等待时只传仍在运行的任务 ID |
 | `request_revision` | 给已完成任务追加具体反馈，在同一目录和同一 worker 上下文继续任务；保留原任务的 `tools` 和 `writeScope` |
 | `cancel_task` | 中断运行中的任务；已经写入的文件不会回滚 |

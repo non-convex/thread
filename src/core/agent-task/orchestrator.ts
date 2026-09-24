@@ -66,7 +66,7 @@ export class AgentTaskOrchestrator {
     if (this.closing) throw new Error("Agent Task orchestrator is closing");
     const profile = this.profiles.require(WORKER_PROFILE_ID);
     const normalized = specs.map((spec, index) => this.validateSpec(spec, index));
-    if (normalized.length < 1 || normalized.length > 2) throw new Error("delegate_tasks accepts one or two tasks");
+    if (normalized.length < 1 || normalized.length > 3) throw new Error("delegate_tasks accepts one to three tasks");
     for (let left = 0; left < normalized.length; left++) {
       for (let right = left + 1; right < normalized.length; right++) {
         if (scopesOverlap(normalized[left]!.writeScope, normalized[right]!.writeScope)) {

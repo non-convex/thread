@@ -181,7 +181,7 @@ function parseWorker(value: unknown, label: string): WorkerConfig {
       id: string(selected.id, `${label}.model.id`),
     },
     thinkingLevel: input.thinkingLevel === undefined ? "xhigh" : thinkingLevel(input.thinkingLevel, `${label}.thinkingLevel`),
-    maxConcurrent: input.maxConcurrent === undefined ? 2 : positiveInteger(input.maxConcurrent, `${label}.maxConcurrent`),
+    maxConcurrent: input.maxConcurrent === undefined ? 6 : positiveInteger(input.maxConcurrent, `${label}.maxConcurrent`),
     maxSteps: input.maxSteps === undefined ? 100 : positiveInteger(input.maxSteps, `${label}.maxSteps`),
     maxRuntimeMinutes: input.maxRuntimeMinutes === undefined ? 60 : positiveInteger(input.maxRuntimeMinutes, `${label}.maxRuntimeMinutes`),
     maxRevisions: input.maxRevisions === undefined ? 2 : positiveInteger(input.maxRevisions, `${label}.maxRevisions`),
