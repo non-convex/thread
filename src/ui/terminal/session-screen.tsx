@@ -66,10 +66,11 @@ export function SessionScreen(props: {
   // Status + bordered composer + optional attachment row + footer.
   const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments());
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
-  const contentWidth = () => Math.max(20, props.terminalWidth() - 4);
+  // Floating panels share the composer's outer edges.
+  const contentWidth = () => Math.max(20, props.terminalWidth() - 2);
   const panelHeight = () => overlayHeight(state().screen);
   const floatingHeight = () => panelHeight() || (state().screen.type === "session" && props.suggestions().length
-    ? props.suggestions().length + 2 : 0);
+    ? props.suggestions().length + 1 : 0);
   const syncCursor = () => {
     draft.setCursor(draft.editor?.cursorOffset ?? 0);
     draft.setForcePaths(false);
@@ -110,7 +111,6 @@ export function SessionScreen(props: {
     </Show>
     <Show when={floatingHeight()}>
       <box position="absolute" right={1} bottom={controlsHeight()} left={1} height={floatingHeight()} zIndex={20}
-        border={true} borderStyle="rounded" borderColor={state().screen.type === "ask" ? theme.spark : theme.borderStrong}
         backgroundColor={theme.surface}>
         <Show when={panelHeight()} fallback={
           <ComposerSuggestions suggestions={props.suggestions()} selected={props.suggestionIndex()} resources={props.resources} contentWidth={contentWidth} />
@@ -136,7 +136,7 @@ export function SessionScreen(props: {
             minHeight={COMPOSER_MIN_LINES} maxHeight={COMPOSER_MAX_LINES} wrapMode="word"
             placeholder="ask thread, / commands, @ files, Ctrl+V paste…" placeholderColor={theme.muted}
             textColor={theme.text} focusedTextColor={theme.text} backgroundColor={theme.surfaceHigh}
-            focusedBackgroundColor={theme.surfaceHigh} cursorColor={theme.spark} selectionBg={theme.selection}
+            focusedBackgroundColor={theme.surfaceHigh} cursorColor={theme.accent} selectionBg={theme.selection}
             selectionFg={theme.selectionText} keyBindings={COMPOSER_KEY_BINDINGS}
             onContentChange={() => { draft.setText(draft.editor?.plainText ?? ""); syncCursor(); }}
             onCursorChange={syncCursor} onSubmit={submit} />

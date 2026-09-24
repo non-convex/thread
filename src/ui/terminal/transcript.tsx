@@ -2,7 +2,7 @@ import { MouseButton, type ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createMemo, createSignal, Match, Show, Switch, type Accessor } from "solid-js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem } from "../state.js";
-import { bold, dim, italic, STATUS_ICONS } from "./theme.js";
+import { bold, dim, italic, STATUS_ICONS, TRANSCRIPT_MARKS } from "./theme.js";
 import { groupTranscriptTurns, projectLiveUser } from "./transcript-projection.js";
 import { normalizeMarkdownForTerminal, ReplyCopyButton, ThinkingView } from "./transcript-content.js";
 import type { CopyText } from "./clipboard.js";
@@ -39,19 +39,12 @@ function MarkdownReply(props: {
 
 function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
+  // A full-width band: the only filled surface in the transcript, easy to find while scrolling.
   return (
-    <box width="100%" flexDirection="row" justifyContent="flex-start" marginBottom={1} paddingLeft={1}>
-      <box
-        flexDirection="column"
-        flexShrink={1}
-        maxWidth="78%"
-        border={true}
-        borderStyle="rounded"
-        borderColor={theme.border}
-        paddingX={1}
-      >
-        <text height={1} wrapMode="none" fg={theme.muted} attributes={dim}>you</text>
-        <text fg={theme.text} wrapMode="word">{props.item.content}</text>
+    <box width="100%" flexDirection="row" marginBottom={1} paddingX={1} backgroundColor={theme.surface}>
+      <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.accentDim} attributes={bold}>{TRANSCRIPT_MARKS.user}</text>
+      <box flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}>
+        <text width="100%" fg={theme.text} wrapMode="word">{props.item.content}</text>
       </box>
     </box>
   );
@@ -77,7 +70,7 @@ function CompactionInfo(props: {
       }}
     >
       <box flexDirection="row" width="100%" height={1}>
-        <text width={2} height={1} wrapMode="none" fg={theme.spark}>◇</text>
+        <text width={2} height={1} wrapMode="none" fg={theme.faint}>{TRANSCRIPT_MARKS.note}</text>
         <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={theme.muted} attributes={dim}>
           {props.content}
         </text>
@@ -114,15 +107,12 @@ function AgentTaskCardView(props: {
   const elapsed = () => `${(summary().elapsedMs / 1000).toFixed(1)}s`;
   const usage = () => summary().usage?.totalTokens ?? 0;
   const status = () => taskStatus(summary(), props.resources.theme);
+  const theme = props.resources.theme;
   return (
     <box
       id={`task-view:${summary().taskId}`}
       flexDirection="column"
       width="100%"
-      border={true}
-      borderStyle="rounded"
-      borderColor={status().color}
-      paddingX={1}
       marginBottom={1}
     >
       <box flexDirection="row" width="100%" height={1} onMouseUp={(event) => {
@@ -131,26 +121,37 @@ function AgentTaskCardView(props: {
           props.expansion.toggle();
         }
       }}>
-        <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
-        <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.softText} attributes={bold}>
+        <Show when={summary().status === "running"} fallback={
+          <text width={2} height={1} wrapMode="none" fg={status().color}>{status().icon} </text>
+        }>
+          <SpinnerText fg={theme.spark} />
+          <text width={1} height={1}> </text>
+        </Show>
+        <text flexShrink={1} minWidth={0} height={1} wrapMode="none" truncate={true} fg={theme.text} attributes={bold}>
           {summary().title}
         </text>
-        <text height={1} wrapMode="none" fg={props.resources.theme.muted}>
-          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()} {expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
+        <text flexGrow={1} flexShrink={2} minWidth={0} marginLeft={2} height={1} wrapMode="none" truncate={true} fg={theme.muted}>
+          {summary().status} · {summary().providerId}/{summary().modelId} · r{summary().revision} · {elapsed()} · ctx {summary().contextTokens} · usage {usage()}
+        </text>
+        <text marginLeft={1} flexShrink={0} height={1} wrapMode="none" fg={theme.muted} selectable={false}>
+          {expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
         </text>
       </box>
       <Show when={expanded()}>
-        <box flexDirection="column" width="100%" paddingLeft={2} paddingTop={1}>
-          <scrollbox id={`task-trace:${summary().taskId}`} ref={setScroll} height={Math.max(3, Math.min(20, props.card().trace.length * 8))}
-            width="100%" flexShrink={0} stickyScroll={true} stickyStart="bottom" viewportCulling={true}
-            verticalScrollbarOptions={{ visible: false }}>
-            <TranscriptWindow items={props.card().trace} scroll={scroll}>
-              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
-            </TranscriptWindow>
-          </scrollbox>
-          <Show when={summary().error}>
-            {(error: Accessor<string>) => <text fg={props.resources.theme.error} wrapMode="word">{error()}</text>}
-          </Show>
+        <box flexDirection="row" width="100%" paddingTop={1}>
+          <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.faint} selectable={false}>{TRANSCRIPT_MARKS.result}</text>
+          <box flexDirection="column" flexBasis={0} flexGrow={1} minWidth={1}>
+            <scrollbox id={`task-trace:${summary().taskId}`} ref={setScroll} height={Math.max(3, Math.min(20, props.card().trace.length * 8))}
+              width="100%" flexShrink={0} stickyScroll={true} stickyStart="bottom" viewportCulling={true}
+              verticalScrollbarOptions={{ visible: false }}>
+              <TranscriptWindow items={props.card().trace} scroll={scroll}>
+                {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
+              </TranscriptWindow>
+            </scrollbox>
+            <Show when={summary().error}>
+              {(error: Accessor<string>) => <text fg={theme.error} wrapMode="word">{error()}</text>}
+            </Show>
+          </box>
         </box>
       </Show>
     </box>
@@ -178,7 +179,8 @@ function LiveThinkingView(props: {
       <box flexDirection="column" width="100%" marginBottom={1}>
         <box flexDirection="row" width="100%" height={1}>
           <SpinnerText fg={theme.thinking} />
-          <text height={1} wrapMode="none" fg={theme.thinking} attributes={italic}> thinking</text>
+          <text width={1} height={1} flexShrink={0}> </text>
+          <text height={1} wrapMode="none" fg={theme.thinking} attributes={italic}>thinking</text>
         </box>
         <Show when={block().content}>
           <text fg={theme.thinking} attributes={italic} wrapMode="word" marginLeft={2}>{block().content}</text>
@@ -194,37 +196,46 @@ function TranscriptItemView(props: {
 }) {
   const block = props.block;
   const expansion = props.expansions(block().id);
+  const theme = props.resources.theme;
+  // Replies, thinking and notes carry a gutter mark; tools and workers sit in the content column.
   return (
     <Switch fallback={
-      <box flexDirection="column" width="100%" marginBottom={1}>
-        <markdown
-          id={`transcript-markdown-${block().id}`}
-          content={normalizeMarkdownForTerminal(block().content)}
-          width="100%"
-          syntaxStyle={props.resources.syntaxStyle}
-          fg={props.resources.theme.text}
-          conceal={true}
-          streaming={true}
-          internalBlockMode="top-level"
-          maxWidth={180}
-        />
-        <Show when={!block().streaming && block().replyCopyContent}>
-          <ReplyCopyButton content={block().replyCopyContent!} resources={props.resources} copyText={props.copyText} />
-        </Show>
+      <box flexDirection="row" width="100%" marginBottom={1}>
+        <text width={2} height={1} flexShrink={0} wrapMode="none" selectable={false} fg={theme.accent}>{TRANSCRIPT_MARKS.reply}</text>
+        <box flexDirection="column" flexBasis={0} flexGrow={1} minWidth={1}>
+          <markdown
+            id={`transcript-markdown-${block().id}`}
+            content={normalizeMarkdownForTerminal(block().content)}
+            width="100%"
+            syntaxStyle={props.resources.syntaxStyle}
+            fg={theme.text}
+            conceal={true}
+            streaming={true}
+            internalBlockMode="top-level"
+            maxWidth={180}
+          />
+          <Show when={!block().streaming && block().replyCopyContent}>
+            <ReplyCopyButton content={block().replyCopyContent!} resources={props.resources} copyText={props.copyText} />
+          </Show>
+        </box>
       </box>
     }>
       <Match when={block().kind === "thinking"}>
         <LiveThinkingView block={block} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "tool"}>
-        <ToolOutputView tool={block().tool!} content={block().content} resources={props.resources} expansion={expansion} />
+        <box width="100%" paddingLeft={2}>
+          <ToolOutputView tool={block().tool!} content={block().content} resources={props.resources} expansion={expansion} />
+        </box>
       </Match>
       <Match when={block().kind === "compaction" || block().kind === "interrupted"}>
         <CompactionInfo content={block().content} detail={block().detail} resources={props.resources} expansion={expansion} />
       </Match>
       <Match when={block().kind === "agent_task" && block().agentTask !== undefined}>
-        <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} expansion={expansion}
-          expansions={props.expansions} copyText={props.copyText} />
+        <box width="100%" paddingLeft={2}>
+          <AgentTaskCardView card={() => block().agentTask!} resources={props.resources} expansion={expansion}
+            expansions={props.expansions} copyText={props.copyText} />
+        </box>
       </Match>
     </Switch>
   );
@@ -232,7 +243,7 @@ function TranscriptItemView(props: {
 
 interface TranscriptRow {
   id: string;
-  kind: "user" | "heading" | "item";
+  kind: "user" | "item";
   item?: TranscriptItem;
   last?: boolean;
 }
@@ -259,7 +270,6 @@ export function TranscriptTurnsView(props: {
     const output: TranscriptRow[] = [];
     for (const group of groups().values()) {
       if (group.user) output.push({ id: group.user.id, kind: "user", item: group.user });
-      if (group.items.length) output.push({ id: `${group.id}:heading`, kind: "heading" });
       group.items.forEach((item, index) => output.push({
         id: item.id, kind: "item", item, last: index === group.items.length - 1,
       }));
@@ -268,18 +278,13 @@ export function TranscriptTurnsView(props: {
   });
   // Stable block keys preserve the visible controls during live-to-history handoff;
   // expansion state also survives eviction from the viewport.
-  return <TranscriptWindow items={rows()} scroll={props.scroll} estimateHeight={(row) => row.kind === "heading" ? 3 : 8}>
+  return <TranscriptWindow items={rows()} scroll={props.scroll} estimateHeight={(row) => row.kind === "user" ? 2 : 8}>
     {(row) => <Switch>
       <Match when={row().kind === "user"}>
         <UserMessageCard item={row().item!} resources={props.resources} />
       </Match>
-      <Match when={row().kind === "heading"}>
-        <box width="100%" paddingX={2} paddingTop={1} flexShrink={0}>
-          <text height={1} wrapMode="none" fg={props.resources.theme.accentDim} marginBottom={1}>▍thread</text>
-        </box>
-      </Match>
       <Match when={row().kind === "item"}>
-        <box width="100%" flexDirection="column" paddingX={2} paddingBottom={row().last ? 1 : 0} flexShrink={0}>
+        <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={2} paddingBottom={row().last ? 1 : 0} flexShrink={0}>
           <TranscriptItemView block={() => row().item!} resources={props.resources} expansions={expansions} copyText={props.copyText} />
         </box>
       </Match>
@@ -288,41 +293,30 @@ export function TranscriptTurnsView(props: {
 }
 
 
+const WELCOME_HINTS: ReadonlyArray<readonly [keys: string, description: string]> = [
+  ["/session", "resume work"],
+  ["/thread search", "<query>  search history"],
+  ["/agent", "choose models & enable agents"],
+  ["Ctrl+V / Alt+V", "paste image"],
+  ["Shift+Tab", "change thinking level"],
+  ["Ctrl+C / Alt+C", "copy selection · drag to select, Esc clears"],
+];
+
 export function WelcomeView(props: { resources: ThreadViewResources }) {
   const theme = props.resources.theme;
   return (
     <box flexDirection="column" width="100%" height="100%" alignItems="center" justifyContent="center">
-      <box
-        border={true}
-        borderStyle="rounded"
-        borderColor={theme.borderStrong}
-        backgroundColor={theme.surface}
-        paddingX={2}
-        marginBottom={1}
-      >
-        <ascii_font text="thread" font="tiny" color={theme.accentStrong} backgroundColor={theme.surface} />
+      <ascii_font text="thread" font="tiny" color={theme.accentStrong} backgroundColor={theme.background} />
+      <text fg={theme.softText} marginTop={1}>One project. One Session Tree.</text>
+      <text fg={theme.muted} marginBottom={1}>Your interactions are the project's memory.</text>
+      <box flexDirection="column">
+        {WELCOME_HINTS.map(([keys, description]) => (
+          <box flexDirection="row" height={1}>
+            <text width={16} height={1} flexShrink={0} wrapMode="none" fg={theme.accentDim}>{keys}</text>
+            <text height={1} wrapMode="none" truncate={true} fg={theme.muted}>{description}</text>
+          </box>
+        ))}
       </box>
-      <text fg={theme.softText}>One project. One Session Tree.</text>
-      <text fg={theme.softText} marginBottom={1}>Your interactions are the project's memory.</text>
-      <box flexDirection="row" height={1}>
-        <text fg={theme.accentDim} height={1} wrapMode="none">/session</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> resume work · </text>
-        <text fg={theme.accentDim} height={1} wrapMode="none">/thread search</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> {"<query>"} search history</text>
-      </box>
-      <box flexDirection="row" height={1}>
-        <text fg={theme.accentDim} height={1} wrapMode="none">/agent</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> choose models &amp; enable agents</text>
-      </box>
-      <box flexDirection="row" height={1}>
-        <text fg={theme.accentDim} height={1} wrapMode="none">Ctrl+V</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> / </text>
-        <text fg={theme.accentDim} height={1} wrapMode="none">Alt+V</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> paste image</text>
-        <text fg={theme.accentDim} height={1} wrapMode="none"> · Shift+Tab</text>
-        <text fg={theme.muted} height={1} wrapMode="none"> change thinking level</text>
-      </box>
-      <text fg={theme.muted} height={1} wrapMode="none">Drag to select · Ctrl+C / Alt+C copy · Esc clear selection</text>
     </box>
   );
 }

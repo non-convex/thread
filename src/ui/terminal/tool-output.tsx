@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { TranscriptTool } from "../state.js";
 import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
-import { STATUS_ICONS } from "./theme.js";
+import { STATUS_ICONS, TRANSCRIPT_MARKS } from "./theme.js";
 import { cleanToolText, formatToolText, presentTool, toolArguments, toolPreview } from "./tool-presentation.js";
 import type { TranscriptExpansion } from "./transcript-expansion.js";
 
@@ -50,6 +50,7 @@ export function ToolOutputView(props: {
       : line.startsWith("-") ? theme.diffRemoved : theme.muted)(`${line || " "}${index < visible.length - 1 ? "\n" : ""}`)));
   });
   const duration = () => props.tool.durationMs === undefined ? "" : `${(props.tool.durationMs / 1000).toFixed(1)}s`;
+  const hasBody = () => Boolean(presentation().summary || presentation().notice || output());
   return (
     <box
       id={`tool-view:${props.tool.id}`}
@@ -84,29 +85,35 @@ export function ToolOutputView(props: {
           {titleLines() > titleRows() ? "… " : "  "}{expanded() ? STATUS_ICONS.expanded : STATUS_ICONS.collapsed}
         </text>
       </box>
-      <box flexDirection="column" width="100%" paddingLeft={3} flexShrink={0}>
-        <Show when={presentation().summary}>
-          <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{presentation().summary}</text>
-        </Show>
-        <Show when={presentation().notice}>
-          <text fg={theme.muted} wrapMode="word">{presentation().notice}</text>
-        </Show>
-        <Show when={output()}>
-          {/* Explicitly reset height on expansion; omitting a spread prop leaves the native constraint in place. */}
-          <box flexDirection="column" width="100%" flexShrink={0}
-            height={expanded() ? "auto" : preview().text.split("\n").length} overflow="hidden"
-            onSizeChange={function () { setBodyWidth(this.width); }}>
-            <Show when={presentation().diff} fallback={
-              <text flexShrink={0} fg={failed() ? theme.error : expanded() ? theme.softText : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
-            }>
-              <DiffTextView content={diffText()} />
+      {/* The result hangs off the call: one ⎿ mark, then summary, notice and preview in one column. */}
+      <Show when={hasBody()}>
+        <box flexDirection="row" width="100%" paddingLeft={2} flexShrink={0}>
+          <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.faint} selectable={false}>{TRANSCRIPT_MARKS.result}</text>
+          <box flexDirection="column" flexBasis={0} flexGrow={1} minWidth={1} flexShrink={0}>
+            <Show when={presentation().summary}>
+              <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{presentation().summary}</text>
+            </Show>
+            <Show when={presentation().notice}>
+              <text fg={theme.muted} wrapMode="word">{presentation().notice}</text>
+            </Show>
+            <Show when={output()}>
+              {/* Explicitly reset height on expansion; omitting a spread prop leaves the native constraint in place. */}
+              <box flexDirection="column" width="100%" flexShrink={0}
+                height={expanded() ? "auto" : preview().text.split("\n").length} overflow="hidden"
+                onSizeChange={function () { setBodyWidth(this.width); }}>
+                <Show when={presentation().diff} fallback={
+                  <text flexShrink={0} fg={failed() ? theme.error : expanded() ? theme.softText : theme.muted} wrapMode={expanded() ? "word" : "char"}>{output()}</text>
+                }>
+                  <DiffTextView content={diffText()} />
+                </Show>
+              </box>
+              <Show when={!expanded() && preview().clipped}>
+                <text fg={theme.faint}>… preview · click to expand</text>
+              </Show>
             </Show>
           </box>
-          <Show when={!expanded() && preview().clipped}>
-            <text fg={theme.faint}>… preview · click to expand</text>
-          </Show>
-        </Show>
-      </box>
+        </box>
+      </Show>
     </box>
   );
 }

@@ -6,6 +6,7 @@ import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
 import { normalizeMarkdownForTerminal } from "./transcript-content.js";
 import { bold } from "./theme.js";
+import { RuleFill } from "./widgets.js";
 
 export function selectedWindow<T>(items: readonly T[], selected: number, visible: number): Array<{ item: T; index: number }> {
   const count = Math.min(visible, items.length);
@@ -14,23 +15,29 @@ export function selectedWindow<T>(items: readonly T[], selected: number, visible
 }
 
 function ScreenHeader(props: { left: string; right: string; resources: ThreadViewResources }) {
+  const theme = props.resources.theme;
   return (
-    <box flexDirection="column" width="100%" border={["bottom"]} borderColor={props.resources.theme.border}>
-      <box flexDirection="row" justifyContent="space-between" width="100%" paddingX={1}>
-        <text height={1} wrapMode="none" fg={props.resources.theme.text} attributes={bold} truncate={true}>{props.left}</text>
-        <text height={1} wrapMode="none" fg={props.resources.theme.muted} truncate={true}>{props.right}</text>
-      </box>
+    <box flexDirection="row" width="100%" height={1} paddingX={1}>
+      <RuleFill width={2} color={theme.borderStrong} />
+      <text height={1} flexShrink={1} minWidth={0} wrapMode="none" fg={theme.accentStrong} attributes={bold} truncate={true}> {props.left} </text>
+      <RuleFill color={theme.borderStrong} />
+      <text height={1} flexShrink={0} wrapMode="none" fg={theme.muted}> {props.right} </text>
+      <RuleFill width={2} color={theme.borderStrong} />
     </box>
   );
 }
 
 function ScreenFooter(props: { hint: string; state: Accessor<UiState>; resources: ThreadViewResources }) {
+  const theme = props.resources.theme;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
-      <text flexGrow={1} height={1} wrapMode="none" truncate={true} fg={props.resources.theme.accent}>{props.hint}</text>
-      <text height={1} wrapMode="none" truncate={true} fg={props.resources.theme.success}>
-        session {short(props.state().sessionId)} · tip {props.state().liveTipTurnId ? short(props.state().liveTipTurnId!) : "root"}
+      <RuleFill width={2} color={theme.borderStrong} />
+      <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme.faint}> {props.hint} </text>
+      <RuleFill color={theme.borderStrong} />
+      <text height={1} flexShrink={0} wrapMode="none" fg={theme.softText}>
+        {" "}session {short(props.state().sessionId)} · tip {props.state().liveTipTurnId ? short(props.state().liveTipTurnId!) : "root"}{" "}
       </text>
+      <RuleFill width={2} color={theme.borderStrong} />
     </box>
   );
 }

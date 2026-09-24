@@ -2,65 +2,70 @@
 
 全屏 TUI 是 Thread 的主交互面。它不实现 Session Tree、compaction 或工具执行，只把当前 live path、进行中的 turn 和临时面板画在同一棵持久渲染树上。TTY 默认进入这个界面；非 TTY 或 `--tui plain` 走 `src/ui/plain`，与这里无关。
 
-实现遵循四条约束：长时间阅读不刺眼；transcript 本身尽量少用边框和底色；工具结果在完成后立刻可见，但不默认占满屏幕；流式更新不能把已经画完的回合拆掉重排。
+实现遵循四条约束：长时间阅读不刺眼；transcript 采用文档流，不用边框区分内容，只有用户消息带一条底色；工具结果在完成后立刻可见，但不默认占满屏幕；流式更新不能把已经画完的回合拆掉重排。
 
 ## 主题
 
 配色集中在 `src/ui/terminal/theme.ts`。启动时读取终端的 light/dark，一次生成 `ThreadViewResources`（主题 + Markdown syntax style），运行期间不再切换；未取得终端模式时使用暗色。配置文件里没有自定义主题；plain 模式不受这套配色影响。
 
-薄荷色只用于前景，不铺绿色背景。整屏、面板和输入框保留原来的中性底色：暗色依次为 `#0B0E14`、`#161B22`、`#1C2128`，亮色依次为 `#FFFFFF`、`#F6F8FA`、`#EFF1F3`。卡片和浮层沿用轻边框，正文与工具结果不增加色块，内联代码也不加底色。
+这套配色叫「暖墨」：暗色像炭灰纸上的米白墨迹，亮色像暖白纸上的深褐墨迹。暗色背景依次为 `#171513`（整屏）、`#23201C`（用户消息色带、浮层、页脚）、`#2E2A24`（输入框、选中行）；亮色依次为 `#FBF8F2`、`#F2EDE3`、`#E9E2D5`。Transcript 里只有用户消息色带铺底色，工具块和回复都直接画在整屏背景上，内联代码也不加底色。
 
-内容层次主要靠文字明度和少量协调的色相区分。Markdown 标题与欢迎标志使用更鲜明的薄荷色；每个回合的 `thread` 名称使用柔和的灰薄荷色和常规字重。工具名使用低饱和灰橙色 `toolNameAccent`，页脚模型名保留原来的橙色 `nameAccent`；二者都使用常规字重，避免反复出现的标签过于醒目。
+层次主要靠琥珀色系和文字明度。Markdown 标题与欢迎标志用最亮的琥珀 `accentStrong`，回复前的 `●` 和操作强调用 `accent`，用户消息的 `❯` 和快捷键提示用更沉的 `accentDim`。页脚模型名使用赤陶色 `nameAccent`，工具名使用低饱和的沙褐色 `toolNameAccent`，二者都是常规字重。
 
-正文保持中性色，不把整段回答染绿。工具调用信息（命令、路径、参数）的视觉强度介于主正文和次要正文之间。普通工具输出展开后使用次要正文色，折叠预览和耗时继续减弱，让调用信息与结果保持层次。运行提示、状态行 spinner 和输入框运行时的边框统一使用低饱和灰蓝色 `runningAccent`，保留忙碌状态的辨识度，又避免原先青蓝色过于鲜艳；空闲时输入框恢复中性边框。
+暖色负责「内容」，冷色只留给「正在发生的事」。运行提示、状态 spinner 和忙碌时的输入框边框使用灰鼠尾草色 `runningAccent`，工具和 Worker 的活动标记、ask 面板使用稍亮的 `spark`。这是界面里唯一的冷色，因此忙碌状态在暖色背景上很容易被看到，又不会抢过正文；空闲时输入框恢复中性边框。思考使用淡紫灰，和回复正文明确区分。
 
 | 用途 | 色彩角色 | 暗色 | 亮色 |
 | --- | --- | --- | --- |
-| Markdown 标题、欢迎标志 | `accentStrong` | `#ADE6CF` | `#165E4B` |
-| 链接、操作强调 | `accent` | `#80CCB2` | `#26765F` |
-| 页脚模型名 | `nameAccent` | `#C8936D` | `#EA580C` |
-| 工具名 | `toolNameAccent` | `#B49782` | `#966D4F` |
-| 回合名称、内联代码、欢迎页命令提示 | `accentDim` | `#70A996` | `#4A7766` |
-| 主正文 | `text` | `#C0CACF` | `#2B3B3E` |
-| 工具调用信息：命令、路径、参数 | `toolCallText` | `#AAB7BE` | `#3D4F54` |
-| 引用、展开的普通工具输出 | `softText` | `#98A7AE` | `#4F626A` |
-| 工具预览、辅助说明 | `muted` | `#7D8B95` | `#63747C` |
-| 耗时、提示键 | `faint` | `#606D78` | `#75838D` |
-| 流式思考 | `thinking` | `#9FAAD0` | `#5B6E93` |
-| 已完成的思考预览 | `thinkingDim` | `#7F8CAA` | `#6B7891` |
-| 运行提示、状态行 spinner、输入框忙碌边框 | `runningAccent` | `#9BB8BF` | `#446770` |
-| 工具与面板活动标记、ask 边框、光标 | `spark` | `#83C4D4` | `#2E7385` |
-| 当前选中行文字 | `sparkAlt` | `#B4DEC1` | `#386F52` |
-| 成功状态 | `success` | `#90BD9C` | `#497653` |
-| 警告、上下文用量提示 | `warning` | `#C6AB78` | `#916B34` |
-| 错误状态 | `error` | `#D48F98` | `#A75261` |
+| Markdown 标题、欢迎标志、文档页标题 | `accentStrong` | `#EBC07D` | `#8A5212` |
+| 回复标记 `●`、链接、面板标题、输入提示符 | `accent` | `#D9A45B` | `#A8671E` |
+| 页脚模型名 | `nameAccent` | `#D7825A` | `#B8522B` |
+| 工具名 | `toolNameAccent` | `#BCA784` | `#8A7650` |
+| 用户标记 `❯`、内联代码、欢迎页快捷键 | `accentDim` | `#B08A5E` | `#8E6A45` |
+| 主正文 | `text` | `#DDD3C4` | `#3A342C` |
+| 工具调用信息：命令、路径、参数 | `toolCallText` | `#C4B9A9` | `#4D463C` |
+| 引用、展开的普通工具输出、页脚标签 | `softText` | `#AEA293` | `#625A4E` |
+| 工具预览、辅助说明 | `muted` | `#8C8274` | `#766D60` |
+| 耗时、提示键、`⎿` 与 `◇` 标记 | `faint` | `#6B635A` | `#8F8575` |
+| 流式思考 | `thinking` | `#B4A6C2` | `#6C5F85` |
+| 已完成的思考与 `∴` | `thinkingDim` | `#8E849C` | `#81779A` |
+| 运行提示、状态 spinner、输入框忙碌边框 | `runningAccent` | `#9CB5A8` | `#4F7468` |
+| 工具与 Worker 活动标记、ask 面板 | `spark` | `#8FBCB0` | `#3E7A6C` |
+| 当前选中行文字 | `sparkAlt` | `#EACB94` | `#8A5A1E` |
+| 成功状态 | `success` | `#A0B27A` | `#5C7A3A` |
+| 警告、上下文用量提示 | `warning` | `#DCC06A` | `#9C7A1F` |
+| 错误状态 | `error` | `#D7897F` | `#B04A45` |
+| 输入框空闲边框、浮层标题线 | `borderStrong` | `#4A433A` | `#CFC5B4` |
 
-薄荷、青蓝和雾蓝紫用于区分标题、活动和思考；成功用柔和鼠尾草绿，警告与错误分别保留香槟金和玫瑰红。代码里的 keyword / function / type 分别沿用薄荷、青蓝和雾蓝紫，字符串使用成功色。输入框的文字选择只用中性灰反选底色，确保选区可见，不引入大面积彩色背景。
+成功用橄榄绿，警告用偏黄的芥末色，与琥珀强调色拉开色相；错误用砖红。代码里的 keyword / function / type 分别使用琥珀、鼠尾草和淡紫灰，字符串使用成功色。输入框的文字选择只用暖灰反选底色，确保选区可见，不引入大面积彩色背景。
 
 ## 主屏幕
 
-`SessionScreen` 是一张相对定位的整屏：上方是 transcript 或欢迎页，下方固定状态行、输入框和页脚。输入区高度随内容在 1–4 行之间变化，transcript 的底边跟着让。
+`SessionScreen` 是一张相对定位的整屏：上方是 transcript 或欢迎页，下方固定状态行、输入框和页脚三层。输入框是 `surfaceHigh` 底的圆角框，忙碌时边框变成 `runningAccent`。输入区高度随内容在 1–4 行之间变化，transcript 的底边跟着让。
 
 ```text
-┌──────────────────────────────────────────┐
-│  transcript（sticky 到底，无滚动条）      │
-│                                          │
-│  ┌ 浮层（命令补全 / 模型 / rewind / ask）┐│
-│  └──────────────────────────────────────┘│
-│  status  耗时      +N −N   esc interrupt  │
-│  ┌──────────────────────────────────────┐│
-│  │ image · 1280×720 png                 ││
-│  │ ❯ composer                           ││
-│  └──────────────────────────────────────┘│
-│  ⊙ session  ⎇ branch  █ meter  ⚡ cache   │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ ❯ 用户消息（整行底色带）                                 │
+│                                                          │
+│ ● 回复正文                                               │
+│   ✓ edit  src/app.ts                           0.1s  ▸   │
+│     ⎿ applied · +6 −4                                    │
+│                                                          │
+│  ── 浮层标题 ──────────────────── ↑/↓ · ⏎ · esc ──      │
+│     （命令补全 / 模型 / rewind / ask，surface 底）       │
+│ status  耗时           +N −N             esc interrupt  │
+│ ╭──────────────────────────────────────────────────────╮ │
+│ │ image · 1280×720 png                                 │ │
+│ │ ❯ composer                                         │ │
+│ ╰──────────────────────────────────────────────────────╯ │
+│ ⊙ session  │  ⎇ branch  │  █ meter  ⚡ cache    model │
+└──────────────────────────────────────────────────────────┘
 ```
 
 输入框上方的状态行居中显示本轮修改统计 `+N −N`，分别使用 diff 的新增／删除文字色，不加标签。工具完成后实时更新；两项都为零时隐藏，Turn 结束后保留，下一轮开始时清零。左右状态区等宽，为统计保留居中位置，较长的状态文字截断显示，不增加输入区高度。
 
-统计累计本轮成功 `edit`／`write` 返回的实际增删行数，包含本轮 Worker 卡片中的修改；同一文件多次修改分别累计，并非整轮前后的净差异。结束后从对应 Turn 的已保存工具结果恢复，切换 Session 或 rewind 时跟随当前 live tip。这里只使用已有的 diff 元数据，不扫描 Git，也不估算 Bash、自定义工具或未生成 diff 的写入。
+统计累计本轮成功 `edit`／`write` 返回的实际增删行数，包含本轮 Worker 任务块中的修改；同一文件多次修改分别累计，并非整轮前后的净差异。结束后从对应 Turn 的已保存工具结果恢复，切换 Session 或 rewind 时跟随当前 live tip。这里只使用已有的 diff 元数据，不扫描 Git，也不估算 Bash、自定义工具或未生成 diff 的写入。
 
-欢迎页只在 transcript 为空且没有 live turn 时出现：tiny ascii 「thread」，以及两行项目定位文案「One project. One Session Tree.」「Your interactions are the project's memory.」。命令指引保留两行：第一行说明 `/session` 接续工作和 `/thread search <query>` 搜索历史；第二行说明 `/agent` 选择模型与启用 Agent。第三行单独提示 `Ctrl+V` / `Alt+V` 贴图和 `Shift+Tab` 切换 thinking level。
+欢迎页只在 transcript 为空且没有 live turn 时出现：不加框的 tiny ascii 「thread」，下面是两行项目定位文案「One project. One Session Tree.」「Your interactions are the project's memory.」。再往下是一张左对齐的两列快捷键表：`/session` 接续工作、`/thread search <query>` 搜索历史、`/agent` 选择模型与启用 Agent、`Ctrl+V` / `Alt+V` 贴图、`Shift+Tab` 切换 thinking level，以及拖选后 `Ctrl+C` / `Alt+C` 复制。
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
@@ -70,18 +75,37 @@
 
 每个回合只在最后一条无工具调用的最终回复末尾显示 `⧉ copy` 按钮，中间说明和带工具调用的回复不显示；Worker trace 同样只为最后一条无工具调用的回复显示按钮。按钮在完整回复落入历史后出现，流式输出、失败或中断的模型响应、空正文均不显示。最终回复含多个文本块时，仅在最后一个文本块下方放一个按钮，点击复制整条回复的原始 Markdown（包括屏幕外正文、代码块和链接），不包含思考、工具输出或按钮文字，无需先选中文字。写入期间显示 `… copying`，成功后显示两秒 `✓ copied`；仅向终端发送了复制请求时显示 `↗ sent`，失败时显示 `! retry copy` 并在状态区说明原因。拖选经过按钮不会触发复制，按钮也不会抢走输入框焦点。
 
-临时文档（`/thread history` 一类 ephemeral view）不叠在 session 上，而是换成 `DocumentScreen`：顶栏标题、Markdown 滚动区、底栏操作提示。这份内容不写入 Session Tree。
+临时文档（`/thread history` 一类 ephemeral view）不叠在 session 上，而是换成 `DocumentScreen`：顶部一条写着大写标题和 `ephemeral · not in session` 的横线，中间是 Markdown 滚动区，底部一条写着操作提示和 session / tip 的横线。这份内容不写入 Session Tree。
 
 ## Transcript
 
-历史是扁平的 `TranscriptItem` 列表。渲染前按用户消息切成回合：一条用户卡片，后面跟上该回合的思考、工具、回复、compaction 和 worker 卡片。
+历史是扁平的 `TranscriptItem` 列表。渲染前按用户消息切成回合：一条用户消息，后面跟上该回合的思考、工具、回复、compaction 和 worker 块。回合之间没有标题行，用户消息的底色带本身就是回合分隔。
 
-- 用户消息是左对齐圆角卡片，`maxWidth` 78%，先写一行淡色 `you`。
-- Agent 回合是 `TurnBlock`：左侧 `▍thread` 标题，没有底色，也没有外框。
+Transcript 使用两列的文档流：第 1 列是 2 格宽的标记列，内容从第 3 列开始，折行后悬挂对齐到内容列。标记表示这一块是谁说的、是什么；工具和 Worker 没有自己的标记，而是再缩进两格，读起来像是挂在上一段回复之下的子项。
+
+```text
+ ❯ 用户消息，折行后
+   对齐到第三列
+
+ ∴ thought 2.3s
+   思考预览……
+
+ ● 回复正文（Markdown）
+
+   ✓ read  src/ui/terminal/session-screen.tsx    0.0s  ▸
+     ⎿ 1–150 of 150 lines
+
+   ✓ Worker 标题  completed · provider/model · …       ▸
+
+ ◇ context compacted · threshold                       ▸
+```
+
+- 用户消息是一条整行宽的 `surface` 底色带，前面是 `accentDim` 的 `❯`，与输入框的提示符相同，读起来像是输入框里的文字落进了历史。没有边框，也不再写 `you`。
+- 每个回复文本块前有一个 `accent` 色的 `●`。一个回合有多段文字时，每段各有一个，中间夹着工具。
 - 回复是 Markdown。OpenTUI 0.5.7 只在 `streaming` 模式下绘制 markdown 内容，因此历史回复同样开着 streaming；围栏 info 若是文件路径，会收成 OpenTUI 认识的 language id。
-- 思考在流式阶段用 spinner + `thinking` 色斜体；完成后改成 `thinkingDim`，默认最多约 5 行（按 40 列估算折行），点击整块展开。短思考没有折叠控件。
-- Compaction / 中断是一行 `◇` 摘要；有 detail 时点击展开 Markdown。
-- Worker 任务是圆角卡片，边框颜色跟 `running` / `completed` / `failed` / `cancelled` 走。默认只显示标题和状态摘要，点击后在卡片内复用 live block 渲染 trace；trace 使用最多 20 行的独立滚动区，默认跟随末尾，只挂载其视口附近的块。
+- 思考在流式阶段标记列显示 spinner，后面是 `thinking` 色斜体；完成后标记换成 `∴`，文字改成 `thinkingDim`，默认最多约 5 行（按 40 列估算折行），点击整块展开。短思考没有折叠控件。
+- Compaction / 中断是一行以 `◇` 标记的摘要；有 detail 时点击展开 Markdown。
+- Worker 任务与工具同级缩进，没有边框。标题行由状态图标（运行中为 spinner）、加粗标题和状态摘要组成，状态颜色只落在图标上。点击后在 `⎿` 之下复用 live block 渲染 trace；trace 使用最多 20 行的独立滚动区，默认跟随末尾，只挂载其视口附近的块。
 
 实时 Turn 与历史 Turn 进入同一个 transcript 组件。用户消息、回合标题和内容块扁平化后按稳定 ID 挂载，工具沿用 tool call ID，数据更新不依赖新对象的引用相等。`turn_finished` 到来时，历史快照和 live 状态一起更新；视口内的工具不会因为转成历史而卸载重建，也不会重新排序到工具结果落盘的位置。
 
@@ -100,11 +124,11 @@
 | 网页与历史读取 | 返回内容大小、检索覆盖或分页提示；正文按需展开 |
 | 其他工具 | 通用短输出预览 |
 
-失败原因直接显示，长诊断仍受预览高度限制。取消和权限拒绝不会显示成成功或普通执行失败。预览按终端列宽计算，`edit`、`write` 最多十个屏幕行，其余工具仍最多五行；中文、emoji 或单行长 JSON 不会绕过对应的行数上限。工具块继续使用无边框、无底色的缩进布局。Diff 只对整行文字着色，不使用行背景或行内背景高亮；新增行用柔和灰绿，删除行用柔和灰红，其余行保持辅助文字色。折叠预览和展开正文共用同一套渲染，长行换行后仍保留原行的增删颜色。
+失败原因直接显示，长诊断仍受预览高度限制。取消和权限拒绝不会显示成成功或普通执行失败。预览按终端列宽计算，`edit`、`write` 最多十个屏幕行，其余工具仍最多五行；中文、emoji 或单行长 JSON 不会绕过对应的行数上限。工具块没有边框和底色：标题行之下，结果以一个 `faint` 色的 `⎿` 开头，摘要、提示和预览都对齐在 `⎿` 右侧的同一列；没有任何结果内容时不画 `⎿`。Diff 只对整行文字着色，不使用行背景或行内背景高亮；新增行用柔和橄榄绿，删除行用柔和砖红，其余行保持辅助文字色。折叠预览和展开正文共用同一套渲染，长行换行后仍保留原行的增删颜色。
 
-Diff 配色独立于成功／错误状态色。暗色主题的新增与删除分别使用 `#84AC95`／`#B78794`，亮色主题使用 `#4D755E`／`#996471`，比成功与错误提示更柔和。只对文字着色，沿用现有的 unified diff 文本和 hunk 标题，不额外引入背景高亮、语法高亮或行号。
+Diff 配色独立于成功／错误状态色。暗色主题的新增与删除分别使用 `#A3AE7E`／`#C58A7C`，亮色主题使用 `#5F7040`／`#A35A4B`，比成功与错误提示更柔和。只对文字着色，沿用现有的 unified diff 文本和 hunk 标题，不额外引入背景高亮、语法高亮或行号。
 
-点击工具标题或结果区域均可展开、折叠结果。所有工具展开时只增加已保存的结果内容，不显示完整参数 JSON，也不加 `Parameters`、`Result` 或 `Changes` 标题。`edit`、`write` 有 diff 时直接展开带颜色的修改内容，不重复展示输入的旧文本、新文本或写入正文，也不再附上重复的成功确认；失败或没有 diff 时保留工具返回的结果文本。选择结果文字不会触发展开切换，Worker 卡片内的工具使用相同组件。工具、思考、compaction 和 Worker 卡片的展开状态按块 ID 保存在当前视图中，滚出视口再返回或本次 Turn 转成历史时保留，不写入 Session Tree；离开会话或重启后使用默认折叠状态。
+点击工具标题或结果区域均可展开、折叠结果。所有工具展开时只增加已保存的结果内容，不显示完整参数 JSON，也不加 `Parameters`、`Result` 或 `Changes` 标题。`edit`、`write` 有 diff 时直接展开带颜色的修改内容，不重复展示输入的旧文本、新文本或写入正文，也不再附上重复的成功确认；失败或没有 diff 时保留工具返回的结果文本。选择结果文字不会触发展开切换，Worker 任务块内的工具使用相同组件。工具、思考、compaction 和 Worker 任务块的展开状态按块 ID 保存在当前视图中，滚出视口再返回或本次 Turn 转成历史时保留，不写入 Session Tree；离开会话或重启后使用默认折叠状态。
 
 Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行后仍保持颜色；展开长 diff 不会为每一行创建独立的原生文本缓冲区。
 
@@ -112,11 +136,11 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 
 工具执行器在 `tool_finished` 中提供 `content`、结构化 `details`、结束状态与执行耗时。相同信息随工具结果保存，历史投影与实时事件使用同一套 `TranscriptTool` 数据和格式化函数。没有记录的数据不从当前文件、时间差或文本猜测补齐。
 
-委派类工具（`delegate_tasks` 等）不进入普通工具行，而是变成上面的任务卡片。
+委派类工具（`delegate_tasks` 等）不进入普通工具行，而是变成上面的 Worker 任务块。
 
 ## 浮层
 
-带有下级选项的命令，直接回车就打开输入框上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，圆角，`surface` 底，`borderStrong` 边；ask 使用 `spark` 边框，表示正在等待用户回答。
+带有下级选项的命令，直接回车就打开输入框上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，与输入框的外边对齐，铺 `surface` 底色，紧贴在状态行之上，没有边框。面板第一行是一条写着标题和按键提示的横线（`── 标题 ────── ↑/↓ · ⏎ · esc ──`）；ask 把这条线和标题都画成 `spark`，表示正在等待用户回答。输入 `/` 或 `@` 时出现的补全列表同样以一条写着 `↑/↓ · tab complete` 的横线开头。
 
 `/thread` 从命令注册表生成子命令列表。选择 status、history 后进入可滚动文档；选择 search 后将 `/thread search ` 填入输入框，等用户输入查询再执行。`/session`、`/thread sessions` 和不带 ID 的 `/thread open` 共用 Session 列表，显示当前 Session、请求摘要、ID 和创建时间。回车切换会话，工作区文件保持不变。
 
@@ -130,7 +154,7 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 
 共同语言：
 
-- 标题 `accent` + bold，带一个功能图标（`⚙` `⎌` `ⓘ`）。
+- 标题 `accent` + bold，写在面板顶部的横线上，可带一个功能图标（`⚙` `⎌` `ⓘ`）；按键提示靠右写在同一条线上。
 - 选中行 `surfaceHigh` 底、`sparkAlt` 字、`▸`。
 - 当前已生效项用 `●` 和 `accent`，与光标选中分开。
 - 模型和 rewind 的窗口最多 8 项；命令、Session 和 Skill 的窗口最多 6 项，每项两行，分别显示名称和说明。Ask 的选项由工具上限收在 4 个。
@@ -168,6 +192,8 @@ TUI 和 agent 执行解耦。所有展示事件经 `safeUiEvent` 进入 `UiEvent
 
 工具块及其标题、结果区不参与纵向压缩，避免退出码、预览和展开提示被挤到同一行。标题的行数限制和绘制裁剪放在独立容器上；仅限制文本自身的 `maxHeight`，仍可能因布局压缩和取整多画一行。省略标记比较文本总行数与标题行数上限，不依赖文本节点被分配的高度。
 
+横线由 `RuleFill` 拼成：一段足够长的 `─` 文本放在会拉伸、会裁剪的容器里，标题和提示夹在各段之间。浮层标题行、补全列表和文档页的顶栏、底栏都使用它；横线的首尾端点使用固定宽度，不随拉伸段变化。
+
 动画共用一个 100ms 时钟。状态行耗时和所有 spinner 读同一个 signal，避免每个工具自己 `setInterval` 把 OpenTUI 顶到 max FPS。
 
 Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动条隐藏。鼠标滚轮有单独的加速度曲线。`viewportCulling` 只裁剪绘制，不能限制已创建的原生对象，因此 `transcript-window.tsx` 另外按消息／工具块做虚拟列表：只挂载视口及上下各一屏的缓冲区，其余内容由两个高度占位块代替。不能按整回合保活，否则单个长回合仍会耗尽 OpenTUI 的句柄。
@@ -176,11 +202,12 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 
 ## 代码位置
 
-- `src/ui/terminal/theme.ts`：色板、syntax style、meter、图标、JSON 探测。
-- `src/ui/terminal/session-screen.tsx`：主屏幕、页脚、浮层、输入框和附件行。
+- `src/ui/terminal/theme.ts`：色板、syntax style、transcript 标记、meter、图标、JSON 探测。
+- `src/ui/terminal/session-screen.tsx`：主屏幕、浮层位置、输入框和附件行。
+- `src/ui/terminal/session-status.tsx`：输入框上方的状态行和下方的页脚。
 - `src/ui/terminal/composer-state.ts`：输入草稿、附件、粘贴进度，以及清空草稿后的异步结果隔离。
 - `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。
-- `src/ui/terminal/widgets.tsx`：浮层共用的单行文字、选项行、标题和状态区。
+- `src/ui/terminal/widgets.tsx`：横线 `RuleFill`、浮层共用的单行文字、选项行、带标题线的面板和状态区。
 - `src/ui/terminal/ask-input.ts`：当前提问的选项、自由回答和翻页。
 - `src/ui/images.ts`：路径附件和附件 ID；图片限制、缩放和编码由 `src/core/images/prepare.ts` 共享。
 - `src/ui/terminal/transcript.tsx`：欢迎页、回合分组、思考 / 工具 / 回复。

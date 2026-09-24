@@ -12,26 +12,42 @@ export function Row(props: JSX.IntrinsicElements["box"]) {
   return <box flexDirection="row" height={1} {...props} />;
 }
 
+// Wider than any realistic terminal; the parent clips the rest.
+const RULE_TEXT = "─".repeat(512);
+
+/** Stretchable horizontal rule segment; labelled rules place text between segments. */
+export function RuleFill(props: { color: string; width?: number; grow?: boolean; minWidth?: number }) {
+  return <box height={1} overflow="hidden" flexShrink={props.width === undefined ? 1 : 0}
+    {...(props.width === undefined ? { flexBasis: 0, flexGrow: props.grow === false ? 0 : 1, minWidth: props.minWidth ?? 1 }
+      : { width: props.width })}>
+    <text height={1} wrapMode="none" selectable={false} fg={props.color}>{RULE_TEXT}</text>
+  </box>;
+}
+
+/** Floating panels open with a titled rule that sits directly above the composer rule. */
 export function Panel(props: {
   width: number;
   resources: ThreadViewResources;
   title: string;
   hint: string;
   icon?: string;
-  titleWidth?: number;
   titleColor?: string;
+  ruleColor?: string;
   busy?: string | undefined;
   error?: string | undefined;
   spinner?: boolean;
   children: JSX.Element;
 }) {
   const theme = props.resources.theme;
+  const rule = () => props.ruleColor ?? theme.borderStrong;
   return <box flexDirection="column" width={props.width} paddingX={1}>
     <Row width={props.width - 2} marginBottom={1}>
-      <Show when={props.icon}><Line width={3} flexShrink={0} fg={theme.accent}>{props.icon}</Line></Show>
-      <Line width={props.titleWidth ?? "auto"} flexGrow={props.titleWidth === undefined ? 1 : 0}
-        flexShrink={1} fg={props.titleColor ?? theme.accent} attributes={bold}>{props.title}</Line>
-      <Line fg={theme.faint} truncate={false}>{props.hint}</Line>
+      <RuleFill width={2} color={rule()} />
+      <Show when={props.icon}><Line flexShrink={0} fg={theme.accent}> {props.icon}</Line></Show>
+      <Line flexShrink={1} minWidth={0} fg={props.titleColor ?? theme.accent} attributes={bold}> {props.title} </Line>
+      <RuleFill color={rule()} />
+      <Line flexShrink={0} fg={theme.faint} truncate={false}> {props.hint} </Line>
+      <RuleFill width={2} color={rule()} />
     </Row>
     {props.children}
     <Show when={props.busy}>

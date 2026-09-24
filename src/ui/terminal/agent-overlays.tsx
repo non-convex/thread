@@ -25,7 +25,6 @@ export function ModelPickerOverlay(props: OverlayProps<ModelPickerScreen>) {
   ));
   const title = () => `${props.screen().agentId === "main" ? "Main" : props.screen().agentId === "dreamer" ? "Dreamer" : "Worker"} model${props.screen().scope === "all" ? " · all" : ""}`;
   return <Panel width={props.contentWidth()} resources={props.resources} title={title()}
-    titleWidth={Math.max(8, props.contentWidth() - 23)}
     hint={props.screen().agentId === "main" ? "↑/↓ · ⏎ switch · esc" : "↑/↓ · ⏎ enable · esc"}
     busy={props.screen().busy ? (props.screen().agentId === "main" ? "switching model…" : "enabling agent…") : undefined}
     error={props.navigated() ? undefined : props.screen().error}>

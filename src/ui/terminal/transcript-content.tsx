@@ -4,7 +4,7 @@ import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { CopyText } from "./clipboard.js";
 import type { TranscriptExpansion } from "./transcript-expansion.js";
 import type { ThreadViewResources } from "./resources.js";
-import { dimItalic, italic, STATUS_ICONS } from "./theme.js";
+import { dimItalic, italic, STATUS_ICONS, TRANSCRIPT_MARKS } from "./theme.js";
 
 const FENCE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
   c: "c",
@@ -119,7 +119,7 @@ export function ThinkingView(props: {
   const content = createMemo(() => props.content.trim());
   const estimatedLines = createMemo(() => estimatedThinkingLines(content()));
   const collapsible = () => estimatedLines() > COLLAPSED_THINKING_LINES;
-  const heading = () => `◇ ${(props.heading ?? "thinking").trim()}`;
+  const heading = () => (props.heading ?? "thinking").trim();
   return (
     <box
       flexDirection="column"
@@ -133,6 +133,7 @@ export function ThinkingView(props: {
       }}
     >
       <box flexDirection="row" width="100%" height={1}>
+        <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.thinkingDim} selectable={false}>{TRANSCRIPT_MARKS.thinking} </text>
         <text
           height={1}
           wrapMode="none"

@@ -5,13 +5,13 @@ import type { ThreadViewResources } from "./resources.js";
 import { AgentPickerOverlay, AgentSettingsOverlay, ModelPickerOverlay, MODEL_OVERLAY_MAX_ROWS, type OverlayProps } from "./agent-overlays.js";
 import { selectedWindow } from "./screens.js";
 import { bold, STATUS_ICONS } from "./theme.js";
-import { Line, Panel, Row } from "./widgets.js";
+import { Line, Panel, Row, RuleFill } from "./widgets.js";
 
 export const COMMAND_OVERLAY_MAX_ITEMS = 6;
 export const REWIND_OVERLAY_MAX_ROWS = 8;
 export const ASK_OVERLAY_MAX_OPTIONS = 4;
 
-/** Header, body, optional status lines and border share one sizing rule. */
+/** Title rule, blank row, body and optional status lines share one sizing rule. */
 export function overlayHeight(screen: UiScreen): number {
   let rows: number;
   switch (screen.type) {
@@ -20,11 +20,12 @@ export function overlayHeight(screen: UiScreen): number {
     case "agent_picker": rows = screen.agents.length; break;
     case "agent_settings": rows = 3; break;
     case "rewind": rows = Math.min(REWIND_OVERLAY_MAX_ROWS, screen.items.length) + Number(screen.confirm); break;
-    case "ask": return 4 + (screen.customText !== undefined ? 1
+    // Question line, then either the free-text row or the options and their hint.
+    case "ask": return 3 + (screen.customText !== undefined ? 1
       : Math.min(ASK_OVERLAY_MAX_OPTIONS, screen.request.questions[screen.questionIndex]?.options.length ?? 0) + 1);
     default: return 0;
   }
-  return 4 + rows + Number(screen.busy) + Number(Boolean(screen.error));
+  return 2 + rows + Number(screen.busy) + Number(Boolean(screen.error));
 }
 
 export function SessionOverlay(props: OverlayProps<UiScreen>) {
@@ -59,12 +60,17 @@ export function ComposerSuggestions(props: {
 }) {
   const theme = props.resources.theme;
   return <box flexDirection="column" width={props.contentWidth()} paddingX={1} backgroundColor={theme.surface}>
+    <Row width={props.contentWidth() - 2}>
+      <RuleFill color={theme.borderStrong} />
+      <Line flexShrink={0} fg={theme.faint} truncate={false}> ↑/↓ · tab complete </Line>
+      <RuleFill width={2} color={theme.borderStrong} />
+    </Row>
     <For each={props.suggestions}>{(suggestion, index) =>
-      <Row width={props.contentWidth() - 2} backgroundColor={index() === props.selected ? theme.surfaceHigh : "transparent"}>
-        <Line width={14} fg={index() === props.selected ? theme.sparkAlt : theme.text} attributes={index() === props.selected ? bold : 0}>
-          {index() === props.selected ? `${STATUS_ICONS.selected} ` : ""}{suggestion.label}
+      <Row width={props.contentWidth() - 2} paddingX={1} backgroundColor={index() === props.selected ? theme.surfaceHigh : "transparent"}>
+        <Line width={16} fg={index() === props.selected ? theme.sparkAlt : theme.text} attributes={index() === props.selected ? bold : 0}>
+          {index() === props.selected ? `${STATUS_ICONS.selected} ` : "  "}{suggestion.label}
         </Line>
-        <Line width={Math.max(4, props.contentWidth() - 16)} flexShrink={1} fg={index() === props.selected ? theme.softText : theme.muted}>
+        <Line width={Math.max(4, props.contentWidth() - 20)} flexShrink={1} fg={index() === props.selected ? theme.softText : theme.muted}>
           {suggestion.description}
         </Line>
       </Row>
@@ -102,7 +108,7 @@ export function RewindOverlay(props: OverlayProps<RewindScreen>) {
   const theme = props.resources.theme;
   const visible = createMemo(() => selectedWindow(props.screen().items, props.selected(), REWIND_OVERLAY_MAX_ROWS));
   return <Panel width={props.contentWidth()} resources={props.resources} title="⎌ Rewind to before a user message"
-    titleWidth={Math.max(8, props.contentWidth() - 23)} hint="↑/↓ · ⏎ select · esc"
+    hint="↑/↓ · ⏎ select · esc"
     busy={props.screen().busy ? "rewinding…" : undefined} error={props.navigated() ? undefined : props.screen().error}>
     <For each={visible()}>{({ item, index }) =>
       <Row width={props.contentWidth() - 2} paddingX={1} backgroundColor={index === props.selected() ? theme.surfaceHigh : "transparent"}>
@@ -126,7 +132,7 @@ export function AskOverlay(props: Pick<OverlayProps<AskScreen>, "screen" | "reso
   const typing = () => props.screen().customText !== undefined;
   const title = () => `${STATUS_ICONS.info} ${question()?.header ?? "question"}${total() > 1 ? `  ${props.screen().questionIndex + 1}/${total()}` : ""}`;
   return <Panel width={props.contentWidth()} resources={props.resources} title={title()} titleColor={theme.spark}
-    titleWidth={Math.max(8, props.contentWidth() - 26)}
+    ruleColor={theme.spark}
     hint={typing() ? "⏎ submit · esc back" : question()?.multiple ? "space mark · ⏎ ok" : "↑/↓ · ⏎ ok · esc"}>
     <Line width={props.contentWidth() - 2} fg={theme.text}>{question()?.question ?? ""}</Line>
     <Show when={!typing()}>
