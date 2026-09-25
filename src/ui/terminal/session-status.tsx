@@ -105,7 +105,7 @@ export function Footer(props: {
   );
 }
 
-export function Status(props: { state: Accessor<UiState>; resources: ThreadViewResources }) {
+export function Status(props: { state: Accessor<UiState>; resources: ThreadViewResources; workerPanelOpen?: boolean }) {
   const state = props.state;
   const theme = () => props.resources.theme;
   const parts = createMemo(() => {
@@ -148,7 +148,9 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
       <box flexDirection="row" flexBasis={hasChanges() ? 0 : "auto"} flexGrow={hasChanges() ? 1 : 0}
         minWidth={0} height={1} justifyContent="flex-end" overflow="hidden">
         <Show when={state().busy}>
-          <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme().faint}>esc interrupt</text>
+          <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme().faint}>
+            {props.workerPanelOpen ? "esc close worker" : "esc interrupt"}
+          </text>
         </Show>
       </box>
     </box>

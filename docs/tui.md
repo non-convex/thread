@@ -40,7 +40,7 @@
 
 ## 主屏幕
 
-`SessionScreen` 是一张相对定位的整屏：上方是 transcript 或欢迎页，下方固定状态行、输入框和页脚三层。输入框是 `surfaceHigh` 底的圆角框，忙碌时边框变成 `runningAccent`。输入区高度随内容在 1–4 行之间变化，transcript 的底边跟着让。
+`SessionScreen` 是一张相对定位的整屏：上方是 transcript 或欢迎页，下方依次是常驻 Worker 卡片栏（有 Worker 时）、状态行、输入框和页脚。浮层位于卡片栏之上；没有卡片栏时位于状态行之上。输入框是 `surfaceHigh` 底的圆角框，忙碌时边框变成 `runningAccent`。输入区高度随内容在 1–4 行之间变化，transcript 的底边跟着让。
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
@@ -51,7 +51,10 @@
 │     ⎿ applied · +6 −4                                    │
 │                                                          │
 │  ── 浮层标题 ──────────────────── ↑/↓ · ⏎ · esc ──      │
-│     （命令补全 / 模型 / rewind / ask，surface 底）       │
+│     （命令补全 / 模型 / rewind / ask / Worker trace）     │
+│  ╭ ✓ Worker 任务标题 ───────────────────────────────╮  │
+│  │ 最新活动 / 工具参数 / 最终回复                     │  │
+│  ╰ model · elapsed · usage ──────────────────────────╯  │
 │ status  耗时           +N −N             esc interrupt  │
 │ ╭──────────────────────────────────────────────────────╮ │
 │ │ image · 1280×720 png                                 │ │
@@ -105,11 +108,19 @@ Transcript 使用两列的文档流：第 1 列是 2 格宽的标记列，内容
 - 回复是 Markdown。OpenTUI 0.5.7 只在 `streaming` 模式下绘制 markdown 内容，因此历史回复同样开着 streaming；围栏 info 若是文件路径，会收成 OpenTUI 认识的 language id。
 - 思考在流式阶段标记列显示 spinner，后面是 `thinking` 色斜体；完成后标记换成 `∴`，文字改成 `thinkingDim`，默认最多显示 5 行。行数取文字在当前宽度下实际折行后的屏幕行数，窗口缩放后重新计算；只有超过 5 行时，标题才显示 `▸ N lines`，点击整块展开。不超过 5 行的思考完整显示，没有折叠控件。
 - Compaction / 中断是一行以 `◇` 标记的摘要；有 detail 时点击展开 Markdown。
-- Worker 任务与工具同级缩进，没有边框。标题行由状态图标（运行中为 spinner）、加粗标题和状态摘要组成，状态颜色只落在图标上。点击后在 `⎿` 之下打开 20 行的任务详情，默认展示 `Prompt`，可切换至 `Trace` 查看执行过程。Trace 仍复用 live block 渲染，默认跟随末尾，只挂载其视口附近的块。
-
-Prompt 按原始文本显示 Worker 收到的初始任务输入，并提供复制按钮。内容包含任务目标、指导、验收标准、可用工具、写入范围和运行环境，不包含固定的 Worker 系统提示词。实时内容取自 `agent_run_started.input`，历史内容取自任务消息记录中的第一条 user 消息，不根据当前配置重新拼接。Worker 尚未启动时显示等待提示；未记录输入的任务明确提示缺失。
+- 历史中的 Worker 任务与工具同级缩进，没有边框。标题行由状态图标（运行中为 spinner）、加粗标题和状态摘要组成，状态颜色只落在图标上。点击后在 `⎿` 之下打开 20 行的任务详情，默认展示 `Prompt`，可切换至 `Trace` 查看执行过程。Trace 仍复用 live block 渲染，默认跟随末尾，只挂载其视口附近的块。常驻卡片栏是另一种入口，不替代这些单行历史块。
 
 实时 Turn 与历史 Turn 进入同一个 transcript 组件。用户消息、回合标题和内容块扁平化后按稳定 ID 挂载，工具沿用 tool call ID，数据更新不依赖新对象的引用相等。`turn_finished` 到来时，历史快照和 live 状态一起更新；视口内的工具不会因为转成历史而卸载重建，也不会重新排序到工具结果落盘的位置。
+
+## Worker 卡片与 trace
+
+有 Worker 时，状态行上方显示当前 live turn 的常驻卡片栏；回合完成后改读当前 live tip 对应 turn 的历史，直到下一轮开始。切换 Session、rewind 和 `/clear` 时随当前内容更新。Transcript 中原有的一行 Worker 任务块继续作为历史保留。
+
+宽度允许时，每张卡片是三行圆角卡，沿用现有主题：上边框嵌状态图标和任务标题，中间显示最新活动、工具参数，结束后显示最终回复或错误的首行；下边框显示模型、修订次数（大于 1 时）、耗时和总用量。边框上的标题与统计按终端列宽预先截断，保留完整字素，避免中文标题挤出边框；完整 provider/model、context 和 usage 放在 trace 面板中。终端少于 72 列时，卡片栏收为有界的单行标签；放不下的卡片通过翻页控件查看。
+
+点击卡片打开卡片栏上方的 Worker 详情浮层，再点同一卡片关闭；卡片栏保持可见。详情分为 `Prompt` 和 `Trace` 两个页签，默认从头展示委派提示词。Prompt 按原始文本显示，并提供复制按钮，包含任务目标、指导、验收标准、可用工具、写入范围和运行环境；它是 Worker 收到的初始任务输入，不包含固定的 Worker 系统提示词。实时内容取自 `agent_run_started.input`，历史内容取自任务消息记录中的第一条 user 消息，不根据当前配置重新拼接。Worker 尚未启动时显示等待提示；未记录输入的任务明确提示缺失。
+
+切换到 `Trace` 后，面板复用 transcript 渲染和虚拟列表，默认跟随末尾；用户滚动阅读后，同一页签中的实时更新不重置其位置。鼠标和 PageUp／PageDown 可滚动当前页签。`Esc` 先清除文字选区，再关闭 Worker 面板，不中断仍在运行的任务；没有选区时 `Ctrl+C` 仍按原规则中断。命令、ask 和补全／建议浮层优先于 Worker trace。
 
 ## 工具输出
 
@@ -142,7 +153,7 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 
 ## 浮层
 
-带有下级选项的命令，直接回车就打开输入框上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，与输入框的外边对齐，铺 `surface` 底色，紧贴在状态行之上，没有边框。面板第一行是一条写着标题和按键提示的横线（`── 标题 ────── ↑/↓ · ⏎ · esc ──`）；ask 把这条线和标题都画成 `spark`，表示正在等待用户回答。输入 `/` 或 `@` 时出现的补全列表同样以一条写着 `↑/↓ · tab complete` 的横线开头。
+带有下级选项的命令，直接回车就打开输入区上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，与输入框的外边对齐，铺 `surface` 底色；有 Worker 卡片栏时位于栏之上，否则紧贴状态行之上，没有边框。面板第一行是一条写着标题和按键提示的横线（`── 标题 ────── ↑/↓ · ⏎ · esc ──`）；ask 把这条线和标题都画成 `spark`，表示正在等待用户回答。输入 `/` 或 `@` 时出现的补全列表同样以一条写着 `↑/↓ · tab complete` 的横线开头。命令、ask 和补全／建议面板显示时优先于 Worker trace。
 
 `/thread` 从命令注册表生成子命令列表。选择 status、history 后进入可滚动文档；选择 search 后将 `/thread search ` 填入输入框，等用户输入查询再执行。`/session`、`/thread sessions` 和不带 ID 的 `/thread open` 共用 Session 列表，显示当前 Session、请求摘要、ID 和创建时间。回车切换会话，工作区文件保持不变。
 
@@ -206,6 +217,7 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 
 - `src/ui/terminal/theme.ts`：色板、syntax style、transcript 标记、meter、图标、JSON 探测。
 - `src/ui/terminal/session-screen.tsx`：主屏幕、浮层位置、输入框和附件行。
+- `src/ui/terminal/worker-cards.tsx`：常驻 Worker 卡片栏与 trace 浮层。
 - `src/ui/terminal/session-status.tsx`：输入框上方的状态行和下方的页脚。
 - `src/ui/terminal/composer-state.ts`：输入草稿、附件、粘贴进度，以及清空草稿后的异步结果隔离。
 - `src/ui/terminal/clipboard.ts` / `composer-paste.ts`：本机剪贴板和贴图分流。

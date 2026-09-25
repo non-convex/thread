@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const ANIMATION_INTERVAL_MS = 100;
@@ -37,6 +37,12 @@ export function tuiAnimationTime(): number {
 export function spinnerFrameAt(timestamp: number): string {
   const index = Math.floor(timestamp / ANIMATION_INTERVAL_MS) % SPINNER_FRAMES.length;
   return SPINNER_FRAMES[index]!;
+}
+
+/** Border titles can share the animation clock without mounting a text spinner. */
+export function createSpinnerFrame(active: Accessor<boolean>): Accessor<string> {
+  createEffect(() => { if (active()) onCleanup(retainAnimationClock()); });
+  return () => spinnerFrameAt(tuiAnimationTime());
 }
 
 export function SpinnerText(props: { fg: string }) {

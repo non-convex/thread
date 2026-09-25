@@ -1,7 +1,7 @@
 import type { KeyBinding, ScrollBoxRenderable } from "@opentui/core";
 import { createSignal, Show, type Accessor } from "solid-js";
 import { isSlashCommandInput } from "../../app/input-router.js";
-import type { LiveTurn, TranscriptItem, UiState } from "../state.js";
+import type { AgentTaskCard, LiveTurn, TranscriptItem, UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
 import type { ComposerDraft } from "./composer-state.js";
@@ -14,6 +14,7 @@ import { ComposerSuggestions, overlayHeight, SessionOverlay } from "./session-ov
 import { Footer, Status } from "./session-status.js";
 import { bold } from "./theme.js";
 import { Line, Row } from "./widgets.js";
+import { WorkerCardsBar, workerCardsHeight, WorkerTraceOverlay } from "./worker-cards.js";
 
 const COMPOSER_KEY_BINDINGS: KeyBinding[] = [
   { name: "return", action: "submit" },
@@ -56,6 +57,11 @@ export function SessionScreen(props: {
   overlayNavigated: Accessor<boolean>;
   composerHeight: Accessor<number>;
   terminalWidth: Accessor<number>;
+  terminalHeight: Accessor<number>;
+  workerCards: Accessor<readonly AgentTaskCard[]>;
+  workerPanelCard: Accessor<AgentTaskCard | undefined>;
+  onOpenWorker: (taskId: string) => void;
+  setWorkerScroll: (value: ScrollBoxRenderable | undefined) => void;
   setScroll: (value: ScrollBoxRenderable) => void;
 }) {
   const state = props.state;
@@ -63,14 +69,17 @@ export function SessionScreen(props: {
   const theme = props.resources.theme;
   const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const hasAttachments = () => draft.attachments().length > 0 || draft.busy();
-  // Status + bordered composer + optional attachment row + footer.
-  const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments());
+  // Cards, status, bordered composer, optional attachment row and footer share one fixed area.
+  const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments())
+    + workerCardsHeight(props.workerCards().length, props.terminalWidth());
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
   // Floating panels share the composer's outer edges.
   const contentWidth = () => Math.max(20, props.terminalWidth() - 2);
   const panelHeight = () => overlayHeight(state().screen);
+  const workerPanelHeight = () => props.workerPanelCard()
+    ? Math.max(0, Math.min(24, props.terminalHeight() - controlsHeight())) : 0;
   const floatingHeight = () => panelHeight() || (state().screen.type === "session" && props.suggestions().length
-    ? props.suggestions().length + 1 : 0);
+    ? props.suggestions().length + 1 : workerPanelHeight());
   const syncCursor = () => {
     draft.setCursor(draft.editor?.cursorOffset ?? 0);
     draft.setForcePaths(false);
@@ -113,7 +122,12 @@ export function SessionScreen(props: {
       <box position="absolute" right={1} bottom={controlsHeight()} left={1} height={floatingHeight()} zIndex={20}
         backgroundColor={theme.surface}>
         <Show when={panelHeight()} fallback={
-          <ComposerSuggestions suggestions={props.suggestions()} selected={props.suggestionIndex()} resources={props.resources} contentWidth={contentWidth} />
+          <Show when={props.workerPanelCard()?.summary.taskId} keyed fallback={
+            <ComposerSuggestions suggestions={props.suggestions()} selected={props.suggestionIndex()} resources={props.resources} contentWidth={contentWidth} />
+          }>
+            {() => <WorkerTraceOverlay card={() => props.workerPanelCard()!} resources={props.resources} copyText={props.copyText}
+              width={contentWidth()} height={workerPanelHeight()} setScroll={props.setWorkerScroll} />}
+          </Show>
         }>
           <SessionOverlay screen={() => state().screen} selected={props.overlaySelected} navigated={props.overlayNavigated}
             resources={props.resources} contentWidth={contentWidth} />
@@ -122,7 +136,13 @@ export function SessionScreen(props: {
     </Show>
     <box position="absolute" right={0} bottom={0} left={0} height={controlsHeight()} zIndex={30}
       flexDirection="column" backgroundColor={theme.background}>
-      <box flexShrink={0} width="100%"><Status state={props.state} resources={props.resources} /></box>
+      <Show when={props.workerCards().length > 0}>
+        <WorkerCardsBar cards={props.workerCards()} resources={props.resources} terminalWidth={props.terminalWidth()}
+          openedTaskId={props.workerPanelCard()?.summary.taskId} onOpenTask={props.onOpenWorker} />
+      </Show>
+      <box flexShrink={0} width="100%">
+        <Status state={props.state} resources={props.resources} workerPanelOpen={Boolean(props.workerPanelCard())} />
+      </box>
       <box flexShrink={0} flexDirection="column" marginX={1} border={true} borderStyle="rounded"
         borderColor={state().busy ? theme.runningAccent : theme.borderStrong} backgroundColor={theme.surfaceHigh}>
         <Show when={hasAttachments()}>

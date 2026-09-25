@@ -4,7 +4,7 @@ import {
 } from "@opentui/core";
 import { render, useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { Match, Switch, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { isFloatingOverlay, moveSelection, overlaySelectionCount, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
+import { currentTurnItems, isFloatingOverlay, moveSelection, overlaySelectionCount, type LiveTurn, type TranscriptItem, type UiScreen } from "../state.js";
 import { tryCreateHostClipboard, writeClipboardText, type CopyText } from "./clipboard.js";
 import { applyComposerSuggestion, composerSuggestions } from "./completion.js";
 import { createComposerDraft } from "./composer-state.js";
@@ -33,6 +33,8 @@ export function ThreadRoot(props: {
   // Local selection signals repaint only the overlay; the controller retains Enter handling.
   const [overlaySelected, setOverlaySelected] = createSignal(0);
   const [overlayNavigated, setOverlayNavigated] = createSignal(false);
+  const [openedWorkerTaskId, setOpenedWorkerTaskId] = createSignal<string>();
+  let workerScroll: ScrollBoxRenderable | undefined;
   let sessionScroll: ScrollBoxRenderable | undefined;
   let screenScroll: ScrollBoxRenderable | undefined;
   const state = () => { liveRevision(); fullRevision(); return props.controller.state; };
@@ -64,6 +66,19 @@ export function ThreadRoot(props: {
     input: draft.text(), cursor: draft.cursor(), rootPath: props.controller.meta.rootPath,
     commands: props.controller.slashSuggestions, forcePaths: draft.forcePaths(),
   }));
+  const workerCards = createMemo(() => currentTurnItems(state()).flatMap((item) => item.agentTask ? [item.agentTask] : []));
+  const workerPanelCard = createMemo(() => screen().type === "session" && !suggestions().length
+    ? workerCards().find((card) => card.summary.taskId === openedWorkerTaskId()) : undefined);
+  const toggleWorker = (taskId: string) => setOpenedWorkerTaskId((previous) => previous === taskId ? undefined : taskId);
+  let workerSessionId = state().sessionId;
+  createEffect(() => {
+    const sessionId = state().sessionId;
+    const id = openedWorkerTaskId();
+    if (sessionId !== workerSessionId || (id && !workerCards().some((card) => card.summary.taskId === id))) {
+      setOpenedWorkerTaskId(undefined);
+    }
+    workerSessionId = sessionId;
+  });
   const composerHeight = createMemo(() => Math.max(COMPOSER_MIN_LINES, Math.min(COMPOSER_MAX_LINES,
     estimatedWrappedLines(draft.text(), Math.max(12, dimensions().width - 8)))));
   onCleanup(props.controller.subscribe((kind) => batch(() => {
@@ -148,6 +163,11 @@ export function ThreadRoot(props: {
       props.controller.handleScreenKey(key);
       return;
     }
+    if (key.name === "escape" && workerPanelCard()) {
+      key.preventDefault();
+      setOpenedWorkerTaskId(undefined);
+      return;
+    }
     if (key.name === "escape") {
       if (props.controller.interrupt()) key.preventDefault();
       else if (screen().type !== "session") { key.preventDefault(); props.controller.closeView(); }
@@ -157,6 +177,11 @@ export function ThreadRoot(props: {
     const active = screen();
     const direction = key.name === "up" ? -1 : key.name === "down" ? 1 : 0;
     const page = key.name === "pageup" ? -0.85 : key.name === "pagedown" ? 0.85 : 0;
+    if (workerPanelCard() && page) {
+      key.preventDefault();
+      workerScroll?.scrollBy(page, "viewport");
+      return;
+    }
     if (isFloatingOverlay(active)) {
       const count = overlaySelectionCount(active);
       if (direction && count > 0 && !active.busy) {
@@ -198,7 +223,9 @@ export function ThreadRoot(props: {
         <SessionScreen controller={props.controller} state={state} transcript={transcript} liveTurn={liveTurn} meta={meta}
           resources={props.resources} copyText={copyText} draft={draft} suggestions={suggestions} suggestionIndex={suggestionIndex}
           overlaySelected={overlaySelected} overlayNavigated={overlayNavigated} composerHeight={composerHeight}
-          terminalWidth={() => dimensions().width} setScroll={(value) => { sessionScroll = value; }} />
+          terminalWidth={() => dimensions().width} terminalHeight={() => dimensions().height}
+          workerCards={workerCards} workerPanelCard={workerPanelCard} onOpenWorker={toggleWorker}
+          setWorkerScroll={(value) => { workerScroll = value; }} setScroll={(value) => { sessionScroll = value; }} />
       </Match>
       <Match when={screen().type === "document"}>
         <DocumentScreen screen={() => screen() as Extract<UiScreen, { type: "document" }>} state={state}

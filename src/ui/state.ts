@@ -153,6 +153,18 @@ export function turnElapsedMs(state: Pick<UiState, "turnStartedAt" | "turnFinish
   return Math.max(0, (state.turnFinishedAt ?? now) - state.turnStartedAt);
 }
 
+/** Use live blocks during execution and the same turn's saved blocks after handoff. */
+export function currentTurnItems(
+  state: Pick<UiState, "sessionId" | "liveTurn" | "liveTipTurnId" | "transcript">,
+): readonly TranscriptItem[] {
+  if (state.liveTurn) return state.liveTurn.sessionId === state.sessionId ? state.liveTurn.blocks : [];
+  if (!state.liveTipTurnId) return [];
+  const start = state.transcript.findLastIndex((item) => item.kind === "user" && item.id === `${state.liveTipTurnId}:user`);
+  if (start < 0) return [];
+  const end = state.transcript.findIndex((item, index) => index > start && item.kind === "user");
+  return state.transcript.slice(start + 1, end < 0 ? undefined : end);
+}
+
 /** Per-call additions/deletions for the active turn, or the selected session's live tip. */
 export function turnChangeCounts(
   state: Pick<UiState, "sessionId" | "liveTurn" | "liveTipTurnId" | "transcript">,
@@ -171,14 +183,7 @@ export function turnChangeCounts(
       totals.deletions += count(details.deletions);
     }
   };
-  if (state.liveTurn) {
-    if (state.liveTurn.sessionId === state.sessionId) collect(state.liveTurn.blocks);
-  } else if (state.liveTipTurnId) {
-    const userIndex = state.transcript.findLastIndex((item) =>
-      item.kind === "user" && item.id === `${state.liveTipTurnId}:user`
-    );
-    if (userIndex >= 0) collect(state.transcript.slice(userIndex + 1));
-  }
+  collect(currentTurnItems(state));
   return totals;
 }
 
