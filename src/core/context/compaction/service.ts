@@ -5,6 +5,7 @@ import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../../agent/model-client.js";
 import type { CompactionReason } from "../../session-tree/model.js";
 import type { SessionTreeService } from "../../session-tree/service.js";
+import { messagesForModel } from "../../session-tree/user-content.js";
 import { projectedContextMessages, type BuiltContext } from "../builder.js";
 import { contextBudget } from "../budget.js";
 import { generateHistorySummary } from "./history-summary.js";
@@ -67,20 +68,33 @@ export class ContextCompactionService {
         ? previousCompaction?.progressSummary
         : undefined;
 
+    // Match the same image projection used by the live request. The plan and
+    // retained turns still reference raw Session Tree messages for persistence.
+    const sessionMessages = messagesForModel(options.built.messages, this.model.acceptsImages);
+    const historyContext = historySummaryContext(options.context, sessionMessages, plan.retainedUnits);
     const historyTask = generateHistorySummary({
       model: this.model,
-      context: historySummaryContext(options.context, options.built.messages, plan.retainedUnits),
+      context: {
+        ...historyContext,
+        messages: messagesForModel(historyContext.messages, this.model.acceptsImages),
+      },
       signal: options.signal,
       ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     });
-    const progressTask = plan.partialTurnTrajectory && plan.partialTurnId
+    const progressContext = plan.partialTurnTrajectory && plan.partialTurnId
+      ? progressSummaryContext(
+          collectProgressBackground(options.built, plan.partialTurnId),
+          plan.partialTurnTrajectory,
+        )
+      : undefined;
+    const progressTask = progressContext
       ? generateProgressSummary({
           model: this.model,
-          context: progressSummaryContext(
-            collectProgressBackground(options.built, plan.partialTurnId),
-            plan.partialTurnTrajectory,
-          ),
+          context: {
+            ...progressContext,
+            messages: messagesForModel(progressContext.messages, this.model.acceptsImages),
+          },
           signal: options.signal,
           ...(options.onExecutionEvent ? { onExecutionEvent: options.onExecutionEvent } : {}),
           ...(previousProgressSummary ? { previousSummary: previousProgressSummary } : {}),
@@ -101,7 +115,8 @@ export class ContextCompactionService {
       compactedAt,
       progressSummary,
     );
-    const projected = replacementContext(options.built.messages, options.context, projectedMessages);
+    const modelProjectedMessages = messagesForModel(projectedMessages, this.model.acceptsImages);
+    const projected = replacementContext(sessionMessages, options.context, modelProjectedMessages);
     const tokensAfter = contextBudget(projected, projectedMessages).requestTokens;
     if (options.tokensBefore - tokensAfter < minimumUsefulSavings(options.tokensBefore)) {
       return { compacted: false };

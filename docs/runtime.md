@@ -117,7 +117,7 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 `view_image({ path, detail? })` 支持 PNG、JPEG、WebP、GIF、BMP；按文件内容识别格式并解码，动图只使用首帧。文件路径可以相对项目，也可以是项目外的绝对路径，沿用 `read` 的资源声明、宿主授权和路径复查。编码与 TUI 粘贴图片共享 `core/images/prepare.ts`，需要支持 `Bun.Image` 的运行时。CLI 默认注册此工具；嵌入宿主通过 `tools: ["view_image"]` 显式启用，Worker 则仅在任务的 `tools` 中指定时启用。当前模型必须声明 `acceptsImages: true`（自定义模型配置为 `input: ["text", "image"]`），否则工具明确返回错误，不声称已经看过图片。`original` 控制本地预处理，服务商仍可能按自身规则处理图片。
 
-`ToolResult.content` 是文本说明；可选的 `images: ImageContent[]` 保存 `{ type: "image", mimeType, data }`，其中 `data` 是 base64 图片字节。执行器把两者合成模型可见的工具结果，像素随消息持久化并参与后续请求，`details.raw` 不重复保存图片字节。`ToolContext.acceptsImages` 表示当前执行模型的能力。`tool_result` 扩展可分别改写 `modelContent` 和 `modelImages`，设 `modelImages: []` 可移除附件。普通工具事件与终端只展示文本、尺寸和格式，不展示 base64；切换纯文本模型时，历史图片在请求中替换为提示，持久化图片保留。
+`ToolResult.content` 是文本说明；可选的 `images: ImageContent[]` 保存 `{ type: "image", mimeType, data }`，其中 `data` 是 base64 图片字节。执行器把两者合成模型可见的工具结果，像素随消息持久化并参与后续请求，`details.raw` 不重复保存图片字节。`ToolContext.acceptsImages` 表示当前执行模型的能力。`tool_result` 扩展可分别改写 `modelContent` 和 `modelImages`，设 `modelImages: []` 可移除附件。普通工具事件与终端只展示文本、尺寸和格式，不展示 base64；切换纯文本模型时，历史图片在请求中替换为提示，持久化图片保留。压缩时的消息定位、历史摘要和轮内进度摘要使用同样的图片适配，避免原始图片与请求中的占位文字不一致而阻止压缩。
 
 需要解析别名、默认路径或游标的工具可实现 `prepare(args, context)`。执行顺序为：schema 校验 → 扩展改写与再次校验 → `prepare()` → 资源声明 → 宿主授权 → 调度与执行。`prepare()` 每次调用只运行一次，收到取消信号，只能进行参数和目标解析，不能执行工具的业务副作用。省略时沿用校验后的参数；`AgentTool<Input, Prepared>` 可声明与模型输入不同的有效参数类型。资源声明、授权、执行与 `effectiveArgs` 记录均使用准备后的参数，模型的原始 tool call 仍保留在助手消息中。
 

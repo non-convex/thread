@@ -8,7 +8,7 @@ import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
-import { messageWithoutImages } from "../session-tree/user-content.js";
+import { messagesForModel } from "../session-tree/user-content.js";
 import type { RuntimeEventSink } from "../runtime/events.js";
 import { RuntimeLimitError, type ExecutionLimits } from "../runtime/limits.js";
 import type { ModelClient } from "./model-client.js";
@@ -186,15 +186,10 @@ export class TurnRunner {
   private async extendContext(built: BuiltContext, turnId: string): Promise<Context> {
     const initial: Context = {
       systemPrompt: this.systemPrompt,
-      messages: this.messagesForModel(built.messages),
+      messages: messagesForModel(built.messages, this.model.acceptsImages),
       tools: this.tools.modelDefinitions(),
     };
     return (await this.extensions.emit("before_context", { context: initial, turnId })).context;
-  }
-
-  private messagesForModel(messages: Message[]): Message[] {
-    if (this.model.acceptsImages === true) return messages;
-    return messages.map(messageWithoutImages);
   }
 
   private async compactBuilt(

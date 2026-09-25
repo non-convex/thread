@@ -43,6 +43,11 @@ export function userContentDisplay(content: UserMessage["content"]): string {
   return text || label;
 }
 
+/** Keep the durable messages untouched while projecting image blocks for the selected model. */
+export function messagesForModel(messages: Message[], acceptsImages: boolean | undefined): Message[] {
+  return acceptsImages === true ? messages : messages.map(messageWithoutImages);
+}
+
 export function messageWithoutImages(message: Message): Message {
   if ((message.role !== "user" && message.role !== "toolResult") || typeof message.content === "string") return message;
   const imageCount = message.content.filter((block) => block.type === "image").length;
