@@ -98,10 +98,10 @@ export function SessionScreen(props: {
       props.controller.note("Current model does not accept images. Use /model to pick a vision model.", "error");
       return;
     }
+    if (!props.controller.submit(input, command ? [] : images)) return;
     editor.clear();
     draft.replace("");
     if (!command) draft.setAttachments([]);
-    void props.controller.submit(input, command ? [] : images);
   };
   return <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
     <Show when={hasTranscript()} fallback={

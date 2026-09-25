@@ -105,9 +105,9 @@ export function ThreadRoot(props: {
     const suggestion = suggestions()[suggestionIndex()];
     if (!suggestion || !draft.editor) return;
     if (submit && suggestion.submit) {
+      if (!props.controller.submit(suggestion.replacement.trim())) return;
       draft.editor.clear();
       draft.replace("");
-      void props.controller.submit(suggestion.replacement.trim());
     } else {
       const next = applyComposerSuggestion(draft.text(), suggestion);
       draft.replace(next.input, next.cursor);

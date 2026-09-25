@@ -253,27 +253,41 @@ export class ThreadTuiController {
     return true;
   }
 
-  async submit(raw: string, images: readonly ComposerImage[] = []): Promise<void> {
-    if (this.active || this.stopped || this.disposed || (!raw.trim() && images.length === 0)) return;
+  /** Returns acceptance synchronously; the draft may be cleared without waiting for the operation. */
+  submit(raw: string, images: readonly ComposerImage[] = []): boolean {
+    const done = this.executeInput(raw, images);
+    if (!done) return false;
     this.viewHistory.length = 0;
-    await this.executeInput(raw, images);
+    void done;
+    return true;
   }
 
-  private async executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> {
+  private executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> | undefined {
     const input = raw.trim();
-    if ((!input && images.length === 0) || this.active || this.stopped || this.disposed) return false;
+    if ((!input && images.length === 0) || this.active || this.stopped || this.disposed) return undefined;
     if (input === "/exit") {
       this.requestStop();
-      return true;
+      return Promise.resolve(true);
     }
     const imageBlocks = images.map(composerImageContent);
     if (imageBlocks.length > 0 && this.app.runtime.model?.acceptsImages !== true) {
       this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
-      return false;
+      return undefined;
     }
     const active = new AbortController();
     this.active = active;
+    // App input is reserved before its router emits any turn/command events (including /thread search).
+    this.state.busy = true;
+    this.state.activity = input.startsWith("/") ? `running ${input.split(/\s/, 1)[0]}` : "preparing";
     this.state.notice = undefined;
+    this.state.modelRetryError = undefined;
+    this.state.turnStartedAt = undefined;
+    this.state.turnFinishedAt = undefined;
+    this.notify("live");
+    return this.finishInput(input, imageBlocks, active);
+  }
+
+  private async finishInput(input: string, imageBlocks: ReturnType<typeof composerImageContent>[], active: AbortController): Promise<boolean> {
     try {
       const result = await this.app.handleInput(input, {
         signal: active.signal,
@@ -337,6 +351,11 @@ export class ThreadTuiController {
     for (const event of events) {
       try {
         reduceUiEvent(this.state, event);
+        // A command's event can precede its input result; acceptance stays busy until finishInput settles.
+        if (this.active && event.type === "command_finished") {
+          this.state.busy = true;
+          this.state.activity = `running /${event.name}`;
+        }
         if (event.type === "context_updated") this.meta.contextPercent = event.percent;
         if (notifyKind(event) === "full") kind = "full";
         if (event.type === "turn_finished" || (event.type === "session_changed" && event.reason !== "turn")) {
@@ -389,7 +408,8 @@ export class ThreadTuiController {
     screen.busy = true;
     screen.error = undefined;
     this.notify();
-    const succeeded = await this.executeInput(command);
+    const execution = this.executeInput(command);
+    const succeeded = execution ? await execution : false;
     if (this.stopped || this.disposed) return;
     screen.busy = false;
     if (!succeeded) {
