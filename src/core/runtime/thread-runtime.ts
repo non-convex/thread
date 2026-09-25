@@ -102,6 +102,12 @@ export class ThreadRuntime {
       sessionIdForTurn: (turnId) => this.tree.projection.turns.get(turnId)?.sessionId,
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
+      readTurn: (turnId) => {
+        const entries = this.tree.projection.entriesByTurn.get(turnId) ?? [];
+        return (function* () {
+          for (const entry of entries) if (entry.type === "message") yield entry.message;
+        })();
+      },
       protectedWritePaths: this.protectedWritePaths,
       ...(options.dreamer?.maxSteps !== undefined ? { maxSteps: options.dreamer.maxSteps } : {}),
       onEvent: runtimeEventSink({ executionId: "dreamer", agentId: "dreamer", sessionId: null, turnId: null },
@@ -220,7 +226,7 @@ export class ThreadRuntime {
       if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
       const runner = this.createAgentRunner(session.id);
       const result = await runner.run(input, this.runOptions(session.id, signal, options));
-      this.dreamer?.recordTurn(this.tree.messagesForTurn(result.turn.id));
+      this.dreamer?.recordTurn(result.turn.id);
       return result;
     });
   }

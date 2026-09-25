@@ -45,14 +45,3 @@ export interface ReadOptions {
   before?: number;
   after?: number;
 }
-
-export interface SessionTurnDetail {
-  sessionId: string;
-  turnId: string;
-  startedAt: number;
-  finishedAt?: number;
-  status: Turn["status"];
-  pathStatus: HistoryPathStatus;
-  text: string;
-  omitted: string[];
-}

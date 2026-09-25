@@ -15,6 +15,8 @@ export const DREAMER_IDLE_TURNS = 10;
 export const DREAMER_IDLE_MS = 10 * 60_000;
 
 export interface DreamerSchedulerOptions {
+  /** Borrow persisted messages only while reviewing this turn; do not clone or mutate them. */
+  readTurn: (turnId: string) => Iterable<Message>;
   idleTurns?: number;
   idleMs?: number;
   maxRuntimeMs?: number;
@@ -28,9 +30,9 @@ export interface DreamerSchedulerOptions {
 export class DreamerScheduler {
   private profile: AgentProfile | undefined;
   /** Settled turns that have not yet reached a review trigger. */
-  private readonly waitingTurns: Message[][] = [];
+  private readonly waitingTurns: string[] = [];
   /** Triggered snapshot retained across partial completion and retries. */
-  private readonly reviewBacklog: Message[][] = [];
+  private readonly reviewBacklog: string[] = [];
   private foregroundActive = false;
   private foregroundIdleSince = Date.now();
   private retryAfter = 0;
@@ -48,8 +50,8 @@ export class DreamerScheduler {
   constructor(
     private readonly rootPath: string,
     private readonly memoryPath: string,
-    profile?: AgentProfile,
-    private readonly options: DreamerSchedulerOptions = {},
+    profile: AgentProfile | undefined,
+    private readonly options: DreamerSchedulerOptions,
   ) {
     this.profile = profile;
     this.idleTurns = options.idleTurns ?? DREAMER_IDLE_TURNS;
@@ -75,9 +77,9 @@ export class DreamerScheduler {
     this.schedule();
   }
 
-  recordTurn(messages: readonly Message[]): void {
+  recordTurn(turnId: string): void {
     if (!this.enabled) return;
-    this.waitingTurns.push(messages.map((message) => structuredClone(message)));
+    this.waitingTurns.push(turnId);
     this.schedule();
   }
 
@@ -156,15 +158,16 @@ export class DreamerScheduler {
 
   private async runProfile(
     profile: AgentProfile,
-    turns: readonly (readonly Message[])[],
+    turns: readonly string[],
     parentSignal: AbortSignal,
     onBatchReviewed: (turnCount: number) => void,
   ): Promise<void> {
     const timeout = AbortSignal.timeout(this.maxRuntimeMs);
     const signal = AbortSignal.any([parentSignal, timeout]);
-    const batches = createDreamerReviewBatches(this.memoryPath, turns, profile.model.contextWindow);
+    const batches = createDreamerReviewBatches(this.memoryPath, turns, this.options.readTurn, profile.model.contextWindow, signal);
     const reasoning = profile.thinkingLevel === "off" ? undefined : profile.thinkingLevel;
-    for (const batch of batches) {
+    for await (const batch of batches) {
+      signal.throwIfAborted();
       const toolRunner = new ToolCallExecutor(this.rootPath, profile.tools, new ExtensionEvents(), {
         acceptsImages: profile.model.acceptsImages === true,
         writableExternalPaths: [this.memoryPath],

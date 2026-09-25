@@ -4,7 +4,7 @@ import type { Turn } from "../session-tree/model.js";
 import { cooperativeYield } from "../utils/async.js";
 import { documentsHash, extractDocuments, fragment, keywordFragments } from "./documents.js";
 import { LocalEmbedding, type EmbeddingEngine } from "./embedding.js";
-import { pathClassifier, readPath, readTurn } from "./reader.js";
+import { pathClassifier, readPathSegments } from "./reader.js";
 import { ZvecRecallIndex } from "./zvec-index.js";
 import type { EmbeddedFragment, ReadOptions, RecallDocument, RecallFragment, RecallSearchHit, RecallSearchResult, RetrievalSource } from "./types.js";
 
@@ -211,8 +211,9 @@ export class SessionRecallService {
     };
   }
 
-  read(sessionId: string, turnId: string, options: ReadOptions = {}) { return readTurn(this.tree, sessionId, turnId, options); }
-  readPath(sessionId: string, turnId: string, options: ReadOptions = {}) { return readPath(this.tree, sessionId, turnId, options); }
+  readPathSegments(sessionId: string, turnId: string, options: ReadOptions, signal: AbortSignal) {
+    return readPathSegments(this.tree, sessionId, turnId, options, signal);
+  }
 
   close(): Promise<void> {
     return this.closing ??= (async () => {

@@ -1,6 +1,8 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { SessionRecallService } from "../session-recall/service.js";
-import type { RecallSearchResult, SessionTurnDetail } from "../session-recall/types.js";
+import type { RecallSearchResult } from "../session-recall/types.js";
+import type { SessionTurnSegments } from "../session-recall/reader.js";
+import { cooperativeYield } from "../utils/async.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
 import { fail } from "./results.js";
@@ -31,42 +33,104 @@ function formatSearch(result: RecallSearchResult): string {
   return [...header, ...body, "", "Semantic hits are related candidates and may not contain the query words. Use session_read with a turn id for original evidence."].join("\n");
 }
 
-function formatTurn(detail: SessionTurnDetail): string {
-  return [
+function* formatTurn(detail: SessionTurnSegments): Generator<string> {
+  yield [
     STALENESS_NOTICE,
     `session: ${detail.sessionId}; turn: ${detail.turnId} [${detail.pathStatus}] ${detail.status}`,
     `started: ${new Date(detail.startedAt).toISOString()}; finished: ${detail.finishedAt ? new Date(detail.finishedAt).toISOString() : "(unfinished)"}`,
     ...(detail.omitted.length ? [`omitted: ${detail.omitted.join(", ")}`] : []),
     "",
-    detail.text || "(no narrative text in this turn)",
-  ].join("\n");
+  ].join("\n") + "\n";
+  const narrative = detail.text[Symbol.iterator]();
+  const first = narrative.next();
+  if (first.done) yield "(no narrative text in this turn)";
+  else {
+    yield first.value;
+    for (let next = narrative.next(); !next.done; next = narrative.next()) yield next.value;
+  }
 }
 
-function formatPath(details: SessionTurnDetail[]): string {
-  return details.map((detail, index) =>
-    `[path turn ${index + 1}/${details.length}]\n${formatTurn(detail)}`
-  ).join("\n\n");
+function* formatPath(details: SessionTurnSegments[]): Generator<string> {
+  for (let index = 0; index < details.length; index++) {
+    if (index) yield "\n\n";
+    yield `[path turn ${index + 1}/${details.length}]\n`;
+    yield* formatTurn(details[index]!);
+  }
 }
 
-function presentReadPage(text: string, offset: number): ToolResult {
-  const buffer = Buffer.from(text, "utf8");
+/** Keep surrogate pairs intact across both chunk boundaries and adjacent narrative parts. */
+function* utf8Chunks(parts: Iterable<string>): Generator<string> {
+  const chunkSize = 8 * 1024;
+  const high = (code: number) => code >= 0xd800 && code <= 0xdbff;
+  const low = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+  let pendingHigh = "";
+  for (const part of parts) {
+    let start = 0;
+    if (pendingHigh && part.length) {
+      if (low(part.charCodeAt(0))) { yield pendingHigh + part.slice(0, 1); start = 1; }
+      else yield pendingHigh;
+      pendingHigh = "";
+    }
+    while (start < part.length) {
+      let end = Math.min(part.length, start + chunkSize);
+      if (end < part.length && high(part.charCodeAt(end - 1)) && low(part.charCodeAt(end))) end--;
+      if (end === part.length && high(part.charCodeAt(end - 1))) {
+        if (end - 1 > start) yield part.slice(start, end - 1);
+        pendingHigh = part.slice(end - 1);
+        break;
+      }
+      yield part.slice(start, end);
+      start = end;
+    }
+  }
+  if (pendingHigh) yield pendingHigh;
+}
+
+async function presentReadPage(details: SessionTurnSegments[], offset: number, signal: AbortSignal): Promise<ToolResult> {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("offset must be a non-negative safe integer");
-  if (offset >= buffer.length) throw new Error(`Offset ${offset} is beyond end of history (${buffer.length} bytes total)`);
-  if ((buffer[offset]! & 0xc0) === 0x80) throw new Error("offset is inside a UTF-8 character; use the continuation offset from the previous result");
-  const paginated = offset > 0 || buffer.length > SESSION_READ_MAX_BYTES;
-  let end = Math.min(buffer.length, offset + SESSION_READ_MAX_BYTES - (paginated ? SESSION_READ_FOOTER_BYTES : 0));
-  // Do not split a Chinese character or emoji between pages.
-  while (end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end--;
-  const more = end < buffer.length;
+  const maybeYield = cooperativeYield();
+  let totalBytes = 0;
+  for (const chunk of utf8Chunks(formatPath(details))) {
+    signal.throwIfAborted();
+    totalBytes += Buffer.byteLength(chunk, "utf8");
+    await maybeYield(signal);
+  }
+  if (offset >= totalBytes) throw new Error(`Offset ${offset} is beyond end of history (${totalBytes} bytes total)`);
+  const paginated = offset > 0 || totalBytes > SESSION_READ_MAX_BYTES;
+  let end = Math.min(totalBytes, offset + SESSION_READ_MAX_BYTES - (paginated ? SESSION_READ_FOOTER_BYTES : 0));
+  const pieces: Buffer[] = [];
+  let at = 0;
+  for (const chunk of utf8Chunks(formatPath(details))) {
+    signal.throwIfAborted();
+    const next = at + Buffer.byteLength(chunk, "utf8");
+    if (next <= offset) { at = next; await maybeYield(signal); continue; }
+    if (at >= end) break;
+    const bytes = Buffer.from(chunk, "utf8");
+    if (offset >= at && (bytes[offset - at]! & 0xc0) === 0x80) {
+      throw new Error("offset is inside a UTF-8 character; use the continuation offset from the previous result");
+    }
+    if (end < next && end < totalBytes) {
+      let localEnd = end - at;
+      // Each chunk begins on a code-point boundary, so the character head is in this chunk.
+      while ((bytes[localEnd]! & 0xc0) === 0x80) localEnd--;
+      end = at + localEnd;
+    }
+    pieces.push(bytes.subarray(Math.max(0, offset - at), end < next ? end - at : bytes.length));
+    if (next >= end) break;
+    at = next;
+    await maybeYield(signal);
+  }
+  const page = Buffer.concat(pieces);
+  const more = end < totalBytes;
   const footer = paginated
-    ? `\n\n[${STALENESS_NOTICE}\nShowing UTF-8 bytes ${offset}–${end - 1} of ${buffer.length}. ${
+    ? `\n\n[${STALENESS_NOTICE}\nShowing UTF-8 bytes ${offset}–${end - 1} of ${totalBytes}. ${
         more ? `Continue with offset=${end} and the same turnId, thinking, toolCalls, toolResults, before, and after options.` : "End of history."
       }]`
     : "";
   return {
-    content: buffer.subarray(offset, end).toString("utf8") + footer,
+    content: page.toString("utf8") + footer,
     isError: false,
-    details: { offset, shownBytes: end - offset, totalBytes: buffer.length, ...(more ? { nextOffset: end } : {}) },
+    details: { offset, shownBytes: end - offset, totalBytes, ...(more ? { nextOffset: end } : {}) },
   };
 }
 
@@ -138,8 +202,8 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
         context.signal.throwIfAborted();
         const sessionId = context.invocation.sessionId;
         if (!sessionId) throw new Error("Session recall requires an invoking session");
-        const details = recall.readPath(sessionId, args.turnId, args);
-        return details.length ? presentReadPage(formatPath(details), args.offset ?? 0) : fail(new Error(`Unknown turn: ${args.turnId}`));
+        const details = await recall.readPathSegments(sessionId, args.turnId, args, context.signal);
+        return details.length ? await presentReadPage(details, args.offset ?? 0, context.signal) : fail(new Error(`Unknown turn: ${args.turnId}`));
       } catch (error) {
         return fail(error);
       }

@@ -1,9 +1,12 @@
 import type { Message } from "@earendil-works/pi-ai";
-import { estimateContextTokens } from "../context/usage.js";
+import { cooperativeYield } from "../utils/async.js";
+import { jsonTextChunks } from "../utils/json-text.js";
+import { estimateTextTokens } from "../context/usage.js";
 
 const DREAMER_REVIEW_CONTEXT_RATIO = 0.5;
 const TRACE_SEGMENT_CHAR_LIMIT = 1_000;
 const TURN_SEPARATOR = "\n\n--- next turn ---\n\n";
+const OMITTED = "\n... [content omitted] ...\n";
 
 export interface DreamerReviewBatch {
   message: Message;
@@ -11,74 +14,124 @@ export interface DreamerReviewBatch {
   estimatedTokens: number;
 }
 
-function textBlocks(content: Message["content"]): string {
-  if (typeof content === "string") return content.trim();
-  return (content as readonly { type: string; text?: string }[])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("\n")
-    .trim();
+/** Keep only the ends of a stream; never copy an unbounded message or turn. */
+class BoundedText {
+  private head = "";
+  private tail = "";
+  private length = 0;
+  constructor(private readonly limit: number) {}
+  append(text: string): void {
+    this.appendRange(text, 0, text.length);
+  }
+  appendRange(text: string, start: number, end: number): void {
+    const size = end - start;
+    if (size <= 0) return;
+    this.length += size;
+    if (this.head.length < this.limit) this.head += text.slice(start, Math.min(end, start + this.limit - this.head.length));
+    this.tail = (this.tail + text.slice(Math.max(start, end - this.limit), end)).slice(-this.limit);
+  }
+  get empty(): boolean { return this.length === 0; }
+  value(): string {
+    if (this.length <= this.limit) return this.head;
+    if (this.limit <= OMITTED.length) return this.head.slice(0, this.limit);
+    const available = this.limit - OMITTED.length;
+    const tailSize = Math.floor(available / 2);
+    return this.head.slice(0, Math.ceil(available / 2)) + OMITTED + (tailSize ? this.tail.slice(-tailSize) : "");
+  }
 }
 
-function abbreviated(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const marker = "\n... [content omitted] ...\n";
-  const available = limit - marker.length;
-  if (available <= 0) return text.slice(0, limit);
-  const start = Math.ceil(available / 2);
-  const end = Math.floor(available / 2);
-  return `${text.slice(0, start)}${marker}${text.slice(text.length - end)}`;
+async function appendTrimmed(to: BoundedText, text: string, signal: AbortSignal,
+  maybeYield: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  let start = 0;
+  let end = text.length;
+  while (start < end && /\s/u.test(text[start]!)) {
+    start++;
+    if (start % (8 * 1024) === 0) await maybeYield(signal);
+  }
+  while (end > start && /\s/u.test(text[end - 1]!)) {
+    end--;
+    if (end % (8 * 1024) === 0) await maybeYield(signal);
+  }
+  to.appendRange(text, start, end);
 }
 
-function toolArguments(value: unknown): string {
+async function toolArguments(value: unknown, signal: AbortSignal, maybeYield: (signal: AbortSignal) => Promise<void>): Promise<string> {
   try {
-    const serialized = JSON.stringify(value, undefined, 2);
-    return serialized === undefined ? "(no arguments)" : abbreviated(serialized, TRACE_SEGMENT_CHAR_LIMIT);
-  } catch {
+    if (value === undefined) return "(no arguments)";
+    const text = new BoundedText(TRACE_SEGMENT_CHAR_LIMIT);
+    for (const part of jsonTextChunks(value, 2)) {
+      signal.throwIfAborted();
+      text.append(part);
+      await maybeYield(signal);
+    }
+    return text.value();
+  } catch (error) {
+    signal.throwIfAborted();
     return "(arguments could not be serialized)";
   }
 }
 
-/** Preserve the interaction and a bounded view of the agent's work trajectory. */
-export function dreamerConversation(messages: readonly Message[]): string {
+async function conversation(messages: Iterable<Message>, limit: number, signal: AbortSignal): Promise<string> {
   const askCalls = new Set<string>();
-  const lines: string[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const text = textBlocks(message.content);
-      if (text) lines.push(`[user]\n${text}`);
-      continue;
+  const result = new BoundedText(limit);
+  const maybeYield = cooperativeYield();
+  let first = true;
+  const section = (heading: string, text: string) => {
+    if (!text) return;
+    if (!first) result.append("\n\n");
+    first = false;
+    result.append(heading);
+    result.append(text);
+  };
+  const textBlocks = async (content: Message["content"], max: number): Promise<string> => {
+    const text = new BoundedText(max);
+    if (typeof content === "string") text.append(content);
+    else {
+      let firstBlock = true;
+      for (const block of content) {
+        if (block.type !== "text") continue;
+        if (!firstBlock) text.append("\n");
+        firstBlock = false;
+        text.append(block.text);
+        await maybeYield(signal);
+      }
     }
-    if (message.role === "assistant") {
+    const trimmed = new BoundedText(max);
+    await appendTrimmed(trimmed, text.value(), signal, maybeYield);
+    return trimmed.value();
+  };
+  for (const message of messages) {
+    signal.throwIfAborted();
+    if (message.role === "user") {
+      section("[user]\n", await textBlocks(message.content, limit));
+    } else if (message.role === "assistant") {
       for (const block of message.content) {
-        if (block.type === "text" && block.text.trim()) {
-          lines.push(`[assistant]\n${block.text.trim()}`);
-        } else if (block.type === "thinking" && block.thinking.trim()) {
-          lines.push(`[assistant reasoning]\n${abbreviated(block.thinking.trim(), TRACE_SEGMENT_CHAR_LIMIT)}`);
+        signal.throwIfAborted();
+        if (block.type === "text") {
+          const text = new BoundedText(limit);
+          await appendTrimmed(text, block.text, signal, maybeYield);
+          section("[assistant]\n", text.value());
+        } else if (block.type === "thinking") {
+          const text = new BoundedText(TRACE_SEGMENT_CHAR_LIMIT);
+          await appendTrimmed(text, block.thinking, signal, maybeYield);
+          section("[assistant reasoning]\n", text.value());
         } else if (block.type === "toolCall") {
           if (block.name === "ask") askCalls.add(block.id);
-          lines.push(`[tool call: ${block.name}]\n${toolArguments(block.arguments)}`);
+          section(`[tool call: ${block.name}]\n`, await toolArguments(block.arguments, signal, maybeYield));
         }
+        await maybeYield(signal);
       }
-      continue;
+    } else if (message.role === "toolResult") {
+      const text = await textBlocks(message.content, TRACE_SEGMENT_CHAR_LIMIT);
+      if (message.toolName === "ask" || askCalls.has(message.toolCallId)) section("[user answer via ask]\n", text);
+      else section(`[tool result: ${message.toolName} · ${message.isError ? "error" : "success"}]\n`, text);
     }
-    if (message.role === "toolResult") {
-      const text = textBlocks(message.content);
-      if (!text) continue;
-      if (message.toolName === "ask" || askCalls.has(message.toolCallId)) {
-        lines.push(`[user answer via ask]\n${abbreviated(text, TRACE_SEGMENT_CHAR_LIMIT)}`);
-      } else {
-        const status = message.isError ? "error" : "success";
-        lines.push(`[tool result: ${message.toolName} · ${status}]\n${abbreviated(text, TRACE_SEGMENT_CHAR_LIMIT)}`);
-      }
-    }
+    await maybeYield(signal);
   }
-  return lines.join("\n\n");
-}
-
-function turnContent(messages: readonly Message[], index: number): string {
-  const conversation = dreamerConversation(messages) || "(no interaction or work trajectory)";
-  return `[turn ${index + 1}]\n${conversation}`;
+  if (!result.empty) return result.value();
+  const empty = new BoundedText(limit);
+  empty.append("(no interaction or work trajectory)");
+  return empty.value();
 }
 
 function reviewMessage(memoryPath: string, content: string, now: Date): Message {
@@ -89,67 +142,52 @@ function reviewMessage(memoryPath: string, content: string, now: Date): Message 
   };
 }
 
-function makeBatch(memoryPath: string, turns: readonly string[], now: Date): DreamerReviewBatch {
-  const message = reviewMessage(memoryPath, turns.join(TURN_SEPARATOR), now);
-  return {
-    message,
-    turnCount: turns.length,
-    estimatedTokens: estimateContextTokens([message]).tokens,
-  };
-}
-
-function fitSingleTurn(memoryPath: string, content: string, maxTokens: number, now: Date): string {
-  if (makeBatch(memoryPath, [content], now).estimatedTokens <= maxTokens) return content;
-
-  let low = 1;
-  let high = content.length;
-  let best: string | undefined;
-  while (low <= high) {
-    const length = Math.floor((low + high) / 2);
-    const candidate = abbreviated(content, length);
-    if (makeBatch(memoryPath, [candidate], now).estimatedTokens <= maxTokens) {
-      best = candidate;
-      low = length + 1;
-    } else {
-      high = length - 1;
-    }
-  }
-  if (best !== undefined) return best;
-
-  const placeholder = "[turn omitted because its review envelope exceeds half of the model context window]";
-  if (makeBatch(memoryPath, [placeholder], now).estimatedTokens <= maxTokens) return placeholder;
-  throw new Error("Dreamer model context window is too small for the review envelope");
-}
-
-/**
- * Keep one review request when the accumulated turns fit within half of the
- * model context window; otherwise split them into the largest complete-turn
- * batches that fit the same limit.
- */
-export function createDreamerReviewBatches(
+/** Read only the next turn when a batch needs it; yield completed batches before continuing. */
+export async function* createDreamerReviewBatches(
   memoryPath: string,
-  turns: readonly (readonly Message[])[],
+  turnIds: readonly string[],
+  readTurn: (turnId: string) => Iterable<Message>,
   contextWindow: number,
+  signal: AbortSignal,
   now = new Date(),
-): DreamerReviewBatch[] {
-  if (turns.length === 0) return [];
+): AsyncGenerator<DreamerReviewBatch> {
   const maxTokens = Math.max(1, Math.floor(contextWindow * DREAMER_REVIEW_CONTEXT_RATIO));
-  const contents = turns.map(turnContent);
-  const combined = makeBatch(memoryPath, contents, now);
-  if (combined.estimatedTokens <= maxTokens) return [combined];
-
-  const fitted = contents.map((content) => fitSingleTurn(memoryPath, content, maxTokens, now));
-  const batches: DreamerReviewBatch[] = [];
+  const envelopeLength = (reviewMessage(memoryPath, "", now).content as string).length;
+  const maxChars = maxTokens * 4 - envelopeLength;
+  if (turnIds.length && maxChars < 1) throw new Error("Dreamer model context window is too small for the review envelope");
+  const maybeYield = cooperativeYield();
   let current: string[] = [];
-  for (const content of fitted) {
-    const candidate = makeBatch(memoryPath, [...current, content], now);
-    if (current.length > 0 && candidate.estimatedTokens > maxTokens) {
-      batches.push(makeBatch(memoryPath, current, now));
-      current = [content];
-    } else {
-      current.push(content);
+  let currentLength = 0;
+  const batch = (): DreamerReviewBatch => {
+    const message = reviewMessage(memoryPath, current.join(TURN_SEPARATOR), now);
+    return { message, turnCount: current.length, estimatedTokens: estimateTextTokens(message.content as string) };
+  };
+  for (let index = 0; index < turnIds.length; index++) {
+    signal.throwIfAborted();
+    const heading = `[turn ${index + 1}]\n`;
+    let content: string;
+    try {
+      if (maxChars < heading.length) throw new Error("Dreamer model context window is too small for the review envelope");
+      content = heading + await conversation(readTurn(turnIds[index]!), maxChars - heading.length, signal);
+    } catch (error) {
+      // The already assembled batch can still succeed before the unread turn is retried.
+      if (current.length && !signal.aborted) {
+        yield batch();
+        current = [];
+      }
+      throw error;
     }
+    if (current.length && currentLength + TURN_SEPARATOR.length + content.length > maxChars) {
+      yield batch();
+      current = [];
+      currentLength = 0;
+    }
+    current.push(content);
+    currentLength += (current.length > 1 ? TURN_SEPARATOR.length : 0) + content.length;
+    await maybeYield(signal);
   }
-  if (current.length > 0) batches.push(makeBatch(memoryPath, current, now));
-  return batches;
+  if (current.length) {
+    signal.throwIfAborted();
+    yield batch();
+  }
 }
