@@ -133,7 +133,7 @@ CLI 和 `ThreadApp` 默认把实际的 Thread 数据目录加入主 agent 的可
 
 目录授权保留现有的真实路径检查、写入版本检查、同路径协调、全局记忆更新检查和宿主策略，不会把项目外文件加入项目 checkpoint，`/rewind` 不会恢复这些外部修改。授权也不提供与 runtime 自身的日志追加、状态落盘或数据库写入之间的事务协调。提示词要求避免直接改写正在使用的会话日志、数据库和锁文件；这类维护应通过对应服务或在 Thread 停止后进行。配置可能含有凭据，应尽量只读取和修改相关部分。CLI 模型配置在启动时加载，修改 `config.json` 后需要重启 Thread。
 
-`skills: { paths: [...] }` 只在启动时扫描声明的目录。相对路径以 `rootPath` 为基准，多个目录按声明顺序加载；同一文件去重，同名 Skill 保留先声明项并报告诊断。runtime 不自动扫描 `${THREAD_HOME}/skills` 或其他全局路径。宿主也可传入已加载的 `LoadedSkills`，形如 `{ skills, diagnostics }`。
+`skills: { paths: [...] }` 只在启动时扫描声明的目录。相对路径以 `rootPath` 为基准，多个目录按声明顺序加载；扫描按目录真实路径去重，不沿循环目录链接反复展开。同一文件去重，同名 Skill 保留先声明项并报告诊断。runtime 不自动扫描 `${THREAD_HOME}/skills` 或其他全局路径。宿主也可传入已加载的 `LoadedSkills`，形如 `{ skills, diagnostics }`。
 
 CLI 和 `ThreadApp` 自动把配置的 Skill 扫描目录加入可写目录，默认是 `${THREAD_HOME}/skills`（未设置 `THREAD_HOME` 时为 `~/.thread/skills`）。主 agent 可用内置 `edit`、`write` 修改其中的 `SKILL.md`、脚本和参考文件，也可以创建新 Skill。裸 `ThreadRuntime` 的 Skill 加载配置不授予写权限，外部目录需显式传入 `writableExternalDirectories`。Skill 仍在启动时加载，修改后重新打开应用才会更新已加载的内容。
 

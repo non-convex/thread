@@ -179,9 +179,31 @@ async function entryKind(
 }
 
 /** Stop at SKILL.md roots so companion scripts and references are not scanned as skills. */
-async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<LoadedSkills> {
+async function scanDirectory(dir: string, includeLooseFiles: boolean, visited: Map<string, boolean>): Promise<LoadedSkills> {
   const skills: Skill[] = [];
   const diagnostics: SkillDiagnostic[] = [];
+  let canonical: string;
+  try {
+    canonical = await realpath(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      diagnostics.push({
+        kind: "unreadable",
+        message: error instanceof Error ? error.message : String(error),
+        path: dir,
+      });
+    }
+    return { skills, diagnostics };
+  }
+  if (process.platform === "win32") canonical = canonical.toLowerCase();
+  const previous = visited.get(canonical);
+  if (previous === true || (previous === false && !includeLooseFiles)) return { skills, diagnostics };
+  // A directory first reached recursively may later be an explicit root: only
+  // its loose .md files remain to be scanned. Mark it before reading to break cycles.
+  const looseOnly = previous === false;
+  visited.set(canonical, includeLooseFiles);
+
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -199,8 +221,15 @@ async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<L
 
   const declaring = entries.find((entry) => entry.name === "SKILL.md");
   if (declaring && (await entryKind(dir, declaring)) === "file") {
+    if (looseOnly) return { skills, diagnostics };
     const result = await loadSkillFile(path.join(dir, "SKILL.md"));
     if (result.skill) skills.push(result.skill);
+    else {
+      // A directory alias can fail the name/directory-name check while the
+      // real directory is valid. This leaf never recurses, so permit another
+      // declared path to load it without reopening a directory cycle.
+      visited.delete(canonical);
+    }
     diagnostics.push(...result.diagnostics);
     return { skills, diagnostics };
   }
@@ -210,7 +239,8 @@ async function scanDirectory(dir: string, includeLooseFiles: boolean): Promise<L
     const kind = await entryKind(dir, entry);
     const fullPath = path.join(dir, entry.name);
     if (kind === "directory") {
-      const nested = await scanDirectory(fullPath, false);
+      if (looseOnly) continue;
+      const nested = await scanDirectory(fullPath, false, visited);
       skills.push(...nested.skills);
       diagnostics.push(...nested.diagnostics);
       continue;
@@ -228,9 +258,10 @@ export async function loadSkills(paths: string | readonly string[] = skillsDirec
   const directories = (typeof paths === "string" ? [paths] : [...paths]).map((directory) => path.resolve(directory));
   const byName = new Map<string, Skill>();
   const seenPaths = new Set<string>();
+  const visitedDirectories = new Map<string, boolean>();
   const diagnostics: SkillDiagnostic[] = [];
   for (const directory of directories) {
-    const found = await scanDirectory(directory, true);
+    const found = await scanDirectory(directory, true, visitedDirectories);
     diagnostics.push(...found.diagnostics);
     for (const skill of found.skills) {
       let canonical = skill.filePath;
