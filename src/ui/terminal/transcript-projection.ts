@@ -71,6 +71,7 @@ function messageBlocks(
 
 function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
   const { task } = input;
+  const prompt = task.trace.find((entry) => entry.kind === "message" && entry.message.role === "user");
   const finalAssistantId = task.trace.findLast((entry) => entry.kind === "message" && entry.message.role === "assistant")?.entryId;
   const facts = new Map(task.trace.filter((entry) => entry.kind === "tool_execution").map((entry) => [entry.fact.toolCallId, entry.fact]));
   const results = new Map(task.trace.flatMap((entry) => entry.kind !== "tool_execution" && entry.message.role === "toolResult"
@@ -82,8 +83,12 @@ function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
     rendered.add(id);
     return [projectTool(result, facts.get(id), call)];
   };
-  return { summary: input.summary, trace: task.trace.flatMap((entry) => entry.kind === "tool_execution"
-    ? [] : messageBlocks(entry.message, entry.entryId, tool, entry.entryId === finalAssistantId)) };
+  return {
+    summary: input.summary,
+    ...(prompt?.kind === "message" ? { prompt: textContent(prompt.message.content) } : {}),
+    trace: task.trace.flatMap((entry) => entry.kind === "tool_execution"
+      ? [] : messageBlocks(entry.message, entry.entryId, tool, entry.entryId === finalAssistantId)),
+  };
 }
 
 export function projectTranscript(entries: readonly SessionEntry[], tasks: readonly AgentTaskHistoryProjection[] = []): TranscriptItem[] {

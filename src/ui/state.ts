@@ -21,6 +21,8 @@ export interface TranscriptItem {
 
 export interface AgentTaskCard {
   summary: AgentTaskSummary;
+  /** Initial task input actually sent to the worker; absent before it starts. */
+  prompt?: string;
   trace: LiveBlock[];
 }
 

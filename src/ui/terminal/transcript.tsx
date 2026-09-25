@@ -1,6 +1,6 @@
 import { MouseButton, type ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createMemo, createSignal, Match, Show, Switch, type Accessor } from "solid-js";
+import { createMemo, createSignal, Match, onCleanup, Show, Switch, type Accessor } from "solid-js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem } from "../state.js";
 import { bold, dim, italic, STATUS_ICONS, TRANSCRIPT_MARKS } from "./theme.js";
 import { groupTranscriptTurns, projectLiveUser } from "./transcript-projection.js";
@@ -11,6 +11,7 @@ import type { ThreadViewResources } from "./resources.js";
 import { SpinnerText } from "./spinner.js";
 import { createTranscriptExpansion, type TranscriptExpansion } from "./transcript-expansion.js";
 import { TranscriptWindow } from "./transcript-window.js";
+import { wheelScrollAcceleration } from "./scroll.js";
 
 function elapsedLabel(startedAt: number | undefined, finishedAt: number | undefined): string | undefined {
   if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return undefined;
@@ -96,13 +97,72 @@ function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResource
 
 type ExpansionStore = ReturnType<typeof createTranscriptExpansion>;
 
+/** The same task input and trace are available from the dock and historical task rows. */
+export function AgentTaskDetailsView(props: {
+  card: Accessor<AgentTaskCard>; resources: ThreadViewResources; copyText: CopyText;
+  expansions: ExpansionStore; height: number;
+  setScroll?: (value: ScrollBoxRenderable | undefined) => void;
+}) {
+  const renderer = useRenderer();
+  const theme = props.resources.theme;
+  const [tab, setTab] = createSignal<"prompt" | "trace">("prompt");
+  const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
+  onCleanup(() => props.setScroll?.(undefined));
+  return <box width="100%" height={props.height} flexShrink={0} flexDirection="column">
+    <box width="100%" height={1} flexShrink={0} flexDirection="row" gap={2}>
+      {(["prompt", "trace"] as const).map((value) =>
+        <text height={1} wrapMode="none" selectable={false} fg={tab() === value ? theme.accent : theme.muted}
+          attributes={tab() === value ? bold : 0}
+          onMouseUp={(event) => {
+            if (event.button !== MouseButton.LEFT || event.isDragging || renderer.getSelection()?.getSelectedText()) return;
+            event.stopPropagation();
+            setTab(value);
+          }}>{value === "prompt" ? "Prompt" : "Trace"}</text>
+      )}
+    </box>
+    <Show when={tab()} keyed>
+      {(active: "prompt" | "trace") => <scrollbox
+        ref={(value) => { setScroll(value); props.setScroll?.(value); }} width="100%" height={Math.max(1, props.height - 1)}
+        flexShrink={0} stickyScroll={active === "trace"} stickyStart={active === "trace" ? "bottom" : "top"}
+        viewportCulling={true} scrollAcceleration={wheelScrollAcceleration} verticalScrollbarOptions={{ visible: false }}>
+        <Show when={active === "prompt"} fallback={
+          <>
+            <text width="100%" flexShrink={0} wrapMode="word" fg={theme.nameAccent} marginBottom={1}>
+              {props.card().summary.providerId}/{props.card().summary.modelId}
+            </text>
+            <TranscriptWindow items={props.card().trace} scroll={scroll}>
+              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
+            </TranscriptWindow>
+            <Show when={!props.card().trace.length}>
+              <text fg={theme.muted}>{props.card().summary.status === "running" ? "waiting for output…" : "No trace recorded."}</text>
+            </Show>
+            <Show when={props.card().summary.error}>
+              <text width="100%" wrapMode="word" flexShrink={0} fg={theme.error}>{props.card().summary.error}</text>
+            </Show>
+          </>
+        }>
+          <Show when={props.card().prompt} fallback={
+            <text width="100%" wrapMode="word" fg={theme.muted}>
+              {props.card().summary.status === "running" ? "Waiting for worker input…" : "No task prompt was recorded."}
+            </text>
+          }>
+            <box width="100%" flexDirection="column" flexShrink={0}>
+              <ReplyCopyButton content={props.card().prompt!} resources={props.resources} copyText={props.copyText} />
+              <text width="100%" wrapMode="word" flexShrink={0} fg={theme.softText}>{props.card().prompt}</text>
+            </box>
+          </Show>
+        </Show>
+      </scrollbox>}
+    </Show>
+  </box>;
+}
+
 function AgentTaskCardView(props: {
   card: Accessor<AgentTaskCard>; resources: ThreadViewResources; expansion: TranscriptExpansion; expansions: ExpansionStore;
   copyText: CopyText;
 }) {
   const renderer = useRenderer();
   const expanded = props.expansion.expanded;
-  const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const summary = () => props.card().summary;
   const elapsed = () => `${(summary().elapsedMs / 1000).toFixed(1)}s`;
   const usage = () => summary().usage?.totalTokens ?? 0;
@@ -141,16 +201,8 @@ function AgentTaskCardView(props: {
         <box flexDirection="row" width="100%" paddingTop={1}>
           <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.faint} selectable={false}>{TRANSCRIPT_MARKS.result}</text>
           <box flexDirection="column" flexBasis={0} flexGrow={1} minWidth={1}>
-            <scrollbox id={`task-trace:${summary().taskId}`} ref={setScroll} height={Math.max(3, Math.min(20, props.card().trace.length * 8))}
-              width="100%" flexShrink={0} stickyScroll={true} stickyStart="bottom" viewportCulling={true}
-              verticalScrollbarOptions={{ visible: false }}>
-              <TranscriptWindow items={props.card().trace} scroll={scroll}>
-                {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
-              </TranscriptWindow>
-            </scrollbox>
-            <Show when={summary().error}>
-              {(error: Accessor<string>) => <text fg={theme.error} wrapMode="word">{error()}</text>}
-            </Show>
+            <AgentTaskDetailsView card={props.card} resources={props.resources} copyText={props.copyText}
+              expansions={props.expansions} height={20} />
           </box>
         </box>
       </Show>
