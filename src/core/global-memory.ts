@@ -13,7 +13,7 @@ export function getGlobalMemoryPath(): string {
   return path.join(getThreadHome(), GLOBAL_MEMORY_FILE);
 }
 
-export type GlobalMemoryCommit = (before: FileContents | undefined, content: Buffer) => Promise<void>;
+export type GlobalMemoryCommit = (before: FileContents | undefined, content: Buffer, beforeCommit: () => Promise<void>) => Promise<void>;
 type MemoryInvocation = Pick<ToolContext, "rootPath" | "signal" | "invocation">;
 
 // Shared by runtimes in this process; entries disappear when their I/O settles.
@@ -82,7 +82,7 @@ export class GlobalMemoryAccess {
   async write<T>(target: string, context: MemoryInvocation, operation: (commit?: GlobalMemoryCommit) => Promise<T>): Promise<T> {
     const memory = await this.memoryTarget(target, context.rootPath);
     if (!memory) return operation();
-    return this.exclusive(memory, context.signal, () => operation(async (before, content) => {
+    return this.exclusive(memory, context.signal, () => operation(async (before, content, beforeCommit) => {
       const observed = this.observed;
       // Eager reads in this response (or a discarded retry) have not informed the model yet.
       if (!observed?.visible) {
@@ -92,7 +92,8 @@ export class GlobalMemoryAccess {
         this.observed = undefined;
         throw new Error("Global memory changed since it was read. Re-read it in a separate step and regenerate the update.");
       }
-      await atomicFile(memory, content, { ...(before ? { mode: before.mode } : {}), signal: context.signal });
+      await atomicFile(memory, content, { ...(before ? { mode: before.mode } : {}), overwrite: before !== undefined,
+        signal: context.signal, beforeCommit });
       this.observed = { ...observed, content: Buffer.from(content) };
     }));
   }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
   ProjectSession,
+  FileRewindIntent,
   SessionEntry,
   SessionTree,
   SessionTreeEvent,
@@ -30,6 +31,7 @@ export class SessionTreeProjection {
   readonly entries = new Map<string, SessionEntry>();
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
   readonly liveTips = new Map<string, string | null>();
+  pendingFileRewind: FileRewindIntent | undefined;
   nextSequence = 1;
 
   applyRecord(record: SessionTreeRecord): void {
@@ -46,6 +48,9 @@ export class SessionTreeProjection {
   }
 
   private applyEvent(event: SessionTreeEvent): void {
+    if (this.pendingFileRewind && event.type !== "file_rewind_finished") {
+      throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
+    }
     switch (event.type) {
       case "tree_created":
         if (this.tree) throw new SessionTreeCorruptionError("Session Tree was created more than once");
@@ -179,6 +184,29 @@ export class SessionTreeProjection {
         this.runningTurnsBySession.delete(turn.sessionId);
         turn.finishedAt = event.finishedAt;
         if (event.error) turn.error = structuredClone(event.error);
+        return;
+      }
+      case "file_rewind_started": {
+        const rewind = event.rewind;
+        const source = this.turns.get(rewind.fromTurnId);
+        const target = rewind.toTurnId === null ? undefined : this.turns.get(rewind.toTurnId);
+        if (this.runningTurnsBySession.size || !source || source.status === "running" ||
+            source.sessionId !== rewind.sessionId || this.liveTips.get(rewind.sessionId) !== source.id ||
+            rewind.toTurnId === rewind.fromTurnId || !this.isAncestor(rewind.toTurnId, source.id) ||
+            (rewind.toTurnId !== null && (!target || target.sessionId !== rewind.sessionId))) {
+          throw new SessionTreeCorruptionError("Invalid file rewind intent");
+        }
+        this.pendingFileRewind = structuredClone(rewind);
+        return;
+      }
+      case "file_rewind_finished": {
+        const rewind = this.pendingFileRewind;
+        if (!rewind || rewind.sessionId !== event.sessionId || this.liveTips.get(event.sessionId) !== rewind.fromTurnId) {
+          throw new SessionTreeCorruptionError("File rewind finished without a matching intent");
+        }
+        // The file service emits this only after every destination has been restored.
+        this.liveTips.set(event.sessionId, rewind.toTurnId);
+        this.pendingFileRewind = undefined;
         return;
       }
       case "live_tip_changed": {

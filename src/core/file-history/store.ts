@@ -2,6 +2,7 @@ import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Project } from "../project/model.js";
 import { sha256Cooperative } from "../utils/id.js";
+import { syncDirectory } from "../utils/atomic-file.js";
 
 /** Immutable, content-addressed copies of files before an internal edit. */
 export class FileHistoryStore {
@@ -42,6 +43,7 @@ export class FileHistoryStore {
         await this.read(blobId);
       }
       await this.read(blobId);
+      await syncDirectory(path.dirname(target));
       return blobId;
     } finally {
       await rm(temporary, { force: true });

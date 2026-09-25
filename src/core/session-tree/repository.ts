@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdir, readFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { Project } from "../project/model.js";
 import { EventLog, readLogLines } from "../utils/event-log.js";
 import { lockFile } from "../utils/file-lock.js";
+import { atomicJson } from "../utils/atomic-json.js";
 import { SESSION_TREE_FORMAT, type SessionTreeEvent, type SessionTreeRecord } from "./model.js";
 import { SessionTreeCorruptionError, SessionTreeProjection } from "./projection.js";
 
@@ -80,8 +81,8 @@ export class SessionTreeRepository {
 
   async writeManifest(): Promise<void> {
     if (!this.projection.tree) throw new Error("Cannot write a manifest before creating the Session Tree");
-    const content = `${JSON.stringify(this.projection.tree, null, 2)}\n`;
-    return this.log.write(() => writeFile(path.join(this.treePath, "tree.json"), content, "utf8"));
+    const tree = structuredClone(this.projection.tree);
+    return this.log.write(() => atomicJson(path.join(this.treePath, "tree.json"), tree, { pretty: true }));
   }
 
   close(): Promise<void> {

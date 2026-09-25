@@ -84,6 +84,13 @@ export interface CompactionEntry extends EntryBase {
 
 export type SessionEntry = MessageEntry | ToolExecutionEntry | CompactionEntry | FileEditEntry;
 
+/** Durable intent: replay file restoration before accepting more foreground work. */
+export interface FileRewindIntent {
+  sessionId: string;
+  fromTurnId: string;
+  toTurnId: string | null;
+}
+
 export type SessionTreeEvent =
   | { type: "tree_created"; tree: SessionTree }
   | { type: "session_created"; session: ProjectSession }
@@ -91,7 +98,9 @@ export type SessionTreeEvent =
   | { type: "turn_started"; turn: Turn }
   | { type: "entry_appended"; entry: SessionEntry }
   | { type: "turn_finished"; turnId: string; status: Exclude<TurnStatus, "running">; error?: { code: string; message: string }; finishedAt: number }
-  | { type: "live_tip_changed"; sessionId: string; turnId: string | null; reason: "turn" | "rewind" };
+  | { type: "live_tip_changed"; sessionId: string; turnId: string | null; reason: "turn" | "rewind" }
+  | { type: "file_rewind_started"; rewind: FileRewindIntent }
+  | { type: "file_rewind_finished"; sessionId: string };
 
 export type SessionTreeRecord =
   | ({ sequence: number; timestamp: number } & SessionTreeEvent)

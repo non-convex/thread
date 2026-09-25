@@ -44,6 +44,9 @@ export async function openRuntimeResources(options: RuntimeOptionsSnapshot): Pro
       ? await GlobalMemorySnapshots.open([...tree.projection.sessions.keys()], path.resolve(options.globalMemoryPath)) : undefined;
     const fileHistory = new FileHistoryService(project, tree,
       [options.stateDirectory ?? getThreadHome(), ...protectedWritePaths, ...(memory ? [memory.filePath] : [])], options.fileCheckpoints ?? false);
+    // A committed rewind intent is completed before any host or agent can use
+    // the project again, even if checkpoints were disabled on this new open.
+    await fileHistory.resumePendingRewind();
     recall = options.search ? new SessionRecallService(tree, options.search) : undefined;
     taskRepository = await AgentTaskRepository.open(project);
     return { project, repository, tree, fileHistory, skills, recall, taskRepository, memory, protectedWritePaths };

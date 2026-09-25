@@ -1,10 +1,11 @@
-import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Project } from "../project/model.js";
 import type { FileEditEntry, Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import { isPathInside, realPath, resolveWorkspacePath } from "../tools/path-safety.js";
 import { FileHistoryStore } from "./store.js";
+import { atomicFile, syncDirectory } from "../utils/atomic-file.js";
 
 export interface FileContents {
   content: Buffer;
@@ -92,8 +93,59 @@ export class FileHistoryService {
       .filter((entry): entry is FileEditEntry => entry.type === "file_edit"));
   }
 
-  async restore(turns: readonly Turn[]): Promise<void> {
+  async rewind(turns: readonly Turn[]): Promise<void> {
+    this.tree.requireIdle();
     if (!this.captureEnabled) throw new Error("File checkpoints are disabled for this runtime");
+    const first = turns[0];
+    const last = turns.at(-1);
+    if (!first || !last) throw new Error("File rewind requires at least one turn");
+    // Invalid backups or paths must fail before an intent is committed.
+    await this.prepareRestore(turns);
+    await this.tree.beginFileRewind({ sessionId: first.sessionId, fromTurnId: last.id, toTurnId: first.parentTurnId });
+    await this.resumePendingRewind();
+  }
+
+  /** Replaying the original before-images is idempotent, including deletions. */
+  async resumePendingRewind(): Promise<void> {
+    const rewind = this.tree.projection.pendingFileRewind;
+    if (!rewind) return;
+    try {
+      const sourcePath = this.tree.pathToTurn(rewind.fromTurnId);
+      const start = rewind.toTurnId === null ? 0 : sourcePath.findIndex((turn) => turn.id === rewind.toTurnId) + 1;
+      if (rewind.toTurnId !== null && start === 0) throw new Error("File rewind target is not an ancestor of its source");
+      const selected = await this.prepareRestore(sourcePath.slice(start));
+      for (const entry of selected) {
+        const target = await this.restorePath(entry.path);
+        if (!entry.before) {
+          // Absence is already the desired state; its parent may be absent too.
+          const exists = await lstat(target).then(() => true, (error) => {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            return false;
+          });
+          if (exists) {
+            await rm(target);
+            await syncDirectory(path.dirname(target));
+          }
+        } else {
+          const content = await this.store.read(entry.before.blobId);
+          await atomicFile(target, content, {
+            mode: entry.before.mode,
+            beforeCommit: async () => {
+              if (pathKey(await this.restorePath(entry.path)) !== pathKey(target)) {
+                throw new Error(`File history target changed while restoring: ${entry.path}`);
+              }
+            },
+          });
+        }
+      }
+      await this.tree.finishFileRewind();
+    } catch (cause) {
+      throw new Error(`File rewind is unfinished: ${cause instanceof Error ? cause.message : String(cause)}. ` +
+        "Some files may already be restored. Resolve the file error and reopen the project; recovery will restore all recorded paths again before accepting new work.", { cause });
+    }
+  }
+
+  private async prepareRestore(turns: readonly Turn[]): Promise<FileEditEntry[]> {
     const untracked = turns.find((turn) => turn.fileCheckpoints === false);
     if (untracked) throw new Error(`Cannot restore files across turn ${untracked.id}: file checkpoints were disabled`);
     const selected = new Map<string, FileEditEntry>();
@@ -101,22 +153,11 @@ export class FileHistoryService {
       const key = pathKey(entry.path);
       if (!selected.has(key)) selected.set(key, entry);
     }
-    // Validate all sources and destinations before changing the first file.
     for (const entry of selected.values()) {
       await this.restorePath(entry.path);
       if (entry.before) await this.store.read(entry.before.blobId);
     }
-    for (const entry of selected.values()) {
-      const target = await this.restorePath(entry.path);
-      if (!entry.before) {
-        await rm(target, { force: true });
-      } else {
-        const content = await this.store.read(entry.before.blobId);
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, content);
-        await chmod(target, entry.before.mode);
-      }
-    }
+    return [...selected.values()];
   }
 
   private async restorePath(relative: string): Promise<string> {

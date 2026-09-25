@@ -1,6 +1,6 @@
 import type { Stats } from "node:fs";
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { atomicFile } from "../utils/atomic-file.js";
 import type { FileContents, SaveBeforeWrite } from "../file-history/service.js";
 import type { GlobalMemoryCommit } from "../global-memory.js";
 import { assertFileWriteScope, samePath } from "./path-safety.js";
@@ -47,20 +47,25 @@ export async function updateFile(
     const content = transform(before);
     if (!before?.content.equals(content)) {
       await save(before);
-      context.signal.throwIfAborted();
-      if (!samePath(await resolveTarget(), target)) throw new Error(`File target changed while preparing to write: ${inputPath}`);
-      const current = await lstat(target).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        return undefined;
+      const beforeCommit = async () => {
+        context.signal.throwIfAborted();
+        if (!samePath(await resolveTarget(), target)) throw new Error(`File target changed while preparing to write: ${inputPath}`);
+        const current = await lstat(target).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          return undefined;
+        });
+        if (beforeInfo ? !current || fileStatVersion(current) !== fileStatVersion(beforeInfo) : current !== undefined) {
+          throw new Error(`File changed before the write: ${inputPath}. Read it again and regenerate the change.`);
+        }
+      };
+      await beforeCommit();
+      if (commit) await commit(before, content, beforeCommit);
+      else await atomicFile(target, content, {
+        ...(before ? { mode: before.mode } : {}),
+        overwrite: before !== undefined,
+        signal: context.signal,
+        beforeCommit,
       });
-      if (beforeInfo ? !current || fileStatVersion(current) !== fileStatVersion(beforeInfo) : current !== undefined) {
-        throw new Error(`File changed before the write: ${inputPath}. Read it again and regenerate the change.`);
-      }
-      if (commit) await commit(before, content);
-      else {
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, content, { flag: before ? "w" : "wx", signal: context.signal });
-      }
     }
     if (!canRemember) return { existed: before !== undefined, bytes: content.length };
     // Use the bytes we wrote, not a later stat that could describe another editor's write.

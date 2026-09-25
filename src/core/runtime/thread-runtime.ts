@@ -245,12 +245,14 @@ export class ThreadRuntime {
       const candidate = this.tree.resolveRewindCandidate(turnIdOrUserEntryId, session.id);
       const livePath = this.tree.livePath(session.id);
       signal.throwIfAborted();
-      // Once restoration begins, complete it and the corresponding live-tip write together.
-      if (options.restoreFiles ?? this.fileCheckpoints) {
-        await this.files.restore(livePath.slice(livePath.findIndex((turn) => turn.id === candidate.turnId)));
-      }
       const turn = this.tree.projection.turns.get(candidate.turnId)!;
-      await this.tree.moveLiveTipForRewind(turn.parentTurnId, session.id);
+      // Once admitted, restoration ignores cancellation. An interrupted restore
+      // retains its durable intent and is completed when the project reopens.
+      if (options.restoreFiles ?? this.fileCheckpoints) {
+        await this.files.rewind(livePath.slice(livePath.findIndex((item) => item.id === candidate.turnId)));
+      } else {
+        await this.tree.moveLiveTipForRewind(turn.parentTurnId, session.id);
+      }
       this.publish({ executionId: session.id, agentId: "main", timestamp: Date.now(), type: "session_changed", sessionId: session.id, turnId: turn.parentTurnId,
         liveTipTurnId: turn.parentTurnId, reason: "rewind" });
       return candidate;

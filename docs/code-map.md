@@ -26,7 +26,9 @@ Model discovery, provider configuration and login belong to `agent/model-catalog
 
 The Session Tree and worker-task repositories own their record formats and projections. Both use `core/utils/event-log.ts` for ordered writes, durability barriers, interrupted-tail recovery and draining accepted writes during close. Projection updates remain synchronous; a durable append waits for its write before returning.
 
-Session Tree and credential storage use `core/utils/file-lock.ts`. The operating system owns the lock, and closing the handle releases it. The lock file stays in place. JSON snapshots and preference files share the atomic replacement helper in `atomic-json.ts`.
+Session Tree and credential storage use `core/utils/file-lock.ts`. The operating system owns the lock, and closing the handle releases it. The lock file stays in place. JSON snapshots, including the Session Tree manifest, share `atomic-json.ts`. Built-in file tools and rewind use the underlying `atomic-file.ts` helper to prepare complete files before publishing them.
+
+A file rewind records its source and target in the Session Tree before changing the workspace. Its completion event moves the live tip only after all restores succeed. If restoration fails, foreground work remains blocked; startup resumes the saved intent before exposing the runtime. Conversation-only rewind still moves the tip without a file-restoration intent.
 
 File-tool resource claims are built by `tools/execution.ts`. Actual writes still go through `tools/file-write.ts`, where path checks, worker write scopes, same-path coordination and optional checkpoints are enforced. Sharing a claim helper does not replace the write-time checks.
 

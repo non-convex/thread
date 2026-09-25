@@ -14,6 +14,7 @@ import {
   type CompactionEntry,
   type CompactionReason,
   type FileEditEntry,
+  type FileRewindIntent,
   type MessageEntry,
   type ProjectSession,
   type RetainedTurn,
@@ -259,6 +260,17 @@ export class SessionTreeService {
     return structuredClone(this.projection.turns.get(turnId)!);
   }
 
+  async beginFileRewind(rewind: FileRewindIntent): Promise<void> {
+    this.requireIdle();
+    await this.repository.append(() => ({ type: "file_rewind_started", rewind }), true);
+  }
+
+  async finishFileRewind(): Promise<void> {
+    const rewind = this.projection.pendingFileRewind;
+    if (!rewind) throw new Error("No file rewind is pending");
+    await this.repository.append(() => ({ type: "file_rewind_finished", sessionId: rewind.sessionId }), true);
+  }
+
   async moveLiveTipForRewind(turnId: string | null, sessionId: string): Promise<void> {
     this.requireIdle();
     await this.repository.append(() => ({
@@ -313,6 +325,9 @@ export class SessionTreeService {
   }
 
   requireIdle(): void {
+    if (this.projection.pendingFileRewind) {
+      throw new Error("A file rewind is unfinished. Resolve the reported file error and reopen the project to resume it before continuing.");
+    }
     const running = this.projection.runningTurnsBySession.values().next().value;
     if (running) throw new Error(`Turn ${running.id} is still running`);
   }
