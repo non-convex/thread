@@ -27,25 +27,27 @@ export function handleAskKey(screen: AskScreen, key: TerminalKey, ask: AskServic
     }
   };
   const typed = printableKey(key);
-  if (typed) { screen.customText = (screen.customText ?? "") + typed; return; }
   if (screen.customText !== undefined) {
-    if (key.name === "escape") screen.customText = undefined;
+    if (typed) screen.customText += typed;
+    else if (key.name === "space" && !key.ctrl && !key.meta) screen.customText += " ";
+    else if (key.name === "escape") screen.customText = undefined;
     else if (isEnter(key) && screen.customText.trim()) commit([screen.customText.trim()]);
     else if (key.name === "backspace") screen.customText = screen.customText.slice(0, -1);
     return;
   }
+  // In a multiple-choice question, Space toggles the focused option rather than starting free text.
+  if (key.name === "space" && question.multiple && !key.ctrl && !key.meta) {
+    const chosen = screen.chosen[screen.questionIndex] ?? [];
+    screen.chosen[screen.questionIndex] = chosen.includes(screen.selected)
+      ? chosen.filter((index) => index !== screen.selected) : [...chosen, screen.selected];
+    return;
+  }
+  if (typed) { screen.customText = typed; return; }
   switch (key.name) {
     case "escape": ask.dismiss(screen.request.id); return;
     case "up":
     case "down":
       if (question.options.length) screen.selected = (screen.selected + (key.name === "up" ? -1 : 1) + question.options.length) % question.options.length;
-      return;
-    case "space":
-      if (question.multiple) {
-        const chosen = screen.chosen[screen.questionIndex] ?? [];
-        screen.chosen[screen.questionIndex] = chosen.includes(screen.selected)
-          ? chosen.filter((index) => index !== screen.selected) : [...chosen, screen.selected];
-      }
       return;
     default:
       if (isEnter(key)) {

@@ -174,6 +174,7 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 - 当前已生效项用 `●` 和 `accent`，与光标选中分开。
 - 模型和 rewind 的窗口最多 8 项；命令、Session 和 Skill 的窗口最多 6 项，每项两行，分别显示名称和说明。Ask 的选项由工具上限收在 4 个。
 - 方向键只改 view 里的 selection signal，不经 controller `notify()`，避免整棵 session 树跟着闪。
+- Ask 多选在未开始自由回答时用空格勾选／取消当前选项；已开始自由回答后空格照常输入文本。
 
 ## 状态与页脚
 
