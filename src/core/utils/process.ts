@@ -48,14 +48,15 @@ class ByteTail {
     this.stored += chunk.length;
     while (this.stored > this.max && this.chunks.length > 0) {
       this.dropped = true;
-      if (this.chunks.length === 1) {
-        const buffer = this.chunks[0]!;
-        this.chunks[0] = buffer.subarray(Math.max(0, buffer.length - this.max));
-        this.stored = this.chunks[0]!.length;
-        break;
+      const excess = this.stored - this.max;
+      const oldest = this.chunks[0]!;
+      if (oldest.length <= excess) {
+        this.chunks.shift();
+        this.stored -= oldest.length;
+      } else {
+        this.chunks[0] = oldest.subarray(excess);
+        this.stored -= excess;
       }
-      const removed = this.chunks.shift()!;
-      this.stored -= removed.length;
     }
   }
 
