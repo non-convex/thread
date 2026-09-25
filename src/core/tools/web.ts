@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { yieldToEventLoop } from "../utils/async.js";
-import { ACCEPT_HEADERS, readBoundedBody, textualMime, extractTextFromHtmlResponsive, convertHtmlToMarkdown, pageContent } from "./web-content.js";
+import { ACCEPT_HEADERS, discardResponseBody, readBoundedBody, textualMime, extractTextFromHtmlResponsive, convertHtmlToMarkdown, pageContent } from "./web-content.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool } from "./types.js";
 import { ok, fail } from "./results.js";
@@ -21,6 +21,7 @@ const PARALLEL_URL = "https://search.parallel.ai/mcp";
 const USER_AGENT = "thread/0.1.0";
 const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 export type WebSearchProvider = "exa" | "parallel";
 export type WebFetchFormat = "text" | "markdown" | "html";
@@ -190,7 +191,10 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
             params: { name: request.tool, arguments: request.arguments },
           }),
         });
-        if (!response.ok) throw new Error(`${provider} web search failed with HTTP ${response.status}`);
+        if (!response.ok) {
+          await discardResponseBody(response);
+          throw new Error(`${provider} web search failed with HTTP ${response.status}`);
+        }
         const body = (await readBoundedBody(response, WEB_SEARCH_RESPONSE_LIMIT_BYTES, signal)).toString("utf8");
         const result = parseMcpSearchResponse(body);
         if (result === undefined) throw new Error("Invalid web search response: no result received");
@@ -207,7 +211,7 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
   return {
     name: "webfetch",
     description:
-      `Fetch an HTTP(S) URL and return text, Markdown, or HTML in pages of ${WEB_FETCH_DEFAULT_CHARACTERS} characters by default. Use offset/limit for more content; each call fetches the URL again. Prefer websearch first when the URL is unknown.`,
+      `Fetch an HTTP(S) URL and return text, Markdown, or HTML in pages of ${WEB_FETCH_DEFAULT_CHARACTERS} characters by default. Use offset/limit for more content; each call fetches the URL again. Redirects are not followed: fetch the returned target URL in a new webfetch call, subject to normal host authorization. Prefer websearch first when the URL is unknown.`,
     parameters: Type.Object({
       url: Type.String({ description: "Fully qualified HTTP(S) URL." }),
       format: Type.Optional(
@@ -246,44 +250,62 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
           Accept: ACCEPT_HEADERS[format],
           "Accept-Language": "en-US,en;q=0.9",
         };
-        let response = await fetchImpl(url, { headers, redirect: "follow", signal });
+        let response = await fetchImpl(url, { headers, redirect: "manual", signal });
         if (response.status === 403 && response.headers.get("cf-mitigated") === "challenge") {
+          await discardResponseBody(response);
           response = await fetchImpl(url, {
             headers: { ...headers, "User-Agent": USER_AGENT },
-            redirect: "follow",
+            redirect: "manual",
             signal,
           });
         }
-        if (!response.ok) throw new Error(`Web fetch failed with HTTP ${response.status}`);
-        const finalUrl = new URL(response.url || url);
-        if (finalUrl.protocol !== "http:" && finalUrl.protocol !== "https:") {
-          throw new Error(`Fetch redirected to unsupported protocol ${finalUrl.protocol}`);
-        }
-        const contentType = response.headers.get("content-type") ?? "";
-        const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
-        if (!textualMime(mime)) throw new Error(`Unsupported fetched content type: ${mime || "unknown"}`);
-        const body = await readBoundedBody(response, WEB_FETCH_RESPONSE_LIMIT_BYTES, signal);
-        const content = new TextDecoder().decode(body);
-        let output = content;
-        if (contentType.toLowerCase().includes("text/html")) {
-          if (format === "text") {
-            output = await extractTextFromHtmlResponsive(content, signal);
-          } else if (format === "markdown") {
-            // Turndown itself is synchronous. Yield before a large conversion so
-            // parallel fetch completions cannot begin their CPU phase in one turn.
-            if (content.length > 256 * 1024) await yieldToEventLoop();
-            signal.throwIfAborted();
-            output = convertHtmlToMarkdown(content);
-            signal.throwIfAborted();
+        try {
+          signal.throwIfAborted();
+          if (REDIRECT_STATUSES.has(response.status)) {
+            const location = response.headers.get("location");
+            if (!location) throw new Error(`Web fetch received HTTP ${response.status} without a redirect Location`);
+            const target = new URL(location, url);
+            if ((target.protocol !== "http:" && target.protocol !== "https:") || target.username || target.password) {
+              throw new Error(`Web fetch redirect target ${target.toString()} is not a credential-free HTTP(S) URL`);
+            }
+            const nextUrl = target.toString();
+            return ok(`HTTP ${response.status} redirects to ${nextUrl}. The redirect was not followed. To continue, call webfetch again with url="${nextUrl}" (subject to normal host authorization).`, {
+              url: url.toString(), redirectUrl: nextUrl, status: response.status,
+            });
           }
+          if (!response.ok) throw new Error(`Web fetch failed with HTTP ${response.status}`);
+          const finalUrl = new URL(response.url || url);
+          if (finalUrl.protocol !== "http:" && finalUrl.protocol !== "https:") {
+            throw new Error(`Fetch redirected to unsupported protocol ${finalUrl.protocol}`);
+          }
+          const contentType = response.headers.get("content-type") ?? "";
+          const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
+          if (!textualMime(mime)) throw new Error(`Unsupported fetched content type: ${mime || "unknown"}`);
+          const body = await readBoundedBody(response, WEB_FETCH_RESPONSE_LIMIT_BYTES, signal);
+          const content = new TextDecoder().decode(body);
+          let output = content;
+          if (contentType.toLowerCase().includes("text/html")) {
+            if (format === "text") {
+              output = await extractTextFromHtmlResponsive(content, signal);
+            } else if (format === "markdown") {
+              // Turndown itself is synchronous. Yield before a large conversion so
+              // parallel fetch completions cannot begin their CPU phase in one turn.
+              if (content.length > 256 * 1024) await yieldToEventLoop();
+              signal.throwIfAborted();
+              output = convertHtmlToMarkdown(content);
+              signal.throwIfAborted();
+            }
+          }
+          const { content: page, ...range } = pageContent(output, args.offset ?? 0, args.limit ?? WEB_FETCH_DEFAULT_CHARACTERS);
+          return ok(page, {
+            url: finalUrl.toString(),
+            contentType,
+            format,
+            ...range,
+          });
+        } finally {
+          await discardResponseBody(response);
         }
-        const { content: page, ...range } = pageContent(output, args.offset ?? 0, args.limit ?? WEB_FETCH_DEFAULT_CHARACTERS);
-        return ok(page, {
-          url: finalUrl.toString(),
-          contentType,
-          format,
-          ...range,
-        });
       } catch (error) {
         return fail(error);
       }

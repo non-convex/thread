@@ -9,10 +9,18 @@ export const ACCEPT_HEADERS = {
 };
 const SKIPPED_TAGS = ["script", "style", "noscript", "iframe", "object", "embed"];
 
+/** Cancel a response that will not be consumed, releasing its connection/body. */
+export async function discardResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 /** Bound the decoded response even when Content-Length is missing or incorrect. */
 export async function readBoundedBody(response: Response, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await discardResponseBody(response);
+    throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
+  }
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
@@ -23,12 +31,12 @@ export async function readBoundedBody(response: Response, maxBytes: number, sign
       const chunk = await reader.read();
       if (chunk.done) break;
       total += chunk.value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
-      }
+      if (total > maxBytes) throw new Error(`Response too large (exceeds ${maxBytes} bytes)`);
       chunks.push(Buffer.from(chunk.value));
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally { reader.releaseLock(); }
   return Buffer.concat(chunks, total);
 }
