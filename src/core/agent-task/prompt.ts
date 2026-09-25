@@ -18,8 +18,8 @@ Choose only the tools needed to complete the task. For tasks without file change
 
 Do not duplicate delegated work. Continue independent work, and wait when a result is needed or no useful independent work remains. After completion, inspect changes and check the evidence behind consequential findings without repeating the full investigation. A completed run does not guarantee acceptance criteria were met; request a concrete revision when needed. Inspect partial changes after failure or cancellation. Create dependent tasks only after prerequisites complete. Before ending the turn, wait for or cancel all running tasks.`;
 
-export function taskSpecMessage(spec: WorkerTaskSpec, rootPath: string): string {
-  const lines = [
+export function taskSpecMessage(spec: WorkerTaskSpec): string {
+  return [
     `Task: ${spec.title}`,
     "",
     `Objective: ${spec.objective}`,
@@ -29,15 +29,15 @@ export function taskSpecMessage(spec: WorkerTaskSpec, rootPath: string): string 
     "",
     "Acceptance criteria:",
     ...spec.acceptanceCriteria.map((item) => `- ${item}`),
-    "",
-    "Available built-in tools:",
-    ...(spec.tools.length ? spec.tools.map((tool) => `- ${tool}`) : ["- None."]),
-    "",
+  ].join("\n");
+}
+
+export function workerExecutionEnvironment(spec: WorkerTaskSpec, rootPath: string): string {
+  return [
+    "Task execution environment:",
     "Write scope:",
     ...(spec.writeScope.length ? spec.writeScope.map((scope) => `- ${scope.kind}: ${scope.path}`) : ["- None. Do not modify files."]),
-    "",
     `Shared workspace root: ${rootPath}`,
     `Runtime platform: ${process.platform} (${process.arch})`,
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }

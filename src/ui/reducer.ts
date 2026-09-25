@@ -42,13 +42,9 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       }
       return;
     }
-    case "agent_task_trace": {
-      const traceEvent = event.event;
-      updateTaskCard(state, event.taskId, (card) => traceEvent.type === "agent_run_started"
-        ? { ...card, prompt: card.prompt ?? traceEvent.input }
-        : { ...card, trace: streamBlocks(card.trace, traceEvent) });
+    case "agent_task_trace":
+      updateTaskCard(state, event.taskId, (card) => ({ ...card, trace: streamBlocks(card.trace, event.event) }));
       return;
-    }
     case "command_started":
       Object.assign(state, { busy: true, activity: `running /${event.name}`, modelRetryError: undefined, notice: undefined,
         turnStartedAt: undefined, turnFinishedAt: undefined });

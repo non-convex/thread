@@ -11,8 +11,13 @@ export function endStreaming(blocks: LiveBlock[]): LiveBlock[] {
 /** Main and worker streams use identical text and tool-call lifecycle rules. */
 export function streamBlocks(blocks: LiveBlock[], event: ExecutionEvent): LiveBlock[] {
   switch (event.type) {
+    case "agent_run_started": {
+      if (!event.entryId || blocks.some((block) => block.id === event.entryId)) return blocks;
+      return [...endStreaming(blocks), { id: event.entryId, kind: "user", content: event.input }];
+    }
     case "assistant_started":
     case "compaction_started":
+    case "agent_run_finished":
     case "turn_finished":
       return endStreaming(blocks);
     case "assistant_text_delta":

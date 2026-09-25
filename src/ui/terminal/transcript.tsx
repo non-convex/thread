@@ -38,14 +38,22 @@ function MarkdownReply(props: {
   );
 }
 
-function UserMessageCard(props: { item: TranscriptItem; resources: ThreadViewResources }) {
+function UserMessageCard(props: {
+  item: TranscriptItem; resources: ThreadViewResources; label?: string | undefined; copyText?: CopyText;
+}) {
   const theme = props.resources.theme;
   // A full-width band: the only filled surface in the transcript, easy to find while scrolling.
   return (
     <box width="100%" flexDirection="row" marginBottom={1} paddingX={1} backgroundColor={theme.surface}>
       <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.accentDim} attributes={bold}>{TRANSCRIPT_MARKS.user}</text>
-      <box flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}>
+      <box flexDirection="column" flexBasis={0} flexGrow={1} flexShrink={1} minWidth={1}>
+        <Show when={props.label}>
+          <text width="100%" fg={theme.accentDim} wrapMode="none" height={1} attributes={bold}>{props.label}</text>
+        </Show>
         <text width="100%" fg={theme.text} wrapMode="word">{props.item.content}</text>
+        <Show when={props.copyText}>
+          <ReplyCopyButton content={props.item.content} resources={props.resources} copyText={props.copyText!} />
+        </Show>
       </box>
     </box>
   );
@@ -97,64 +105,33 @@ function taskStatus(summary: AgentTaskCard["summary"], theme: ThreadViewResource
 
 type ExpansionStore = ReturnType<typeof createTranscriptExpansion>;
 
-/** The same task input and trace are available from the dock and historical task rows. */
+/** One worker conversation, shared by the dock and historical task rows. */
 export function AgentTaskDetailsView(props: {
   card: Accessor<AgentTaskCard>; resources: ThreadViewResources; copyText: CopyText;
   expansions: ExpansionStore; height: number;
   setScroll?: (value: ScrollBoxRenderable | undefined) => void;
 }) {
-  const renderer = useRenderer();
   const theme = props.resources.theme;
-  const [tab, setTab] = createSignal<"prompt" | "trace">("prompt");
   const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   onCleanup(() => props.setScroll?.(undefined));
-  return <box width="100%" height={props.height} flexShrink={0} flexDirection="column">
-    <box width="100%" height={1} flexShrink={0} flexDirection="row" gap={2}>
-      {(["prompt", "trace"] as const).map((value) =>
-        <text height={1} wrapMode="none" selectable={false} fg={tab() === value ? theme.accent : theme.muted}
-          attributes={tab() === value ? bold : 0}
-          onMouseUp={(event) => {
-            if (event.button !== MouseButton.LEFT || event.isDragging || renderer.getSelection()?.getSelectedText()) return;
-            event.stopPropagation();
-            setTab(value);
-          }}>{value === "prompt" ? "Prompt" : "Trace"}</text>
-      )}
-    </box>
-    <Show when={tab()} keyed>
-      {(active: "prompt" | "trace") => <scrollbox
-        ref={(value) => { setScroll(value); props.setScroll?.(value); }} width="100%" height={Math.max(1, props.height - 1)}
-        flexShrink={0} stickyScroll={active === "trace"} stickyStart={active === "trace" ? "bottom" : "top"}
-        viewportCulling={true} scrollAcceleration={wheelScrollAcceleration} verticalScrollbarOptions={{ visible: false }}>
-        <Show when={active === "prompt"} fallback={
-          <>
-            <text width="100%" flexShrink={0} wrapMode="word" fg={theme.nameAccent} marginBottom={1}>
-              {props.card().summary.providerId}/{props.card().summary.modelId}
-            </text>
-            <TranscriptWindow items={props.card().trace} scroll={scroll}>
-              {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions} copyText={props.copyText} />}
-            </TranscriptWindow>
-            <Show when={!props.card().trace.length}>
-              <text fg={theme.muted}>{props.card().summary.status === "running" ? "waiting for output…" : "No trace recorded."}</text>
-            </Show>
-            <Show when={props.card().summary.error}>
-              <text width="100%" wrapMode="word" flexShrink={0} fg={theme.error}>{props.card().summary.error}</text>
-            </Show>
-          </>
-        }>
-          <Show when={props.card().prompt} fallback={
-            <text width="100%" wrapMode="word" fg={theme.muted}>
-              {props.card().summary.status === "running" ? "Waiting for worker input…" : "No task prompt was recorded."}
-            </text>
-          }>
-            <box width="100%" flexDirection="column" flexShrink={0}>
-              <ReplyCopyButton content={props.card().prompt!} resources={props.resources} copyText={props.copyText} />
-              <text width="100%" wrapMode="word" flexShrink={0} fg={theme.softText}>{props.card().prompt}</text>
-            </box>
-          </Show>
-        </Show>
-      </scrollbox>}
+  return <scrollbox
+    ref={(value) => { setScroll(value); props.setScroll?.(value); }} width="100%" height={Math.max(1, props.height)}
+    flexShrink={0} stickyScroll={true} stickyStart="bottom"
+    viewportCulling={true} scrollAcceleration={wheelScrollAcceleration} verticalScrollbarOptions={{ visible: false }}>
+    <text width="100%" flexShrink={0} wrapMode="word" fg={theme.nameAccent} marginBottom={1}>
+      {props.card().summary.providerId}/{props.card().summary.modelId}
+    </text>
+    <TranscriptWindow items={props.card().trace} scroll={scroll}>
+      {(block) => <TranscriptItemView block={block} resources={props.resources} expansions={props.expansions}
+        copyText={props.copyText} userLabel="Main agent" />}
+    </TranscriptWindow>
+    <Show when={!props.card().trace.length}>
+      <text fg={theme.muted}>{props.card().summary.status === "running" ? "Waiting for worker input…" : "No conversation recorded."}</text>
     </Show>
-  </box>;
+    <Show when={props.card().summary.error}>
+      <text width="100%" wrapMode="word" flexShrink={0} fg={theme.error}>{props.card().summary.error}</text>
+    </Show>
+  </scrollbox>;
 }
 
 function AgentTaskCardView(props: {
@@ -244,7 +221,7 @@ function LiveThinkingView(props: {
 
 function TranscriptItemView(props: {
   block: Accessor<TranscriptItem>; resources: ThreadViewResources; expansions: ExpansionStore;
-  copyText: CopyText;
+  copyText: CopyText; userLabel?: string;
 }) {
   const block = props.block;
   const expansion = props.expansions(block().id);
@@ -272,6 +249,9 @@ function TranscriptItemView(props: {
         </box>
       </box>
     }>
+      <Match when={block().kind === "user"}>
+        <UserMessageCard item={block()} resources={props.resources} label={props.userLabel} copyText={props.copyText} />
+      </Match>
       <Match when={block().kind === "thinking"}>
         <LiveThinkingView block={block} resources={props.resources} expansion={expansion} />
       </Match>

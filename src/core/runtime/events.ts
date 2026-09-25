@@ -29,7 +29,7 @@ type AgentEvent = ModelEvent | ToolEvent
   | { type: "assistant_text_delta"; step: number; delta: string; entryId?: string }
   | { type: "assistant_thinking_delta"; step: number; delta: string; entryId?: string }
   | { type: "assistant_tool_call_progress"; step: number; id: string; name: string; argumentBytes: number; entryId?: string }
-  | { type: "agent_run_started"; input: string }
+  | { type: "agent_run_started"; input: string; entryId?: string }
   | { type: "agent_run_finished"; outcome: "completed" | "failed" | "cancelled"; output: string; error?: string };
 
 type ExecutionPayload = (

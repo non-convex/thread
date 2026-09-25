@@ -50,6 +50,7 @@ function messageBlocks(
   message: Message, entryId: string, tool: (id: string, call?: ToolCall) => LiveBlock[], finalResponse = false,
 ): LiveBlock[] {
   if (message.role === "toolResult") return tool(message.toolCallId);
+  if (message.role === "user") return [{ id: entryId, kind: "user", content: userContentDisplay(message.content) }];
   if (message.role !== "assistant") return [];
   const copyable = finalResponse && (message.stopReason === "stop" || message.stopReason === "length") &&
     !message.content.some((block) => block.type === "toolCall");
@@ -71,8 +72,18 @@ function messageBlocks(
 
 function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
   const { task } = input;
-  const prompt = task.trace.find((entry) => entry.kind === "message" && entry.message.role === "user");
-  const finalAssistantId = task.trace.findLast((entry) => entry.kind === "message" && entry.message.role === "assistant")?.entryId;
+  // Each task input / revision starts an exchange, just as a user turn does in
+  // the main transcript. Keep the final reply of every exchange copyable.
+  const finalAssistantIds = new Set<string>();
+  let finalAssistantId: string | undefined;
+  for (const entry of task.trace) {
+    if (entry.kind !== "message") continue;
+    if (entry.message.role === "user") {
+      if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
+      finalAssistantId = undefined;
+    } else if (entry.message.role === "assistant") finalAssistantId = entry.entryId;
+  }
+  if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
   const facts = new Map(task.trace.filter((entry) => entry.kind === "tool_execution").map((entry) => [entry.fact.toolCallId, entry.fact]));
   const results = new Map(task.trace.flatMap((entry) => entry.kind !== "tool_execution" && entry.message.role === "toolResult"
     ? [[entry.message.toolCallId, entry.message] as const] : []));
@@ -85,9 +96,8 @@ function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
   };
   return {
     summary: input.summary,
-    ...(prompt?.kind === "message" ? { prompt: textContent(prompt.message.content) } : {}),
     trace: task.trace.flatMap((entry) => entry.kind === "tool_execution"
-      ? [] : messageBlocks(entry.message, entry.entryId, tool, entry.entryId === finalAssistantId)),
+      ? [] : messageBlocks(entry.message, entry.entryId, tool, finalAssistantIds.has(entry.entryId))),
   };
 }
 

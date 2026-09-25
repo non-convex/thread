@@ -150,7 +150,7 @@ export class AgentTaskOrchestrator {
     const overlap = running.find((candidate) => candidate.id !== taskId && scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
     if (overlap) throw new Error(`Task ${taskId} overlaps running task ${overlap.id} (${overlap.spec.title})`);
     await this.repository.append({ type: "revision_requested", taskId, feedback: feedback.trim() }, true);
-    await new AgentTaskJournal(this.repository, taskId).appendUser(`Review feedback from the main agent:\n\n${feedback.trim()}`);
+    await new AgentTaskJournal(this.repository, taskId).appendUser(feedback.trim());
     await this.repository.append({ type: "status_changed", taskId, status: "running" }, true);
     this.launch(taskId, profile, signal, ui);
     return this.repository.projection.summary(taskId);

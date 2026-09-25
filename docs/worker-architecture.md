@@ -74,7 +74,11 @@ coding 应用启动时加载项目根目录的 `AGENTS.md`，与宿主传入的 
 
 裸 `ThreadRuntime.open()` 不扫描项目指令文件，宿主可通过 `sharedInstructions` 显式提供。coding 应用可用 `projectInstructions: false` 关闭自动读取。根目录之外的分层指令加载尚未实现，读取边界及文件大小限制见 [runtime 指南](./runtime.md)。
 
-通用 worker 提示词保留职责、任务边界和结果报告要求。任务开始时，只有工具列表包含 `write`、`edit` 或 `bash`，才追加文件操作与 checkpoint 说明；仅有读取、网页工具或没有工具的任务不接收这段说明。Checkpoint 描述取自实际文件历史服务的配置，不影响共享项目指令的注入或工具权限。
+通用 worker 提示词保留职责、任务边界和结果报告要求。每项任务的写入范围、共享工作目录和运行平台也放在系统提示词中，作为执行约束。
+
+主 agent 发出的初始 user 消息只包含任务标题、目标、指导和验收标准。它不重复列出工具名称，也不展示完整委派参数。模型可见的工具定义和实际可调用工具，仍由该任务选定的 `tools` 注册表决定。
+
+任务开始时，只有工具列表包含 `write`、`edit` 或 `bash`，才追加文件操作与 checkpoint 说明；仅有读取、网页工具或没有工具的任务不接收这段说明。Checkpoint 描述取自实际文件历史服务的配置，不影响共享项目指令的注入或工具权限。
 
 ## 生命周期
 
@@ -88,7 +92,7 @@ running ──成功──▶ completed
 completed ──request_revision──▶ running
 ```
 
-`request_revision` 只接受 `completed` 任务。反馈追加到原来的 Agent Task journal，worker 因而能继续利用此前对话和工具结果；revision 随新运行递增。
+`request_revision` 只接受 `completed` 任务。主 agent 的返工反馈原文（去除首尾空白）作为后续 user 消息追加到原来的 Agent Task journal，不另加反馈前缀，也不重新发送初始任务；worker 因而能继续利用此前对话和工具结果，且保留原任务的工具与范围；revision 随新运行递增。
 
 任务属于创建它的主回合。主回合结束或应用关闭时，先向所有所属运行中任务发出取消信号，再等待它们全部收尾；结束后移除临时运行对象，保留任务历史。重启时发现 v2 历史中仍有 `running` 任务，也会把它标记为 `cancelled`。Thread 不让 worker 跨回合存活，也不提供后台 mailbox。
 
@@ -106,6 +110,8 @@ Worker 默认最多 100 个模型步骤、60 分钟。上下文溢出时以 `Wor
 - Worker 通过 `AgentTaskJournal` 写入独立的 Agent Task trace。
 
 这样可以复用同一套“模型回复—工具执行—结果回传”循环，同时不把 worker 的完整轨迹塞进主 agent 上下文。TUI 在原始委派位置显示精简任务卡片，状态只可能是 `running`、`completed`、`failed` 或 `cancelled`。
+
+初始任务和返工反馈分别保存为 trace 的 user 消息。每轮 `agent_run_started` 使用该轮实际输入的正文和持久 `entryId`，让界面按同一条记录展示实时输入与历史对话。Dreamer 没有持久 user entry，因此事件类型中的 `entryId` 是可选字段。
 
 Agent Task 历史使用独立的 `thread-agent-task-v2` JSONL 事件流：
 

@@ -21,8 +21,7 @@ export interface TranscriptItem {
 
 export interface AgentTaskCard {
   summary: AgentTaskSummary;
-  /** Initial task input actually sent to the worker; absent before it starts. */
-  prompt?: string;
+  /** Worker conversation, including actual task input and each revision's feedback. */
   trace: LiveBlock[];
 }
 
@@ -36,7 +35,7 @@ export interface TranscriptTool {
 }
 
 export type LiveBlock = TranscriptItem & {
-  kind: "thinking" | "assistant" | "tool" | "compaction" | "agent_task";
+  kind: "user" | "thinking" | "assistant" | "tool" | "compaction" | "agent_task";
 };
 
 export interface LiveTurn {

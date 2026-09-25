@@ -296,6 +296,8 @@ Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝�
 
 `RuntimeEvent` 携带 `timestamp`（Unix 毫秒）、`executionId`、`agentId`、`sessionId` 和 `turnId`。自主后台运行的 session/turn 为 `null`。主 agent、worker、Dreamer 使用相同的平铺事件；worker 另外携带 `taskId`、`revision`、`parentExecutionId` 和 `parentToolCallId`。`executionId` 对主 agent 是 turn ID，对 worker 是 task ID（用 revision 区分修订），对 Dreamer 是本次批次的独立 ID。TUI 在展示入口转换 worker 事件。
 
+Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息：首次运行是任务正文，返工时是新增反馈。事件同时携带该消息的持久 `entryId`，便于界面把输入和后续回复放进同一条对话流。Dreamer 的输入只存在于临时 journal，因此不提供这个持久消息 ID。
+
 模型输出带 `entryId`，工具事件带 `toolCallId` 和发起调用的 `assistantEntryId`。同步或异步观察者异常不改变任务结果；runtime 不等待异步观察者，取消订阅也不会取消任务。事件数据是副本。观察者应立即记录必要数据，把网络发送放入自己的有界队列；耗时的同步回调仍会占用 JavaScript 线程。
 
 ### 模型与工具观测

@@ -333,7 +333,7 @@ export class ThreadTuiController {
     if (this.stopped || this.disposed || event.sessionId !== this.app.selectedSessionId) return;
     if (event.type === "model_call_started" || event.type === "model_call_finished" ||
         event.type === "model_attempt_started" || event.type === "model_attempt_finished" ||
-        (event.type === "agent_run_started" && !event.taskId) || event.type === "agent_run_finished") return;
+        ((event.type === "agent_run_started" || event.type === "agent_run_finished") && !event.taskId)) return;
     if (event.taskId && event.type !== "agent_task_created" && event.type !== "agent_task_updated" && event.type !== "context_updated") {
       this.batcher.push({ type: "agent_task_trace", taskId: event.taskId, revision: event.revision ?? 0, event });
       return;

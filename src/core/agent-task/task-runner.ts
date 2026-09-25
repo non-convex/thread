@@ -8,7 +8,7 @@ import { AgentTaskJournal } from "./journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import type { AgentTaskRun } from "./model.js";
 import type { WorkerLimits } from "./profile.js";
-import { taskSpecMessage } from "./prompt.js";
+import { taskSpecMessage, workerExecutionEnvironment } from "./prompt.js";
 import type { AgentTaskRepository } from "./repository.js";
 import type { HostExecutionOptions } from "../runtime/policy.js";
 import { ToolRegistry } from "../tools/types.js";
@@ -61,6 +61,7 @@ export class WorkerTaskRunner {
     }
     const systemPrompt = [
       profile.systemPrompt,
+      workerExecutionEnvironment(task.spec, this.rootPath),
       task.spec.tools.some((name) => name === "write" || name === "edit" || name === "bash")
         ? fileEditingPrompt(this.fileHistory?.captureEnabled ?? false) : "",
     ].filter(Boolean).join("\n\n");
@@ -74,7 +75,11 @@ export class WorkerTaskRunner {
     const signal = AbortSignal.any([parentSignal, timeout]);
     const journal = new AgentTaskJournal(this.repository, taskId, this.executionOptions.sessionIdForTurn?.(task.parentTurnId));
     const taskUi = executionEventSink(journal.identity, ui);
-    if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec, this.rootPath));
+    if (journal.messages.length === 0) await journal.appendUser(taskSpecMessage(task.spec));
+    const userEntry = task.trace.findLast((entry) => entry.kind === "message" && entry.message.role === "user");
+    if (!userEntry || userEntry.kind !== "message" || userEntry.message.role !== "user" || typeof userEntry.message.content !== "string") {
+      throw new Error("Worker has no persisted user message for this run");
+    }
     const toolRunner = new ToolCallExecutor(this.rootPath, tools, new ExtensionEvents(), {
       acceptsImages: profile.model.acceptsImages === true,
       protectedWritePaths: this.executionOptions.protectedWritePaths ?? [],
@@ -87,7 +92,7 @@ export class WorkerTaskRunner {
     const stepRunner = new AgentStepRunner(profile.model, toolRunner, reasoning);
     const usage = emptyUsage();
     let finalResponse = "";
-    safeExecutionEvent(taskUi, { type: "agent_run_started", input: taskSpecMessage(task.spec, this.rootPath), timestamp: startedAt });
+    safeExecutionEvent(taskUi, { type: "agent_run_started", input: userEntry.message.content, entryId: userEntry.entryId, timestamp: startedAt });
     try {
       for (let step = 1; step <= limits.maxSteps; step++) {
         signal.throwIfAborted();
