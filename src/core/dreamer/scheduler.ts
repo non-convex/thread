@@ -1,5 +1,5 @@
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
-import { contentText, type Message } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai";
 import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import { AgentStepRunner, assertModelStepSucceeded } from "../agent/step-runner.js";
@@ -8,7 +8,7 @@ import { ExtensionEvents } from "../extensions/events.js";
 import type { HostToolPolicy } from "../runtime/policy.js";
 import { DREAMER_MAX_RUNTIME_MS, DREAMER_MAX_STEPS, parseDreamerReviewResult } from "./profile.js";
 import { validateExecutionLimits } from "../runtime/limits.js";
-import { createDreamerReviewBatch, type DreamerReviewBatch, type DreamerReviewSource } from "./review.js";
+import { createDreamerReviewBatch, type DreamerReviewBatch, type DreamerReviewEntry, type DreamerReviewSource } from "./review.js";
 import type { DreamerAdmission, DreamerCheckpoint } from "./state.js";
 import { GlobalMemoryAccess, globalMemoryRevision } from "../global-memory.js";
 import { ToolRegistry } from "../tools/types.js";
@@ -34,7 +34,7 @@ export interface DreamerStatus {
 }
 
 export interface DreamerSchedulerOptions {
-  readTurn: (turnId: string) => Iterable<Message>;
+  readTurn: (turnId: string, startOrdinal: number) => Iterable<DreamerReviewEntry>;
   pendingTurns: () => DreamerReviewSource[];
   checkpoint: () => DreamerCheckpoint;
   saveCheckpoint: (turnIds: readonly string[], checkpoint: DreamerCheckpoint, signal?: AbortSignal) => Promise<void>;
@@ -94,8 +94,9 @@ export class DreamerScheduler {
 
   get enabled(): boolean { return this.profile !== undefined && !this.closing; }
   get lastError(): string | undefined { return this.persistenceError ?? this.admissionError ?? this.checkpoint.lastError; }
-  get status(): DreamerStatus {
-    const pending = this.options.pendingTurns();
+  get status(): DreamerStatus { return this.statusFor(this.options.pendingTurns()); }
+
+  private statusFor(pending: readonly DreamerReviewSource[]): DreamerStatus {
     const blocked = !!this.persistenceError || (!!this.checkpoint.blocked && !this.resetRequested);
     const nextReviewAt = this.enabled && !this.foregroundActive && !this.running && !blocked ? this.dueAt(pending) : undefined;
     return {
@@ -173,12 +174,13 @@ export class DreamerScheduler {
 
   private schedule(): void {
     this.clearTimer();
+    const pending = this.options.pendingTurns();
     if (this.enabled && !this.foregroundActive && !this.running && !this.persistenceError &&
         (!this.checkpoint.blocked || this.resetRequested)) {
-      const due = this.dueAt(this.options.pendingTurns());
+      const due = this.dueAt(pending);
       if (due !== undefined) this.timer = setTimeout(() => this.launch(), Math.min(2_147_483_647, Math.max(0, due - Date.now())));
     }
-    this.publishStatus();
+    this.publishStatus(pending);
   }
 
   private launch(): void {
@@ -231,7 +233,6 @@ export class DreamerScheduler {
       throw error;
     }
     this.checkpoint = checkpoint;
-    this.publishStatus();
   }
 
   private async runProfile(profile: AgentProfile, parentSignal: AbortSignal): Promise<void> {
@@ -251,6 +252,7 @@ export class DreamerScheduler {
       delete checkpoint.blocked;
     }
     await this.save([], checkpoint);
+    this.publishStatus();
     while (true) {
       signal.throwIfAborted();
       const pending = this.options.pendingTurns();
@@ -291,6 +293,8 @@ export class DreamerScheduler {
       // Read later corrections before publishing an inference from an earlier fragment.
       const canUpdate = writable && !batch.cursor && batch.turnIds.length === pending.length;
       await this.reviewBatch(profile, batch, revision, writable, canUpdate, evidenceLimit, signal);
+      // This batch only removes its confirmed prefix; foreground admissions wait for us to settle.
+      this.publishStatus(pending.slice(batch.turnIds.length));
     }
   }
 
@@ -392,8 +396,9 @@ export class DreamerScheduler {
     await this.save([], { ...this.checkpoint, memoryRevision: after, sourceRevisions });
   }
 
-  private publishStatus(): void {
-    safeExecutionEvent(this.options.onEvent, { type: "dreamer_status", status: this.status });
+  private publishStatus(pending?: readonly DreamerReviewSource[]): void {
+    safeExecutionEvent(this.options.onEvent, { type: "dreamer_status",
+      status: pending ? this.statusFor(pending) : this.status });
   }
 
   private clearTimer(): void {

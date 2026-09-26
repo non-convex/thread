@@ -146,7 +146,7 @@ export class FileHistoryService {
   }
 
   private async prepareRestore(turns: readonly Turn[]): Promise<FileEditEntry[]> {
-    const untracked = turns.find((turn) => turn.fileCheckpoints === false);
+    const untracked = turns.find((turn) => !turn.fileCheckpoints);
     if (untracked) throw new Error(`Cannot restore files across turn ${untracked.id}: file checkpoints were disabled`);
     const selected = new Map<string, FileEditEntry>();
     for (const entry of this.records(turns)) {

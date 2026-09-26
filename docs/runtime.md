@@ -74,7 +74,7 @@ try {
 }
 ```
 
-`ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回原有的不可用结果；TUI 为同一个工具绑定问题面板。
+`ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回不可用结果；TUI 为同一个工具绑定问题面板。ask 工具的 `details` 使用 `AskResultDetails`，以 `answered`、`dismissed`、`unavailable` 或 `invalid` 标明结果；只有 `answered` 携带用户答案。历史分析读取这个结构化结果，不依赖展示文案。
 
 coding 应用始终在主 agent 的系统提示词中加入启动时确定的项目工作目录，使用 `rootPath` 解析后的绝对路径。CLI 默认使用启动目录；指定 `--root` 时使用指定的项目目录。这段信息独立于 `AGENTS.md`，文件缺失、内容为空或设置 `projectInstructions: false` 都不会关闭注入。直接使用 `ThreadRuntime.open()` 的宿主仍自行决定是否提供这段信息。
 
@@ -105,13 +105,13 @@ await runtime.clearGoal(sessionId);
 
 每个 Session 只有一个目标。传入新的目标文字会替换原目标并立即开始，文字长度为 1–4,000 字符；传入 `undefined` 则恢复暂停或受阻的目标。运行中不能替换目标，但可以读取状态、暂停或清除。暂停会取消并等待整个目标运行结算；清除先做同样的结算，再移除目标。`interrupt()`、调用方的取消信号和 `close()` 同样停止整个运行，不会在当前轮结束后重新启动下一轮。
 
-`GoalOptions` 接受 `signal`、`images`、`onEvent` 和 `maxTurns`。目标运行不设置每轮模型步骤上限，也不设置总运行时间限制；默认一次设置或恢复最多执行 20 轮。`images` 只附在本次运行的第一轮。累计已开始轮数保存在 `turnsUsed`，`turnLimit` 是本次运行允许达到的累计上限；显式恢复增加一份新的轮数预算，但不会抹掉此前消耗。这里没有 token 总量硬上限。
+`GoalOptions` 接受 `signal`、`images`、`onEvent` 和 `maxTurns`。目标运行不设置每轮模型步骤上限，也不设置总运行时间限制；默认一次设置或恢复最多执行 20 轮。`images` 只附在本次运行的第一轮。累计已开始轮数从带 `goalId` 的 turn admission 派生，通过快照的 `turnsUsed` 返回，`turnLimit` 是本次运行允许达到的累计上限；显式恢复增加一份新的轮数预算，但不会抹掉此前消耗。这里没有 token 总量硬上限。
 
 每轮复用原来的 agent、工具、压缩和 Worker 生命周期。目标随系统指令进入该轮的每次模型请求，不依赖摘要保留。只有目标运行会临时提供 `update_goal` 工具：主代理用 `completed` 提交完成依据，或用 `blocked` 说明需要用户处理的问题。工具只记录本轮的结果意向，要求先等待或取消仍在运行的 Worker，再报告结果。报告后如果继续调用其他工具，原结果意向失效，需要重新报告；取消也不能被当成完成。只有整轮正常结算后才保存目标结果，这不是独立模型审核或宿主自动验收。目标模式不增加文件、命令或外部操作权限。
 
 模型正常结束回复而没有报告结果时，运行时会在上一轮结算后继续。达到轮数上限，或连续三轮没有成功的工作工具调用时，目标暂停；后者只是有限的空转保护，不是判断实际工作价值的通用算法。运行异常和取消也会暂停并保存原因。`runGoal()` 返回最后一轮的 `TurnResult`，其中 `outcome: "completed"` 只代表该轮正常结束；整个目标是否完成应读取 `readGoal()` 的 `status`，或订阅 `goal_changed`。
 
-目标和状态变化保存在现有 Session Tree，关闭文件 checkpoint 不影响它们。重新打开 runtime 时，原本 active 的目标恢复为 paused，不自动继续。rewind 会恢复第一个被移除 turn 开始前的目标；恢复出的 active 目标也暂停，累计已开始轮数不回退。目标轮次带有 `Turn.goalId`，后续自动输入也明确标记为目标续跑，不表示用户授予了新的权限。
+目标首次设置、恢复和实际状态变化保存在 Session Tree；普通续跑只记录新的 turn，不重复写入未变化的目标正文或累计轮数。回退索引引用不可变的目标状态，不为每轮复制一份完整对象。关闭文件 checkpoint 不影响这些记录。重新打开 runtime 时，原本 active 的目标恢复为 paused，不自动继续。rewind 会恢复第一个被移除 turn 开始前的目标；恢复出的 active 目标也暂停，累计已开始轮数不回退。目标轮次带有 `Turn.goalId`，后续自动输入也明确标记为目标续跑，不表示用户授予了新的权限。
 
 `readGoal()` 返回独立快照或 `undefined`。`goal_changed` 事件携带 `sessionId` 和目标快照，清除时为 `null`；状态包括 `active`、`paused`、`blocked`、`completed`，可选 `reason` 说明完成依据或停止原因。宿主用现有实时事件显示各轮内容，并在每次 turn 提交后刷新历史，不能只在整个目标结束时保存最后一轮的界面内容。
 
@@ -245,7 +245,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 
 选定 turn 及其后的 turn 留在历史中，live tip 移到选定 turn 的父节点。仅会话回退不会清理已有文件备份；文件内容可能与回退后的上下文不同，由宿主决定是否需要恢复。
 
-关闭 checkpoint 时显式请求 `restoreFiles: true` 会报错。每轮记录其 checkpoint 启用状态；旧 turn 缺失该字段时按开启解释。重新打开同一数据目录并切换配置后，文件恢复若跨越关闭 checkpoint 的轮次，会在修改文件或移动 live tip 前拒绝，避免使用不完整记录。所需备份缺失或损坏同样会在恢复前报错。文件恢复沿用原有语义：覆盖记录的路径，不检查这些路径后来是否被手动或 bash 修改。
+关闭 checkpoint 时显式请求 `restoreFiles: true` 会报错。每轮必须记录布尔类型的 checkpoint 启用状态；缺少该字段的记录在加载时直接拒绝，不补默认值。重新打开同一数据目录并切换配置后，文件恢复若跨越关闭 checkpoint 的轮次，会在修改文件或移动 live tip 前拒绝，避免使用不完整记录。所需备份缺失或损坏同样会在恢复前报错。文件恢复沿用原有语义：覆盖记录的路径，不检查这些路径后来是否被手动或 bash 修改。
 
 文件回退会先在 Session Tree 中记录本次恢复目标，再逐个恢复文件，全部完成后才提交新的 live tip。每个已有文件都通过临时文件替换恢复，避免写入失败时把它截断。多文件恢复本身并不是文件系统级的原子操作：出错时，部分文件可能已经恢复，但会话不会被当作已完成回退。
 
@@ -274,6 +274,8 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `subscribe(listener)` | 订阅实时执行事件，返回取消订阅函数 |
 | `close()` | 停止接收操作、取消并等待执行、关闭实例拥有的资源 |
 
+Session Tree 当前使用 `thread-session-tree-v3`，清晰区分持久目标状态与派生轮数，并保存按消息定位的 Dreamer 游标。只接受当前格式：旧 manifest 或事件格式会在加载时明确报错，不迁移、不回填，也不自动删除历史。升级前应保留原数据；需要从新记录开始时，由宿主显式选择新的 `stateDirectory`。
+
 Session Tree 的历史与传给模型的上下文分别保存。读取快照不会改变内部状态；客户端不应通过修改快照来编辑历史。进程恢复时保留未完成任务的记录并将其结算为 interrupted，不自动重跑结果不确定的工具。
 
 内置模型客户端在续接请求时，会一起跳过以 `aborted` 或 `error` 结束的未完成助手响应及其工具结果，避免留下没有对应调用的工具结果。完整助手响应之后发生的工具取消仍保留调用与取消结果。原始消息和诊断信息继续保存在 Session Tree 中。
@@ -282,9 +284,11 @@ Session Tree 的历史与传给模型的上下文分别保存。读取快照不�
 
 Session Tree 的 `tree.json` 使用临时文件原子替换，启动时更新它不会先截断原文件。文件恢复和普通写入都会先同步临时文件；支持目录同步的平台还会同步替换或删除后的目录项。Windows 的 Node/Bun 接口不提供同样的目录同步能力，这不构成跨平台的断电事务保证。
 
-Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整个 runtime 的持久化写入。正常关闭或进程退出会释放锁；`session-tree.lock` 文件保留，文件存在或其中的旧 PID 文本不代表被占用，也不要通过删除它解锁。升级到该锁协议前须先退出使用同一数据目录的旧版进程；旧版只识别 PID 文件，不应与新版同时运行。旧锁文件可以直接复用，无需清理；会话日志格式不变。
+Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整个 runtime 的持久化写入。正常关闭或进程退出会释放锁；`session-tree.lock` 文件保留，文件存在或其中的旧 PID 文本不代表被占用，也不要通过删除它解锁。升级到该锁协议前须先退出使用同一数据目录的旧版进程；旧版只识别 PID 文件，不应与新版同时运行。锁文件无需清理；能否加载会话日志仍由当前记录格式校验决定。
 
 凭据存储 `auth.json` 也使用同一个操作系统锁实现，保护读取、OAuth 刷新和原子写回的整个操作。等待锁支持取消，不再按 PID 或锁文件年龄判断是否可以接管。`auth.json.lock` 会保留；升级前应先退出仍使用旧凭据锁协议的进程，避免两套协议同时操作同一凭据文件。凭据 JSON 格式没有变化。
+
+`contextSnapshot()` 和 `contextUsage()` 在执行期间采用当前 Runner 捕获的系统提示词和工具注册表，因此 goal 指令和临时的 `update_goal` 定义也计入估算。它们不会另行拼装一份普通模式配置。
 
 每轮开始时创建执行器，捕获该轮的模型、思考级别和系统提示词。执行中通过 `setThinkingLevel()` 或 TUI 的 `Shift+Tab` 调整偏好，不改变当前轮后续模型步骤；下一轮使用新设置。
 

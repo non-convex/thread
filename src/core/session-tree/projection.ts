@@ -4,7 +4,7 @@ import type {
   ProjectSession,
   FileRewindIntent,
   SessionEntry,
-  SessionGoal,
+  SessionGoalState,
   SessionTree,
   SessionTreeEvent,
   SessionTreeRecord,
@@ -28,12 +28,13 @@ export class SessionTreeProjection {
   readonly sessions = new Map<string, ProjectSession>();
   readonly turns = new Map<string, Turn>();
   readonly dreamerCheckpoints = new Map<string, DreamerCheckpoint>();
+  readonly dreamerPendingByMemoryPath = new Map<string, Map<string, Turn>>();
   readonly runningTurnsBySession = new Map<string, Turn>();
   readonly entries = new Map<string, SessionEntry>();
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
   readonly liveTips = new Map<string, string | null>();
-  readonly goals = new Map<string, SessionGoal>();
-  readonly goalsBeforeTurn = new Map<string, SessionGoal | null>();
+  readonly goals = new Map<string, Readonly<SessionGoalState>>();
+  readonly goalsBeforeTurn = new Map<string, Readonly<SessionGoalState>>();
   readonly goalTurns = new Map<string, number>();
   pendingFileRewind: FileRewindIntent | undefined;
   nextSequence = 1;
@@ -58,7 +59,7 @@ export class SessionTreeProjection {
     switch (event.type) {
       case "tree_created":
         if (this.tree) throw new SessionTreeCorruptionError("Session Tree was created more than once");
-        if (event.tree.format !== "thread-session-tree-v2" || event.tree.formatVersion !== 2 ||
+        if (event.tree.format !== "thread-session-tree-v3" || event.tree.formatVersion !== 3 ||
             typeof event.tree.id !== "string" || typeof event.tree.projectId !== "string" ||
             typeof event.tree.rootId !== "string" || typeof event.tree.rootPath !== "string") {
           throw new SessionTreeCorruptionError("Unsupported or invalid Session Tree metadata");
@@ -90,7 +91,7 @@ export class SessionTreeProjection {
         assertUnused(this.turns, turn.id, "turn");
         if (!this.sessions.has(turn.sessionId)) throw new SessionTreeCorruptionError(`Turn ${turn.id} has no session`);
         if (turn.status !== "running") throw new SessionTreeCorruptionError(`Turn ${turn.id} did not start running`);
-        if (turn.fileCheckpoints !== undefined && typeof turn.fileCheckpoints !== "boolean") {
+        if (typeof turn.fileCheckpoints !== "boolean") {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid file checkpoint setting`);
         }
         if (turn.dreamerReview !== undefined &&
@@ -116,13 +117,12 @@ export class SessionTreeProjection {
             throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid parent`);
           }
         }
-        this.goalsBeforeTurn.set(turn.id, structuredClone(this.goals.get(turn.sessionId) ?? null));
+        const before = this.goals.get(turn.sessionId);
+        if (before) this.goalsBeforeTurn.set(turn.id, before);
         if (turn.goalId !== undefined) {
           const count = (this.goalTurns.get(turn.goalId) ?? 0) + 1;
           if (!Number.isSafeInteger(count)) throw new SessionTreeCorruptionError(`Goal turn count overflow: ${turn.goalId}`);
           this.goalTurns.set(turn.goalId, count);
-          const current = this.goals.get(turn.sessionId);
-          if (current?.id === turn.goalId) current.turnsUsed = count;
         }
         this.turns.set(turn.id, structuredClone(turn));
         this.runningTurnsBySession.set(turn.sessionId, this.turns.get(turn.id)!);
@@ -134,9 +134,7 @@ export class SessionTreeProjection {
         if (event.goal === null) {
           this.goals.delete(event.sessionId);
         } else {
-          const goal = structuredClone(event.goal);
-          goal.turnsUsed = this.goalTurns.get(goal.id) ?? 0;
-          this.goals.set(event.sessionId, goal);
+          this.goals.set(event.sessionId, Object.freeze(structuredClone(event.goal)));
         }
         return;
       }
@@ -163,7 +161,7 @@ export class SessionTreeProjection {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not begin with its user entry`);
         }
         if (entry.type === "file_edit") {
-          if (turn.fileCheckpoints === false) {
+          if (!turn.fileCheckpoints) {
             throw new SessionTreeCorruptionError(`Turn ${turn.id} has file edits with checkpoints disabled`);
           }
           if (typeof entry.path !== "string" || !entry.path || entry.path.includes("\\") || entry.path.includes("\0") ||
@@ -218,12 +216,22 @@ export class SessionTreeProjection {
         this.runningTurnsBySession.delete(turn.sessionId);
         turn.finishedAt = event.finishedAt;
         if (event.error) turn.error = structuredClone(event.error);
+        if (turn.dreamerReview) {
+          const memoryPath = turn.dreamerReview.memoryPath;
+          let pending = this.dreamerPendingByMemoryPath.get(memoryPath);
+          if (!pending) this.dreamerPendingByMemoryPath.set(memoryPath, pending = new Map());
+          pending.set(turn.id, turn);
+        }
         return;
       }
       case "dreamer_reviewed": {
         this.validateDreamerReview(event.memoryPath, event.turnIds, event.checkpoint);
         for (const turnId of event.turnIds) {
           this.turns.get(turnId)!.dreamerReviewedAt = event.checkpoint.lastReviewedAt!;
+          this.dreamerPendingByMemoryPath.get(event.memoryPath)!.delete(turnId);
+        }
+        if (!this.dreamerPendingByMemoryPath.get(event.memoryPath)?.size) {
+          this.dreamerPendingByMemoryPath.delete(event.memoryPath);
         }
         this.dreamerCheckpoints.set(event.memoryPath, structuredClone(event.checkpoint));
         return;
@@ -282,7 +290,7 @@ export class SessionTreeProjection {
   }
 
   /** Also called inside a serialized append factory, before an invalid goal can enter the log. */
-  validateGoalChange(sessionId: string, goal: SessionGoal | null): void {
+  validateGoalChange(sessionId: string, goal: SessionGoalState | null): void {
     if (this.pendingFileRewind) {
       throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
     }
@@ -295,7 +303,7 @@ export class SessionTreeProjection {
         typeof goal.objective !== "string" || !goal.objective.trim() ||
         !["active", "paused", "blocked", "completed"].includes(goal.status) ||
         (goal.reason !== undefined && typeof goal.reason !== "string") ||
-        !Number.isSafeInteger(goal.turnsUsed) || goal.turnsUsed < 0 ||
+        "turnsUsed" in goal ||
         !Number.isSafeInteger(goal.turnLimit) || goal.turnLimit < 1 ||
         !Number.isFinite(goal.createdAt) || goal.createdAt < 0 ||
         !Number.isFinite(goal.updatedAt) || goal.updatedAt < goal.createdAt) {
@@ -309,23 +317,17 @@ export class SessionTreeProjection {
     while (firstRemoved && this.turns.get(firstRemoved)?.parentTurnId !== toTurnId) {
       firstRemoved = this.turns.get(firstRemoved)?.parentTurnId ?? null;
     }
-    if (!firstRemoved || !this.goalsBeforeTurn.has(firstRemoved)) {
-      throw new SessionTreeCorruptionError("Rewind has no goal snapshot for its first removed turn");
+    if (!firstRemoved || !this.turns.has(firstRemoved)) {
+      throw new SessionTreeCorruptionError("Rewind has no first removed turn");
     }
     const snapshot = this.goalsBeforeTurn.get(firstRemoved);
-    if (snapshot === null) {
+    if (!snapshot) {
       this.goals.delete(sessionId);
       return;
     }
-    if (!snapshot) throw new SessionTreeCorruptionError("Missing goal snapshot for rewind");
-    const goal = structuredClone(snapshot);
-    goal.turnsUsed = this.goalTurns.get(goal.id) ?? 0;
-    if (goal.status === "active") {
-      goal.status = "paused";
-      goal.reason = "Paused after rewind";
-      goal.updatedAt = Math.max(timestamp, goal.updatedAt);
-    }
-    this.goals.set(sessionId, goal);
+    this.goals.set(sessionId, snapshot.status === "active"
+      ? Object.freeze({ ...snapshot, status: "paused", reason: "Paused after rewind", updatedAt: Math.max(timestamp, snapshot.updatedAt) })
+      : snapshot);
   }
 
   /** Also called inside a serialized append factory, before an invalid review can enter the log. */
@@ -369,24 +371,29 @@ export class SessionTreeProjection {
       }
       completed.add(turnId);
     }
-    const pending = [...this.turns.values()].filter((turn) =>
-      turn.status !== "running" && turn.dreamerReview?.memoryPath === memoryPath &&
-      turn.dreamerReviewedAt === undefined);
-    if (turnIds.length > pending.length || turnIds.some((turnId, index) => turnId !== pending[index]?.id)) {
+    const pending = this.dreamerPendingByMemoryPath.get(memoryPath)?.values();
+    if (turnIds.some((turnId) => turnId !== pending?.next().value?.id)) {
       throw new SessionTreeCorruptionError("Dreamer reviewed turns must be a pending prefix");
     }
+    const nextPending = pending?.next().value;
     if (checkpoint.cursor !== undefined) {
       const cursor = checkpoint.cursor;
       if (!cursor || typeof cursor.turnId !== "string" ||
+          !Number.isSafeInteger(cursor.entryOrdinal) || cursor.entryOrdinal < 0 ||
+          !Number.isSafeInteger(cursor.recordIndex) || cursor.recordIndex < 0 ||
           !Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
-          cursor.turnId !== pending[turnIds.length]?.id) {
+          cursor.turnId !== nextPending?.id ||
+          this.entriesByTurn.get(cursor.turnId)?.[cursor.entryOrdinal]?.type !== "message") {
         throw new SessionTreeCorruptionError("Invalid Dreamer review cursor");
       }
     }
     const priorCursor = previous?.cursor;
     if (priorCursor && !completed.has(priorCursor.turnId) &&
         (!checkpoint.cursor || checkpoint.cursor.turnId !== priorCursor.turnId ||
-          checkpoint.cursor.offset < priorCursor.offset)) {
+          checkpoint.cursor.entryOrdinal < priorCursor.entryOrdinal ||
+          (checkpoint.cursor.entryOrdinal === priorCursor.entryOrdinal &&
+            (checkpoint.cursor.recordIndex < priorCursor.recordIndex ||
+              (checkpoint.cursor.recordIndex === priorCursor.recordIndex && checkpoint.cursor.offset < priorCursor.offset))))) {
       throw new SessionTreeCorruptionError("Dreamer review cursor cannot move backwards or skip its turn");
     }
   }

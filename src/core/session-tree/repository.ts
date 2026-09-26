@@ -40,7 +40,7 @@ export class SessionTreeRepository {
     let manifest: { format?: unknown; formatVersion?: unknown; id?: unknown; projectId?: unknown } | undefined;
     try {
       manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-      if (manifest?.format !== SESSION_TREE_FORMAT || manifest.formatVersion !== 2) {
+      if (manifest?.format !== SESSION_TREE_FORMAT || manifest.formatVersion !== 3) {
         throw new Error(`Unsupported Session Tree manifest at ${manifestPath}; old data is not loaded`);
       }
     } catch (error) {

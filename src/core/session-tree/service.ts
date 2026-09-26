@@ -1,5 +1,6 @@
 import type { ImageContent, Message, UserMessage } from "@earendil-works/pi-ai";
 import { emptyDreamerCheckpoint, type DreamerAdmission, type DreamerCheckpoint } from "../dreamer/state.js";
+import type { DreamerReviewSource } from "../dreamer/review.js";
 import { createId, stableId } from "../utils/id.js";
 import { isEmptyUserMessageContent, userContentDisplay, userContentFrom, userContentIsEmpty } from "./user-content.js";
 import {
@@ -21,6 +22,7 @@ import {
   type RetainedTurn,
   type SessionEntry,
   type SessionGoal,
+  type SessionGoalState,
   type SessionTree,
   type ToolExecutionEntry,
   type Turn,
@@ -50,13 +52,19 @@ export interface PlannedTurn {
   startedAt: number;
   fileCheckpoints: boolean;
   dreamerReview?: DreamerAdmission;
-  goal?: SessionGoal;
+  goal?: SessionGoalState;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
 export interface PlannedMessageEntry {
   id: string;
   turnId: string;
+}
+
+/** Select durable fields; callers may hold a public snapshot with a derived turn count. */
+function goalState(goal: SessionGoalState): SessionGoalState {
+  const { id, objective, status, reason, turnLimit, createdAt, updatedAt } = goal;
+  return { id, objective, status, ...(reason !== undefined ? { reason } : {}), turnLimit, createdAt, updatedAt };
 }
 
 export class SessionTreeService {
@@ -84,7 +92,7 @@ export class SessionTreeService {
       const session: ProjectSession = { id: createId("session"), treeId, createdAt: now };
       const tree: SessionTree = {
         format: SESSION_TREE_FORMAT,
-        formatVersion: 2,
+        formatVersion: 3,
         id: treeId,
         projectId: this.repository.project.id,
         rootId: `${treeId}:root`,
@@ -150,7 +158,7 @@ export class SessionTreeService {
       startedAt: Date.now(),
       fileCheckpoints,
       ...(dreamerReview !== undefined ? { dreamerReview: structuredClone(dreamerReview) } : {}),
-      ...(goal !== undefined ? { goal: structuredClone(goal) } : {}),
+      ...(goal !== undefined ? { goal: goalState(goal) } : {}),
     };
   }
 
@@ -187,10 +195,14 @@ export class SessionTreeService {
     };
     await this.repository.appendBatch(() => {
       if (goal !== undefined) this.projection.validateGoalChange(planned.sessionId, goal);
+      const current = this.projection.goals.get(planned.sessionId);
+      const changed = goal !== undefined && (!current ||
+        (Object.keys(goal) as (keyof SessionGoalState)[]).some((key) => goal[key] !== current[key]) ||
+        current.reason !== goal.reason);
       return [
         { type: "turn_started", turn },
         { type: "entry_appended", entry: userEntry },
-        ...(goal !== undefined ? [{ type: "goal_changed" as const, sessionId: planned.sessionId, goal }] : []),
+        ...(changed ? [{ type: "goal_changed" as const, sessionId: planned.sessionId, goal }] : []),
       ];
     }, true);
     return structuredClone(turn);
@@ -198,11 +210,11 @@ export class SessionTreeService {
 
   readGoal(sessionId: string): SessionGoal | undefined {
     const goal = this.projection.goals.get(sessionId);
-    return goal ? { ...structuredClone(goal), turnsUsed: this.projection.goalTurns.get(goal.id) ?? 0 } : undefined;
+    return goal ? { ...goal, turnsUsed: this.projection.goalTurns.get(goal.id) ?? 0 } : undefined;
   }
 
-  async setGoal(sessionId: string, goal: SessionGoal | null, signal?: AbortSignal): Promise<void> {
-    const snapshot = structuredClone(goal);
+  async setGoal(sessionId: string, goal: SessionGoalState | null, signal?: AbortSignal): Promise<void> {
+    const snapshot = goal === null ? null : goalState(goal);
     await this.repository.append(() => {
       signal?.throwIfAborted();
       this.projection.validateGoalChange(sessionId, snapshot);
@@ -309,11 +321,12 @@ export class SessionTreeService {
     }), true);
   }
 
-  pendingDreamerTurns(memoryPath: string): Turn[] {
-    return [...this.projection.turns.values()]
-      .filter((turn) => turn.status !== "running" && turn.dreamerReview?.memoryPath === memoryPath &&
-        turn.dreamerReviewedAt === undefined)
-      .map((turn) => structuredClone(turn));
+  pendingDreamerTurns(memoryPath: string): DreamerReviewSource[] {
+    return Array.from(this.projection.dreamerPendingByMemoryPath.get(memoryPath)?.values() ?? [], (turn) => ({
+      id: turn.id, sessionId: turn.sessionId, status: turn.status, startedAt: turn.startedAt,
+      ...(turn.finishedAt !== undefined ? { finishedAt: turn.finishedAt } : {}),
+      memoryRevision: turn.dreamerReview!.memoryRevision,
+    }));
   }
 
   dreamerCheckpoint(memoryPath: string): DreamerCheckpoint {

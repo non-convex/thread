@@ -1,11 +1,11 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { DreamerAdmission, DreamerCheckpoint } from "../dreamer/state.js";
 
-export const SESSION_TREE_FORMAT = "thread-session-tree-v2" as const;
+export const SESSION_TREE_FORMAT = "thread-session-tree-v3" as const;
 
 export interface SessionTree {
   format: typeof SESSION_TREE_FORMAT;
-  formatVersion: 2;
+  formatVersion: 3;
   id: string;
   projectId: string;
   rootId: string;
@@ -22,16 +22,20 @@ export interface ProjectSession {
 
 export type TurnStatus = "running" | "completed" | "interrupted" | "failed";
 
-export interface SessionGoal {
+/** Persisted goal state. Turn counts are derived from admissions, never stored here. */
+export interface SessionGoalState {
   id: string;
   objective: string;
   status: "active" | "paused" | "blocked" | "completed";
   reason?: string;
-  turnsUsed: number;
   /** Absolute limit on admitted turns, including turns later removed by rewind. */
   turnLimit: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface SessionGoal extends SessionGoalState {
+  turnsUsed: number;
 }
 
 export interface Turn {
@@ -42,8 +46,7 @@ export interface Turn {
   goalId?: string;
   status: TurnStatus;
   startedAt: number;
-  /** Missing on legacy records, which captured file checkpoints by default. */
-  fileCheckpoints?: boolean;
+  fileCheckpoints: boolean;
   dreamerReview?: DreamerAdmission;
   dreamerReviewedAt?: number;
   finishedAt?: number;
@@ -112,7 +115,7 @@ export type SessionTreeEvent =
   | { type: "session_created"; session: ProjectSession }
   | { type: "active_session_changed"; sessionId: string; reason: "created" | "new" | "opened" }
   | { type: "turn_started"; turn: Turn }
-  | { type: "goal_changed"; sessionId: string; goal: SessionGoal | null }
+  | { type: "goal_changed"; sessionId: string; goal: SessionGoalState | null }
   | { type: "entry_appended"; entry: SessionEntry }
   | { type: "turn_finished"; turnId: string; status: Exclude<TurnStatus, "running">; error?: { code: string; message: string }; finishedAt: number }
   | { type: "dreamer_reviewed"; memoryPath: string; turnIds: string[]; checkpoint: DreamerCheckpoint }

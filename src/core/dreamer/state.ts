@@ -5,6 +5,11 @@ export interface DreamerAdmission {
 
 export interface DreamerCursor {
   turnId: string;
+  /** Ordinal of the SessionEntry within this turn. */
+  entryOrdinal: number;
+  /** Formatted JSONL record within that entry's message. */
+  recordIndex: number;
+  /** UTF-16 offset within the current record. */
   offset: number;
 }
 

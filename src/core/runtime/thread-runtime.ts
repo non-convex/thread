@@ -22,7 +22,7 @@ import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memor
 import type { Project } from "../project/model.js";
 import type { SessionRecallService } from "../session-recall/service.js";
 import type { SessionTreeRepository } from "../session-tree/repository.js";
-import type { SessionGoal } from "../session-tree/model.js";
+import type { SessionGoal, SessionGoalState } from "../session-tree/model.js";
 import { createId } from "../utils/id.js";
 import { createGoalTool, goalPrompt, GOAL_TOOL_NAME, DEFAULT_GOAL_MAX_TURNS, type GoalDecision } from "./goal.js";
 import type { SessionTreeService } from "../session-tree/service.js";
@@ -40,6 +40,8 @@ import { runtimeEventSink, withoutModelContent, safeRuntimeEvent, type RuntimeSu
 interface ActiveOperation {
   sessionId?: string;
   goalId?: string;
+  /** Exact prompt and registry captured by this operation's current runner. */
+  context?: { systemPrompt: string; tools: ToolRegistry };
   controller: AbortController;
   signal: AbortSignal;
   done: Promise<unknown>;
@@ -106,18 +108,17 @@ export class ThreadRuntime {
       sessionIdForTurn: (turnId) => this.tree.projection.turns.get(turnId)?.sessionId,
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
-      readTurn: (turnId) => {
+      readTurn: (turnId, startOrdinal) => {
         const entries = this.tree.projection.entriesByTurn.get(turnId);
         if (!entries) throw new Error(`Dreamer cannot read missing turn: ${turnId}`);
         return (function* () {
-          for (const entry of entries) if (entry.type === "message") yield entry.message;
+          for (let ordinal = startOrdinal; ordinal < entries.length; ordinal++) {
+            const entry = entries[ordinal]!;
+            if (entry.type === "message") yield { ordinal: entry.ordinal, message: entry.message };
+          }
         })();
       },
-      pendingTurns: () => this.tree.pendingDreamerTurns(this.memory!.filePath).map((turn) => ({
-        id: turn.id, sessionId: turn.sessionId, status: turn.status, startedAt: turn.startedAt,
-        ...(turn.finishedAt !== undefined ? { finishedAt: turn.finishedAt } : {}),
-        memoryRevision: turn.dreamerReview!.memoryRevision,
-      })),
+      pendingTurns: () => this.tree.pendingDreamerTurns(this.memory!.filePath),
       checkpoint: () => this.tree.dreamerCheckpoint(this.memory!.filePath),
       saveCheckpoint: (turnIds, checkpoint, signal) => this.tree.checkpointDreamer(this.memory!.filePath, turnIds, checkpoint, signal),
       protectedWritePaths: this.protectedWritePaths,
@@ -360,15 +361,10 @@ export class ThreadRuntime {
   async pauseGoal(sessionId: string): Promise<void> {
     this.assertOpen();
     const id = this.tree.resolveSession(sessionId).id;
-    const active = this.active;
-    if (active?.sessionId === id && active.goalId) {
-      active.controller.abort(new DOMException("Goal paused by user", "AbortError"));
-      await this.settleCancellation(active);
-      return;
-    }
+    if (await this.stopGoalOperation(id, "Goal paused by user")) return;
     await this.operate(id, undefined, async () => {
       const goal = this.tree.readGoal(id);
-      if (goal && goal.status !== "completed") await this.saveGoal(id, {
+      if (goal && goal.status !== "completed" && goal.status !== "paused") await this.saveGoal(id, {
         ...goal, status: "paused", reason: "Paused by user.", updatedAt: Date.now(),
       });
     });
@@ -379,15 +375,23 @@ export class ThreadRuntime {
     const id = this.tree.resolveSession(sessionId).id;
     const expected = this.active?.sessionId === id && this.active.goalId
       ? this.active.goalId : this.tree.readGoal(id)?.id;
-    await this.pauseGoal(id);
+    await this.stopGoalOperation(id, "Goal cleared by user");
     await this.operate(id, undefined, async () => {
       const goal = this.tree.readGoal(id);
       if (goal && goal.id !== expected) throw new Error("The goal changed before it could be cleared");
-      await this.saveGoal(id, null);
+      if (goal) await this.saveGoal(id, null);
     });
   }
 
-  private async saveGoal(sessionId: string, goal: SessionGoal | null, onEvent?: RuntimeEventSink, signal?: AbortSignal): Promise<void> {
+  private async stopGoalOperation(sessionId: string, reason: string): Promise<boolean> {
+    const active = this.active;
+    if (active?.sessionId !== sessionId || !active.goalId) return false;
+    active.controller.abort(new DOMException(reason, "AbortError"));
+    await this.settleCancellation(active);
+    return true;
+  }
+
+  private async saveGoal(sessionId: string, goal: SessionGoalState | null, onEvent?: RuntimeEventSink, signal?: AbortSignal): Promise<void> {
     await this.tree.setGoal(sessionId, goal, signal);
     this.publishGoal(sessionId, onEvent);
   }
@@ -454,10 +458,11 @@ export class ThreadRuntime {
     const session = this.tree.resolveSession(sessionId);
     const messages = this.builder.build({ sessionId: session.id }).messages;
     if (!this.model) return { messages, usage: undefined };
+    const context = this.active?.sessionId === session.id ? this.active.context : undefined;
     const { requestTokens } = contextBudget({
-      systemPrompt: this.systemPromptFor(session.id),
+      systemPrompt: context?.systemPrompt ?? this.systemPromptFor(session.id),
       messages: this.model.acceptsImages ? messages : messages.map(messageWithoutImages),
-      tools: this.toolRegistry.modelDefinitions(),
+      tools: (context?.tools ?? this.toolRegistry).modelDefinitions(),
     }, messages);
     return { messages, usage: { requestTokens, contextWindow: this.model.contextWindow } };
   }
@@ -709,6 +714,7 @@ export class ThreadRuntime {
       for (const tool of this.toolRegistry.list()) tools.register(tool);
       tools.register(goal.tool);
     }
+    if (this.active?.sessionId === sessionId) this.active.context = { systemPrompt, tools };
     return createAgentRunner({ model: this.model, ...(this.modelSelection.reasoning ? { reasoning: this.modelSelection.reasoning } : {}),
       rootPath: this.rootPath, systemPrompt, tree: this.tree, fileHistory: this.files, contextBuilder: this.builder,
       tools, extensions: this.extensions, agentTasks: this.tasks, askPresenter: () => this.askPresenter,

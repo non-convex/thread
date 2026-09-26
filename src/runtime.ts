@@ -14,6 +14,7 @@ export {
   type AskPresenter,
   type AskQuestion,
   type AskRequest,
+  type AskResultDetails,
 } from "./core/runtime/interaction.js";
 export {
   createBuiltinModelClient,

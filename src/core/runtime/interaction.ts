@@ -33,6 +33,13 @@ export interface AskRequest {
 /** One answer per question, each a list of chosen labels or the user's own text. */
 export type AskAnswers = readonly (readonly string[])[];
 
+/** Evidence saved with the ask tool result; display text is never proof of an answer. */
+export type AskResultDetails =
+  | { status: "answered"; answers: AskAnswers }
+  | { status: "dismissed" }
+  | { status: "unavailable" }
+  | { status: "invalid" };
+
 export class AskDismissedError extends Error {
   constructor() {
     super("The user dismissed the question without answering");

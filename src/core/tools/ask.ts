@@ -7,6 +7,7 @@ import {
   AskDismissedError,
   createAskRequest,
   type AskQuestion,
+  type AskResultDetails,
 } from "../runtime/interaction.js";
 import { singletonResource } from "./execution.js";
 import type { AgentTool, ToolResult } from "./types.js";
@@ -72,10 +73,11 @@ export function createAskTool(): AgentTool<{ questions: AskQuestion[] }> {
         return {
           content: "No interactive user is attached to this session, so questions cannot be asked. Choose a reasonable default, state the assumption, and continue.",
           isError: true,
+          details: { status: "unavailable" } satisfies AskResultDetails,
         };
       }
       const invalid = validate(args.questions);
-      if (invalid) return { content: invalid, isError: true };
+      if (invalid) return { content: invalid, isError: true, details: { status: "invalid" } satisfies AskResultDetails };
       const request = createAskRequest(args.questions);
       request.invocation = {
         sessionId: context.invocation.sessionId ?? null,
@@ -92,6 +94,7 @@ export function createAskTool(): AgentTool<{ questions: AskQuestion[] }> {
           return {
             content: "The user dismissed the question without answering. Do not ask again; choose the option you would recommend, say which one you took, and continue.",
             isError: false,
+            details: { status: "dismissed" } satisfies AskResultDetails,
           };
         }
         throw error;
@@ -131,6 +134,6 @@ function present(questions: readonly AskQuestion[], answers: readonly (readonly 
   return {
     content: ["The user answered:", ...lines, "", "Continue with these answers in mind."].join("\n"),
     isError: false,
-    details: { answers },
+    details: { status: "answered", answers } satisfies AskResultDetails,
   };
 }
