@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from "node:process";
 import type { ThreadApp } from "../../app/thread-app.js";
 import { parseInput, type RoutedInput } from "../../app/input-router.js";
 import type { SessionGoal } from "../../core/session-tree/model.js";
+import { projectTranscript } from "../terminal/transcript-projection.js";
 
 function goalLine(goal: SessionGoal | undefined): string {
   return goal ? `[goal ${goal.status} · ${goal.turnsUsed}/${goal.turnLimit} turns] ${goal.objective}${goal.reason ? `\n  reason: ${goal.reason}` : ""}\n`
@@ -37,20 +38,59 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
   const pending = new Set<Promise<void>>();
   const controllers = new Set<AbortController>();
   let explicitExit = false;
-  const onSigint = () => active?.abort(new Error("Interrupted by user"));
+  const onSigint = () => {
+    const target = app.runtime.activeSessionId;
+    if (target) void app.runtime.interrupt(target).catch(() => undefined);
+    else active?.abort(new Error("Interrupted by user"));
+  };
   process.on("SIGINT", onSigint);
   let streamed = false;
+  // Keep only the current execution's received text for opening its Session mid-turn.
+  let runningSessionId = app.runtime.activeSessionId;
+  let runningText = "";
+  const recoverRunningText = (sessionId: string) => {
+    const running = app.runtime.readSession(sessionId).activeTurn;
+    return running ? projectTranscript(running.entries, running.tasks)
+      .filter((item) => item.kind === "assistant").map((item) => item.content).join("\n") : "";
+  };
+  if (runningSessionId) runningText = recoverRunningText(runningSessionId);
   const taskStatuses = new Map<string, string>();
+  const scheduledTurns = new Set<string>();
   const detachRuntime = app.runtime.subscribe((event) => {
+    if (event.type === "runtime_status") {
+      if (event.busy && event.sessionId) {
+        runningSessionId = event.sessionId;
+        runningText = recoverRunningText(event.sessionId);
+      } else if (!event.busy) {
+        runningSessionId = undefined;
+        runningText = "";
+      }
+      return;
+    }
+    if (event.agentId === "main" && event.type === "assistant_text_delta" && event.sessionId === runningSessionId) {
+      runningText += event.delta;
+    }
+    if (event.agentId === "main" && event.type === "turn_preparing" && event.scheduled) {
+      if (streamed) { output.write("\n"); streamed = false; }
+      output.write(event.sessionId === app.selectedSessionId
+        ? `\n[scheduled ${event.scheduled.phase} wakeup · ${event.scheduled.scheduleId}]\n${event.input}\n`
+        : `\n[scheduled ${event.scheduled.phase} wakeup · ${event.scheduled.scheduleId} · Session ${event.sessionId}]\n`);
+    }
+    if (event.agentId === "main" && event.type === "turn_started" && event.scheduled) scheduledTurns.add(event.turnId);
+    const scheduledFinished = event.agentId === "main" && event.type === "turn_finished" && event.turnId
+      ? scheduledTurns.delete(event.turnId) : false;
+    if (scheduledFinished && event.sessionId !== app.selectedSessionId && event.type === "turn_finished") {
+      output.write(`\n[scheduled turn ${event.outcome} · Session ${event.sessionId}]\n`);
+    }
     if (event.sessionId !== app.selectedSessionId) return;
     if (event.type === "goal_changed" && event.agentId === "main") {
       if (streamed) { output.write("\n"); streamed = false; }
       output.write(goalLine(event.goal ?? undefined));
       return;
     }
-    if (event.agentId === "main" && event.type === "turn_finished" && streamed) {
-      output.write("\n");
-      streamed = false;
+    if (event.agentId === "main" && event.type === "turn_finished") {
+      if (streamed) { output.write("\n"); streamed = false; }
+      if (scheduledFinished) output.write(`[scheduled turn ${event.outcome}${event.error ? `: ${event.error}` : ""}]\n`);
       return;
     }
     if (event.type === "assistant_text_delta" && event.agentId === "main") {
@@ -87,6 +127,9 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
       if (app.selectedSessionId !== previousSessionId) {
         const goal = app.runtime.readGoal(app.selectedSessionId);
         if (goal) output.write(goalLine(goal));
+        if (app.selectedSessionId === runningSessionId) {
+          output.write(`\n[running Session ${runningSessionId} · received so far]\n${runningText || "(waiting for output)"}\n`);
+        }
       }
       if (result.kind === "turn" && result.result.error) {
         output.write(`[turn ${result.result.outcome}: ${result.result.error.message}]\n`);

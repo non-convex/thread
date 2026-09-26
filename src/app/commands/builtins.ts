@@ -47,23 +47,32 @@ function requestLabels(snapshot: HistorySnapshot): Map<string, string> {
 
 const sessions: ThreadCommand = {
   name: "sessions",
-  description: "List root Sessions and their saved live tips.",
+  description: "List Sessions, including scheduled tasks and running turns.",
   async execute(_args, context) {
     context.signal.throwIfAborted();
     const summaries = context.runtime.listSessions().map((session) => ({
       ...session,
       active: session.sessionId === context.selectedSessionId,
     }));
-    const labels = requestLabels(context.runtime.readHistory());
+    const snapshot = context.runtime.readHistory();
+    const labels = requestLabels(snapshot);
+    const running = new Map(snapshot.turns.filter((turn) => turn.status === "running").map((turn) => [turn.sessionId, turn.id]));
+    const schedules = context.runtime.schedulingEnabled ? context.runtime.listSchedules() : [];
+    const name = (session: typeof summaries[number]) => {
+      const tasks = schedules.filter((task) => task.sessionId === session.sessionId);
+      if (tasks.length) return tasks.map((task) => task.name).join(" · ");
+      const tip = running.get(session.sessionId) ?? session.liveTipTurnId;
+      return tip ? labels.get(tip) ?? "(no request text)" : "Root (no turns)";
+    };
     const lines = summaries.map((session) =>
-      `${session.active ? "*" : " "} ${session.sessionId} tip=${short(session.liveTipTurnId)} turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
+      `${session.active ? "*" : " "} ${session.sessionId}${running.has(session.sessionId) ? " running" : ""} · ${name(session)} · turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
     );
     return viewResult(lines.join("\n"), {
       type: "command_picker",
-      title: "Sessions · opening leaves workspace files unchanged",
+      title: "Sessions · switch views without interrupting execution",
       items: summaries.map((session) => ({
-        label: session.liveTipTurnId ? labels.get(session.liveTipTurnId) ?? "(no request text)" : "Root (no active turns)",
-        description: `${session.sessionId} · ${new Date(session.createdAt).toLocaleString()} · ${session.turnCount} turns`,
+        label: name(session),
+        description: `${session.sessionId}${running.has(session.sessionId) ? " · running" : ""} · ${new Date(session.createdAt).toLocaleString()} · ${session.turnCount} turns`,
         command: `/session ${session.sessionId}`,
         submit: true,
         current: session.active,
@@ -74,13 +83,13 @@ const sessions: ThreadCommand = {
 
 const open: ThreadCommand = {
   name: "open",
-  description: "Resume a root Session without changing workspace files.",
+  description: "View a Session and its live progress without changing workspace files or execution.",
   async execute(args, context) {
     if (args.length === 0) return sessions.execute([], context);
     if (args.length !== 1) throw new Error("Usage: /thread open <session-id>");
     context.signal.throwIfAborted();
     const session = await context.openSession(args[0]!);
-    return ephemeral(`Opened Session ${session.id}; workspace left unchanged`, true);
+    return ephemeral(`Opened Session ${session.id}; workspace and running execution left unchanged`, true);
   },
 };
 

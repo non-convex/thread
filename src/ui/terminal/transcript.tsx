@@ -327,6 +327,7 @@ export function TranscriptTurnsView(props: {
 
 const WELCOME_HINTS: ReadonlyArray<readonly [keys: string, description: string]> = [
   ["/session", "resume work"],
+  ["/schedule", "manage timed tasks"],
   ["/thread search", "<query>  search history"],
   ["/agent", "choose models & enable agents"],
   ["Ctrl+V / Alt+V", "paste image"],

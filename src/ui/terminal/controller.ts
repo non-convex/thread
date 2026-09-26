@@ -13,6 +13,7 @@ import {
   filteredModels,
   isFloatingOverlay,
   openEphemeralView,
+  type LiveBlock,
   type UiScreen,
   type UiState,
 } from "../state.js";
@@ -30,6 +31,7 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
     { name: "model", description: "Inspect or select the main model" },
     { name: "new", description: "Create an empty Session from the project Root" },
     { name: "session", description: "List or resume root Sessions" },
+    { name: "schedule", description: "Browse schedules and open their Sessions" },
     ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
     { name: "thread", description: "Session Tree status, history, Sessions, and search" },
     { name: "rewind", description: fileCheckpoints ? "Undo built-in file edits and rewind the conversation" : "Rewind the conversation; keep workspace files" },
@@ -59,6 +61,9 @@ export class ThreadTuiController {
   private readonly viewHistory: UiScreen[] = [];
   private readonly batcher: UiEventBatcher;
   private active: AbortController | undefined;
+  /** The single in-flight execution view, independent of the selected Session. */
+  private liveView: UiState | undefined;
+  private runtimeBusy = false;
   private readonly inputControllers = new Set<AbortController>();
   private historyDirty = true;
   private stopped = false;
@@ -77,6 +82,9 @@ export class ThreadTuiController {
     const session = app.runtime.readSession(app.selectedSessionId);
     this.state = createUiState(session.session.id, session.liveTipTurnId, []);
     this.state.goal = app.runtime.readGoal(session.session.id);
+    this.runtimeBusy = app.runtime.busy;
+    if (this.runtimeBusy && app.runtime.activeSessionId) this.recoverLiveView(app.runtime.activeSessionId);
+    this.state.busy = this.runtimeBusy;
     this.meta = {
       rootPath: app.runtime.rootPath,
       modelName: app.runtime.model?.modelId ?? "no model",
@@ -113,6 +121,7 @@ export class ThreadTuiController {
         text: app.runtime.agentProfileDiagnostics.map((item) => `${item.profileId}: ${item.message}`).join(" · "),
       };
     }
+    this.showLiveView();
   }
 
   get isStopped(): boolean { return this.stopped; }
@@ -148,13 +157,16 @@ export class ThreadTuiController {
 
   interrupt(): boolean {
     if (this.stopped || this.disposed) return false;
+    const target = this.app.runtime.activeSessionId;
+    if (target) {
+      void this.app.runtime.interrupt(target).catch(() => undefined);
+      return true;
+    }
     if (this.active) {
       this.active.abort(new DOMException("Aborted", "AbortError"));
       return true;
     }
-    if (!this.state.busy) return false;
-    void this.app.runtime.interrupt(this.app.selectedSessionId).catch(() => undefined);
-    return true;
+    return false;
   }
 
   idleCtrlC(): boolean {
@@ -218,7 +230,7 @@ export class ThreadTuiController {
       return true;
     }
     if (!isFloatingOverlay(screen)) return false;
-    if (screen.busy || this.active) return true;
+    if (screen.busy) return true;
     if (screen.type === "model_picker") {
       const typed = printableKey(key);
       if (typed || key.name === "backspace") {
@@ -270,8 +282,8 @@ export class ThreadTuiController {
     const input = /^\s*\/goal(?:\s|$)/.test(raw) ? raw.trimStart() : raw.trim();
     if ((!input && images.length === 0) || this.stopped || this.disposed) return undefined;
     const route = parseInput(input);
-    const foreground = !this.active && !this.state.busy;
-    if (!this.app.canHandleInput(route, !foreground) || (!foreground && images.length > 0)) return undefined;
+    const foreground = route.category === "work" && !this.active && !this.state.busy;
+    if (!this.app.canHandleInput(route, Boolean(this.active || this.state.busy)) || (!foreground && images.length > 0)) return undefined;
     if (input === "/exit") {
       this.requestStop();
       return Promise.resolve(true);
@@ -310,36 +322,35 @@ export class ThreadTuiController {
       });
       if (this.stopped || this.disposed) return true;
       this.batcher.flush();
-      // turn_finished already handed committed turns to the transcript, including each goal turn.
-      if (foreground && result.kind === "turn" && this.state.liveTipTurnId !== result.result.turn.id) this.historyDirty = true;
-      const historyChanged = foreground && this.syncTranscript();
-      if (historyChanged) this.state.liveTurn = undefined;
-      if (historyChanged || (foreground && result.kind === "command" && result.result.changedState)) this.refreshMeta();
+      // A control may have switched selection while the original work was running.
+      const historyChanged = this.syncTranscript();
+      this.showLiveView();
+      if (historyChanged || (result.kind === "command" && result.result.changedState)) this.refreshMeta();
       if (result.kind === "command") this.presentCommand(result.result);
       return true;
     } catch (error) {
       if (this.stopped || this.disposed) return false;
       this.batcher.flush();
       // A failed input may have persisted messages without reaching turn_finished.
-      if (foreground) {
-        this.historyDirty = true;
-        this.syncTranscript();
-        this.state.liveTurn = undefined;
-      }
+      if (foreground) this.historyDirty = true;
+      this.syncTranscript();
+      this.showLiveView();
       this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
       return false;
     } finally {
       this.inputControllers.delete(controller);
-      if (this.active === controller) this.active = undefined;
+      if (this.active === controller) {
+        this.active = undefined;
+      }
       if (!this.stopped && !this.disposed) {
         if (foreground) {
           if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
             this.state.turnFinishedAt = Date.now();
           }
-          this.state.busy = false;
-          this.state.activity = undefined;
           this.refreshGit();
         }
+        this.state.busy = this.runtimeBusy || Boolean(this.active);
+        this.showLiveView();
         this.notify();
       }
     }
@@ -352,68 +363,93 @@ export class ThreadTuiController {
       this.batcher.push(event);
       return;
     }
-    if (event.sessionId !== this.app.selectedSessionId) return;
+    if (event.type === "runtime_status") {
+      this.batcher.push(event);
+      return;
+    }
     if (event.type === "model_call_started" || event.type === "model_call_finished" ||
         event.type === "model_attempt_started" || event.type === "model_attempt_finished" ||
         ((event.type === "agent_run_started" || event.type === "agent_run_finished") && !event.taskId)) return;
     if (event.taskId && event.type !== "agent_task_created" && event.type !== "agent_task_updated" && event.type !== "context_updated") {
-      this.batcher.push({ type: "agent_task_trace", taskId: event.taskId, event });
+      this.batcher.push({ type: "agent_task_trace", taskId: event.taskId, sessionId: event.sessionId, event });
       return;
     }
     this.batcher.push(event.type === "context_updated"
-      ? { type: "context_updated", percent: Math.min(999, Math.round(event.estimatedTokens / event.contextWindow * 100)) }
+      ? { type: "context_updated", sessionId: event.sessionId,
+          percent: Math.min(999, Math.round(event.estimatedTokens / event.contextWindow * 100)) }
       : event);
   }
 
   private applyUiEvents(events: readonly UiEvent[]): void {
     if (this.stopped || this.disposed) return;
     let kind: UiNotifyKind = "live";
-    let applied = false;
-    let settled = false;
     for (const event of events) {
       try {
-        reduceUiEvent(this.state, event);
-        // A command's event can precede its input result; acceptance stays busy until finishInput settles.
-        if (this.active && event.type === "command_finished") {
-          this.state.busy = true;
-          this.state.activity = `running /${event.name}`;
-        }
-        if (event.type === "context_updated") this.meta.contextPercent = event.percent;
-        if (notifyKind(event) === "full") kind = "full";
-        if (event.type === "turn_finished" || (event.type === "session_changed" && event.reason !== "turn")) {
-          this.historyDirty = true;
-          // Owned multi-turn input commits each turn here. External turns still settle below.
-          if (this.active && this.syncTranscript()) {
-            this.state.liveTurn = undefined;
-            this.refreshMeta();
-            kind = "full";
+        if (event.type === "runtime_status") {
+          this.runtimeBusy = event.busy;
+          if (event.busy && event.sessionId && !this.liveView) {
+            this.liveView = createUiState(event.sessionId, null, []);
+            this.liveView.activity = "preparing";
           }
-          settled = true;
-        } else if (event.type === "compaction_finished" && event.reason === "manual" && event.ok && event.entryId) {
-          this.historyDirty = true;
-        } else if (event.type === "turn_preparing" || event.type === "turn_started") settled = false;
-        applied = true;
+          if (!event.busy) {
+            // Admission can end without a turn_started/turn_finished pair.
+            if (this.liveView?.sessionId === this.app.selectedSessionId) {
+              const pending = this.liveView.liveTurn?.id.startsWith("pending:");
+              this.state.turnStartedAt = pending ? undefined : this.liveView.turnStartedAt;
+              this.state.turnFinishedAt = pending ? undefined : this.liveView.turnFinishedAt;
+            }
+            this.liveView = undefined;
+          }
+        } else if (event.type === "command_started" || event.type === "command_finished") {
+          if (!this.runtimeBusy && !this.active) reduceUiEvent(this.state, event);
+        } else if (event.type === "dreamer_status") {
+          reduceUiEvent(this.state, event);
+        } else if (event.type === "goal_changed") {
+          if (event.sessionId === this.app.selectedSessionId) reduceUiEvent(this.state, event);
+        } else if (event.type === "session_changed") {
+          if (event.sessionId === this.app.selectedSessionId && event.reason !== "turn") this.historyDirty = true;
+        } else if (event.type === "context_updated") {
+          if (event.sessionId === this.app.selectedSessionId) this.meta.contextPercent = event.percent;
+        } else {
+          if ((event.type === "turn_preparing" || event.type === "turn_started") && !this.liveView) {
+            this.liveView = createUiState(event.sessionId, null, []);
+          }
+          if (this.liveView && event.sessionId === this.liveView.sessionId) {
+            reduceUiEvent(this.liveView, event);
+            if (event.type === "turn_finished") {
+              if (event.sessionId === this.app.selectedSessionId && this.liveView.notice) {
+                this.state.notice = this.liveView.notice;
+              } else if (event.sessionId !== this.app.selectedSessionId) {
+                this.state.notice = { level: event.outcome === "failed" ? "error" : "info",
+                  text: `Turn ${event.outcome} in Session ${event.sessionId}. Open it with /session ${event.sessionId}.` };
+              }
+              // The committed turn is now owned by the durable projection. Goal
+              // runs can immediately start another turn in this same live view.
+              this.liveView.liveTurn = undefined;
+              this.liveView.activity = "preparing";
+              if (event.sessionId === this.app.selectedSessionId) this.historyDirty = true;
+            }
+            if (event.type === "compaction_finished" && event.reason === "manual" && event.ok && event.entryId &&
+                event.sessionId === this.app.selectedSessionId) this.historyDirty = true;
+          }
+        }
+        if (notifyKind(event) === "full") kind = "full";
       } catch {
         // One malformed presentation event must not discard the rest of its frame.
       }
     }
-    // Owned input flushes once on completion; external runtime turns refresh here.
-    if (!this.active && this.syncTranscript()) {
-      if (settled) {
-        this.state.liveTurn = undefined;
-        this.state.busy = false;
-        this.state.activity = undefined;
-      }
+    if (this.syncTranscript()) {
       this.refreshMeta();
       kind = "full";
     }
-    if (applied) this.notify(kind);
+    this.state.busy = this.runtimeBusy || Boolean(this.active);
+    this.showLiveView();
+    if (events.length) this.notify(kind);
   }
 
   private presentCommand(result: CommandResult): void {
     if (result.presentation === "clear") {
       this.state.transcript = [];
-      this.state.liveTurn = undefined;
       return;
     }
     if (result.view) this.openView(result.view);
@@ -432,7 +468,8 @@ export class ThreadTuiController {
   /** Menu navigation keeps the parent and its selection; successful actions close it. */
   private async runScreenCommand(command: string, replace = false): Promise<void> {
     const screen = this.state.screen;
-    if (!isFloatingOverlay(screen) || screen.busy || this.active || this.stopped) return;
+    if (!isFloatingOverlay(screen) || screen.busy || this.stopped ||
+        !this.app.canHandleInput(parseInput(command), Boolean(this.active || this.state.busy))) return;
     screen.busy = true;
     screen.error = undefined;
     this.notify();
@@ -471,9 +508,50 @@ export class ThreadTuiController {
     }
   }
 
+  private recoverLiveView(sessionId: string): void {
+    if (this.liveView?.sessionId === sessionId) return;
+    const view = createUiState(sessionId, null, []);
+    const running = this.app.runtime.readSession(sessionId).activeTurn;
+    if (running) {
+      const { turn, entries, tasks } = running;
+      const projected = projectTranscript(entries, tasks);
+      const user = projected.find((item) => item.id === `${turn.id}:user`);
+      view.turnStartedAt = turn.startedAt;
+      view.liveTurn = { id: turn.id, sessionId, input: user?.content ?? "", startedAt: turn.startedAt,
+        blocks: projected.filter((item): item is LiveBlock => item.kind !== "user" && item.kind !== "interrupted") };
+      view.activity = "thinking";
+    } else view.activity = "preparing";
+    this.liveView = view;
+  }
+
+  private showLiveView(): void {
+    const view = this.liveView;
+    if (view && view.sessionId === this.app.selectedSessionId) {
+      // A navigation snapshot may already contain the committed turn before
+      // its turn_finished event reaches this frame. Never render it twice.
+      this.state.liveTurn = view.liveTurn?.id === this.state.liveTipTurnId ? undefined : view.liveTurn;
+      this.state.activity = view.activity;
+      this.state.modelRetryError = view.modelRetryError;
+      this.state.turnStartedAt = view.turnStartedAt;
+      this.state.turnFinishedAt = view.turnFinishedAt;
+      if (view.notice) this.state.notice = view.notice;
+    } else {
+      this.state.liveTurn = undefined;
+      if (this.runtimeBusy && view) {
+        this.state.turnStartedAt = undefined;
+        this.state.turnFinishedAt = undefined;
+        this.state.modelRetryError = undefined;
+      }
+      this.state.activity = this.runtimeBusy && view
+        ? `working in Session ${view.sessionId.slice(0, 12)}`
+        : this.runtimeBusy || this.active ? "preparing" : undefined;
+    }
+  }
+
   private syncTranscript(): boolean {
     // Opening a picker changes UI state, not the persisted conversation.
     if (!this.historyDirty && this.state.sessionId === this.app.selectedSessionId) return false;
+    const switched = this.state.sessionId !== this.app.selectedSessionId;
     const { session, liveTipTurnId, turns, entries, tasks } = this.app.runtime.readSession(this.app.selectedSessionId);
     const transcript = projectTranscript(entries, tasks);
     const last = turns.at(-1);
@@ -484,6 +562,12 @@ export class ThreadTuiController {
     this.state.sessionId = session.id;
     this.state.liveTipTurnId = liveTipTurnId;
     this.state.goal = this.app.runtime.readGoal(session.id);
+    if (switched) {
+      this.state.notice = undefined;
+      this.state.turnStartedAt = undefined;
+      this.state.turnFinishedAt = undefined;
+      this.state.modelRetryError = undefined;
+    }
     this.historyDirty = false;
     return true;
   }

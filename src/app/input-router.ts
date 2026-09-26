@@ -23,6 +23,7 @@ export interface InputRouteHandlers {
   rewind(args: string[], options: InputOptions): Promise<InputResult>;
   thread(input: string, options: InputOptions): Promise<InputResult>;
   goal(action: GoalInputAction, options: InputOptions): Promise<InputResult>;
+  schedule(args: string[], options: InputOptions): Promise<InputResult>;
   turn(input: string, options: InputOptions): Promise<InputResult>;
 }
 
@@ -65,9 +66,11 @@ export function parseInput(input: string): RoutedInput {
   const command = slashCommandName(trimmed);
   const goal = command === "goal" ? parseGoalInput(input) : undefined;
   if (goal) Object.freeze(goal);
-  const category: RoutedInput["category"] = goal && (goal.type === "status" || goal.type === "pause" || goal.type === "clear")
+  const rest = command ? trimmed.slice(command.length + 1).trim() : "";
+  const navigation = command === "session" || (command === "thread" && /^(?:sessions|open)(?:\s|$)/.test(rest));
+  const category: RoutedInput["category"] = navigation || command === "schedule" || (goal && (goal.type === "status" || goal.type === "pause" || goal.type === "clear"))
     ? "control" : "work";
-  return Object.freeze({ input, command, rest: command ? trimmed.slice(command.length + 1).trim() : "", goal, category });
+  return Object.freeze({ input, command, rest, goal, category });
 }
 
 export class InputRouter {
@@ -78,6 +81,7 @@ export class InputRouter {
     if (!command || command === "exit") return this.handlers.turn(input, options);
     switch (command) {
       case "goal": return this.handlers.goal(goal!, options);
+      case "schedule": return this.handlers.schedule(parseCommandLine(rest), options);
       case "new":
       case "compact":
       case "clear":

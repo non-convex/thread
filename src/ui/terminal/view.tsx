@@ -169,9 +169,8 @@ export function ThreadRoot(props: {
       return;
     }
     if (key.name === "escape") {
-      if (screen().type === "document") { key.preventDefault(); props.controller.closeView(); }
+      if (screen().type === "document" || isFloatingOverlay(screen())) { key.preventDefault(); props.controller.closeView(); }
       else if (props.controller.interrupt()) key.preventDefault();
-      else if (screen().type !== "session") { key.preventDefault(); props.controller.closeView(); }
       else if (draft.forcePaths()) { key.preventDefault(); draft.setForcePaths(false); }
       return;
     }

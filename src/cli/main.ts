@@ -105,7 +105,10 @@ Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
 /model to select the main model, /agent to configure background agents, /clear, /compact,
 /goal <objective> to work across turns (status, pause, resume, clear),
+/schedule to view or manage timed tasks (list, open, pause, resume, delete),
 /thread for Session Tree history/search, /rewind <turn-id>, or /exit.
+Ask the agent to create scheduled tasks; they run only while Thread is open.
+Use /schedule or /session to view a task's Session, including while it is running.
 Rewind restores recorded edit/write changes and the conversation; bash changes are not tracked.
 In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
 }

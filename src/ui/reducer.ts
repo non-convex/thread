@@ -29,6 +29,7 @@ function runningWorkers(state: UiState): number {
 
 export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
+    case "runtime_status": return;
     case "dreamer_status":
       if (state.screen.type === "agent_settings" && state.screen.agentId === "dreamer") {
         state.screen.enabled = event.status.enabled;
@@ -60,10 +61,6 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.busy = false;
       state.activity = undefined;
       return;
-    case "session_changed":
-      state.sessionId = event.sessionId;
-      state.liveTipTurnId = event.liveTipTurnId;
-      return;
     case "goal_changed":
       if (event.sessionId === state.sessionId) {
         state.goal = event.goal ?? undefined;
@@ -84,16 +81,17 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       return;
     case "turn_started": {
       state.busy = true;
-      state.activity ??= "thinking";
+      if (!state.activity || state.activity === "preparing") state.activity = "thinking";
       state.modelRetryError = undefined;
       state.notice = undefined;
       const previous = state.liveTurn;
-      const preparing = previous?.id.startsWith("pending:") && previous.input === event.input && previous.sessionId === event.sessionId
+      const continuing = previous?.sessionId === event.sessionId &&
+        (previous.id === event.turnId || (previous.id.startsWith("pending:") && previous.input === event.input))
         ? previous : undefined;
-      state.turnStartedAt = preparing?.startedAt ?? Date.now();
+      state.turnStartedAt = continuing?.startedAt ?? Date.now();
       state.turnFinishedAt = undefined;
       state.liveTurn = { id: event.turnId, input: event.input, sessionId: event.sessionId,
-        blocks: preparing?.blocks ?? [],
+        blocks: continuing?.blocks ?? [],
         startedAt: state.turnStartedAt };
       return;
     }

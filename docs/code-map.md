@@ -20,6 +20,8 @@ These stages have different responsibilities. `AgentRunner` in `core/agent/runne
 
 `ThreadRuntime.runGoal()` reuses this path for a bounded sequence of turns inside one foreground operation. `runtime/goal.ts` supplies the goal instructions and the runner-local outcome tool; the Session Tree stores goal changes and per-turn rewind snapshots. The app permits goal status and stop controls while its main input remains active. Ordinary `prompt()` still runs exactly one turn.
 
+Scheduling is opt-in in `core/runtime/options.ts` and starts in `ThreadRuntime.open()`. `core/scheduling/` validates time rules, provides main-agent tools, and scans for due work only while the process is open. A wakeup enters the same runtime-wide serial execution path as a human turn, targeting its task's fixed Session; the coding app's `/schedule` management command lives in `app/commands/schedule.ts`. See [scheduled tasks](./scheduling.md).
+
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 
 `app/model-catalog.ts` limits the coding app's OpenAI Codex model lists to GPT-6 Astra, Sol, and Luna. The core catalog accepts an optional `isModelVisible` predicate for `list()` and `listAll()`; without it, embedded hosts retain the complete catalog. This display filter does not restrict explicit `createClient()` selections or change provider authentication.
@@ -27,6 +29,8 @@ Model discovery, provider configuration and login belong to `agent/model-catalog
 ## Persistence and file changes
 
 The Session Tree and worker-task repositories own their record formats and projections. Both use `core/utils/event-log.ts` for ordered writes, durability barriers, interrupted-tail recovery and draining accepted writes during close. Projection updates remain synchronous; a durable append waits for its write before returning.
+
+`core/session-tree/service.ts` records a new dedicated Session and its schedule in one event batch without selecting it. On wakeup admission it batches the ordinary user message and `Turn.scheduled` origin with consumption/advancement of the due occurrence. `session-tree/projection.ts` retains the task state; rewind does not reverse schedules or consumed wakeups. Interrupted turn recovery does not retry their side effects.
 
 Session Tree and credential storage use `core/utils/file-lock.ts`. The operating system owns the lock, and closing the handle releases it. The lock file stays in place. JSON snapshots, including the Session Tree manifest, share `atomic-json.ts`. Built-in file tools and rewind use the underlying `atomic-file.ts` helper to prepare complete files before publishing them.
 
@@ -42,7 +46,7 @@ The runtime protects its actual state directory from built-in file writes. The c
 
 ## From runtime events to the terminal
 
-The TUI controller receives runtime events and batches them through `ui/events.ts`. Coding command events originate in `app/events.ts` and arrive through `onCommandEvent`; the app never imports UI code. Core uses `onExecutionEvent` internally, and public prompt options forward only the documented fields. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
+The TUI controller receives runtime events and batches them through `ui/events.ts`. It retains one in-flight view even when that Session is not selected, so `/schedule` and `/session` can open live work without losing received deltas. `runtime_status` drives execution busy state; selecting a Session only changes the viewing preference and does not redirect execution. Coding command events originate in `app/events.ts` and arrive through `onCommandEvent`; the app never imports UI code. Core uses `onExecutionEvent` internally, and public prompt options forward only the documented fields. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
 
 `contextSnapshot(sessionId)` supplies messages and usage from one context build. Context construction clones retained content rather than first cloning the complete live-path history. Public history queries still return independent snapshots. `scripts/check-boundaries.ts`, invoked by `bun run check`, enforces core/app import directions without executing the runtime.
 

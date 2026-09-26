@@ -74,7 +74,7 @@
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
-提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记忙碌并清空本次文字（普通 turn 也清空已发送图片），随后仍可编辑下一条草稿；忙碌或输入无效时拒绝且保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 解析的类别统一决定：`/goal`（含 status）、`/goal pause`、`/goal clear` 是运行中可达的控制输入；`/goal <objective>`、`/goal resume` 和其他输入是工作输入，不插队。控制输入不覆盖正在进行的 turn、计时或流式状态。
+提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记忙碌并清空本次文字（普通 turn 也清空已发送图片），随后仍可编辑下一条草稿；忙碌或输入无效时拒绝且保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 解析的类别统一决定：`/goal`（含 status）、`/goal pause`、`/goal clear`、`/schedule` 及会话导航（`/session`、`/thread sessions`、`/thread open`）是运行中可达的控制输入；启动 agent、压缩、回退等仍是工作输入，不插队。控制输入不重置正在进行的 turn、计时或流式状态；会话导航只改变查看目标，不改变正在执行的会话。
 
 文字可用鼠标拖选，再按 `Ctrl+C` 或 `Alt+C` 复制；输入框通过键盘选中的文字也支持复制。选区存在时，`Ctrl+C` 优先复制，不中断任务、清空输入或退出；`Esc` 先取消选区。没有选区时，`Ctrl+C` 保留原有的中断／清空／退出行为，`Alt+C` 不执行操作。终端若拦截复制快捷键，可用 `Alt+C`。欢迎页和文档页提供复制提示。
 
@@ -165,7 +165,9 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 
 带有下级选项的命令，直接回车就打开输入区上方的选择面板，不要求先记住子命令或复制 ID。面板左右各留 1 列，与输入框的外边对齐，铺 `surface` 底色；有 Worker 卡片栏时位于栏之上，否则紧贴状态行之上，没有边框。面板第一行是一条写着标题和按键提示的横线（`── 标题 ────── ↑/↓ · ⏎ · esc ──`）；ask 把这条线和标题都画成 `spark`，表示正在等待用户回答。输入 `/` 或 `@` 时出现的补全列表同样以一条写着 `↑/↓ · tab complete` 的横线开头。命令、ask 和补全／建议面板显示时优先于 Worker trace。
 
-`/thread` 从命令注册表生成子命令列表。选择 status、history 后进入可滚动文档；选择 search 后将 `/thread search ` 填入输入框，等用户输入查询再执行。`/session`、`/thread sessions` 和不带 ID 的 `/thread open` 共用 Session 列表，显示当前 Session、请求摘要、ID 和创建时间。回车切换会话，工作区文件保持不变。
+`/thread` 从命令注册表生成子命令列表。选择 status、history 后进入可滚动文档；选择 search 后将 `/thread search ` 填入输入框，等用户输入查询再执行。`/session`、`/thread sessions` 和不带 ID 的 `/thread open` 共用 Session 列表，显示当前 Session、请求摘要或定时任务名称、运行标记、ID 和创建时间。运行中也可以回车切换查看会话，工作区文件和执行目标保持不变。
+
+`/schedule` 显示定时任务选择面板，回车打开任务绑定的 Session；也可直接输入 `/schedule open <任务ID>`。面板内的 Esc 只关闭面板，不中断正在运行的任务；回到会话画面后才按正常规则中断。Controller 持续接收当前运行回合的事件，即使其 Session 尚未显示。切换时复用已接收的 live 投影，完成后交给持久历史，不为每个会话另存一份长期流缓存。全局忙碌状态由 runtime 生命周期事件驱动，不轮询是否空闲。
 
 `/skill` 显示技能名称和描述。选择技能只把 `/skill <name> ` 填入输入框，用户可以追加指令，再按回车调用；浏览列表不会启动模型任务。
 

@@ -1,9 +1,11 @@
-import type { ExecutionEvent } from "../core/runtime/events.js";
+import type { RuntimeEvent } from "../core/runtime/events.js";
 import type { CommandEvent } from "../app/events.js";
 
 /** Presentation events for TUI commands and execution progress. */
-export type UiEvent = ExecutionEvent | CommandEvent
-  | { type: "agent_task_trace"; taskId: string; event: ExecutionEvent };
+export type UiEvent = Exclude<RuntimeEvent, { type: "context_updated" }> | CommandEvent
+  | { type: "context_updated"; sessionId: string | null; percent: number }
+  | { type: "agent_task_trace"; taskId: string; sessionId: string | null;
+      event: Exclude<RuntimeEvent, { type: "runtime_status" | "context_updated" }> };
 export type UiEventSink = (event: UiEvent) => void;
 
 export type UiEventBatchSink = (events: readonly UiEvent[]) => void;

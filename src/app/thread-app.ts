@@ -12,6 +12,7 @@ import { getAuthFilePath } from "../core/auth/credential-store.js";
 import { agentCommand } from "./commands/agents.js";
 import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
 import { routeThreadCommand } from "./commands/registry.js";
+import { scheduleCommand } from "./commands/schedule.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
@@ -105,6 +106,7 @@ export class ThreadApp {
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
       goal: (action, options) => this.routeGoal(action, options),
+      schedule: (args, options) => this.runCommand("schedule", options, () => scheduleCommand(args, this.commandContext(options.signal))),
       turn: async (input, options) => {
         if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
         if (options.images?.length && runtime.model.acceptsImages !== true) {
@@ -123,13 +125,17 @@ export class ThreadApp {
     const tools = core.tools ?? ["read", "view_image", "list", "grep", "write", "edit", "bash", "websearch", "webfetch"];
     const needsAskTool = !core.askPresenter && !tools.some((tool) => typeof tool !== "string" && tool.name === "ask");
     const fileCheckpoints = core.fileCheckpoints ?? true;
+    const scheduling = core.scheduling ?? true;
     const runtimeOptions = snapshotRuntimeOptions({
-      ...core, tools, skills, fileCheckpoints,
+      ...core, tools, skills, fileCheckpoints, scheduling,
       writableExternalDirectories: [...(core.writableExternalDirectories ?? []), threadHome, ...paths],
       protectedWritePaths: [...(core.protectedWritePaths ?? []), path.join(threadHome, "projects"), getAuthFilePath(), `${getAuthFilePath()}.lock`],
       systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         `# Working directory\n\nCurrent project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
         fileEditingPrompt(fileCheckpoints),
+        scheduling ? `# Scheduled tasks
+
+Use schedule_task when the user requests recurring or future work; use list_schedules, pause_schedule, resume_schedule, and delete_schedule to manage it. Choose the current Session for follow-ups to this conversation, or a new Session to isolate the work (created once and reused on every wakeup). Each wakeup is a user turn: make initialPrompt self-contained with the background and instructions for its first run; prompt is the instruction for subsequent runs and may be shorter or identical. Schedules persist, but only execute while Thread is running. The user can open the bound Session from /schedule, including while it is running. Do not use bash sleep as a substitute.` : "",
         `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Project state directories, auth.json, and its lock file are protected from built-in writes. Use the owning service to manage runtime state; config.json, skills, and global memory remain editable.`,
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
@@ -169,7 +175,7 @@ export class ThreadApp {
   }
 
   canHandleInput(route: RoutedInput, busy = false): boolean {
-    return !this.appClosing && (route.category === "control" || (!busy && this.inputOperations.size === 0));
+    return !this.appClosing && (route.category === "control" || (!busy && !this.runtime.busy && this.inputOperations.size === 0));
   }
 
   handleInput(input: string | RoutedInput, options: InputOptions): Promise<InputResult> {
