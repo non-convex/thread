@@ -33,6 +33,8 @@ export function ToolOutputView(props: {
   const icon = () => failed() ? STATUS_ICONS.error : props.tool.status === "completed" ? STATUS_ICONS.success
     : props.tool.status === "denied" ? "⊘" : waiting() ? "◷" : "−";
   const presentation = createMemo(() => presentTool(props.tool, props.content));
+  const summary = createMemo(() => expanded() && props.tool.status === "completed" &&
+    (props.tool.name === "list" || props.tool.name === "grep") ? "" : presentation().summary);
   const args = createMemo(() => cleanToolText(toolArguments(props.tool)));
   const body = createMemo(() => formatToolText(presentation().body));
   // History snapshots replace tool objects; unchanged preview inputs stay cached.
@@ -50,7 +52,7 @@ export function ToolOutputView(props: {
       : line.startsWith("-") ? theme.diffRemoved : theme.muted)(`${line || " "}${index < visible.length - 1 ? "\n" : ""}`)));
   });
   const duration = () => props.tool.durationMs === undefined ? "" : `${(props.tool.durationMs / 1000).toFixed(1)}s`;
-  const hasBody = () => Boolean(presentation().summary || presentation().notice || output());
+  const hasBody = () => Boolean(summary() || presentation().notice || output());
   return (
     <box
       id={`tool-view:${props.tool.id}`}
@@ -90,8 +92,8 @@ export function ToolOutputView(props: {
         <box flexDirection="row" width="100%" paddingLeft={2} flexShrink={0}>
           <text width={2} height={1} flexShrink={0} wrapMode="none" fg={theme.faint} selectable={false}>{TRANSCRIPT_MARKS.result}</text>
           <box flexDirection="column" flexBasis={0} flexGrow={1} minWidth={1} flexShrink={0}>
-            <Show when={presentation().summary}>
-              <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{presentation().summary}</text>
+            <Show when={summary()}>
+              <text fg={failed() ? theme.error : theme.muted} wrapMode="word">{summary()}</text>
             </Show>
             <Show when={presentation().notice}>
               <text fg={theme.muted} wrapMode="word">{presentation().notice}</text>
