@@ -1,5 +1,7 @@
 import path from "node:path";
 import type { DreamerCheckpoint } from "../dreamer/state.js";
+import type { ScheduledTask } from "../scheduling/model.js";
+import { normalizeSchedule } from "../scheduling/timing.js";
 import type {
   ProjectSession,
   FileRewindIntent,
@@ -34,6 +36,8 @@ export class SessionTreeProjection {
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
   readonly liveTips = new Map<string, string | null>();
   readonly goals = new Map<string, Readonly<SessionGoalState>>();
+  /** Project schedules are operational state, independent of conversation rewind. */
+  readonly schedules = new Map<string, Readonly<ScheduledTask>>();
   readonly goalsBeforeTurn = new Map<string, Readonly<SessionGoalState>>();
   readonly goalTurns = new Map<string, number>();
   pendingFileRewind: FileRewindIntent | undefined;
@@ -53,7 +57,7 @@ export class SessionTreeProjection {
   }
 
   private applyEvent(event: SessionTreeEvent, timestamp: number): void {
-    if (this.pendingFileRewind && event.type !== "file_rewind_finished") {
+    if (this.pendingFileRewind && event.type !== "file_rewind_finished" && event.type !== "active_session_changed") {
       throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
     }
     switch (event.type) {
@@ -81,9 +85,7 @@ export class SessionTreeProjection {
         if (!["created", "new", "opened"].includes(event.reason)) {
           throw new SessionTreeCorruptionError(`Unknown active Session change reason: ${String(event.reason)}`);
         }
-        if (this.runningTurnsBySession.size > 0) {
-          throw new SessionTreeCorruptionError("Active Session changed while a turn was running");
-        }
+        // Viewing selection does not redirect execution, which is bound to each turn's Session.
         this.activeSessionId = event.sessionId;
         return;
       case "turn_started": {
@@ -104,6 +106,15 @@ export class SessionTreeProjection {
         }
         if (turn.goalId !== undefined && (typeof turn.goalId !== "string" || !turn.goalId.trim())) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid goal id`);
+        }
+        if (turn.scheduled !== undefined) {
+          const wakeup = turn.scheduled;
+          const task = wakeup && this.schedules.get(wakeup.scheduleId);
+          if (!task || !task.enabled || task.sessionId !== turn.sessionId ||
+              task.nextRunAt !== wakeup.scheduledAt || !Number.isFinite(wakeup.scheduledAt) ||
+              wakeup.phase !== (task.lastTurnId ? "followup" : "initial")) {
+            throw new SessionTreeCorruptionError(`Turn ${turn.id} has invalid scheduled admission`);
+          }
         }
         if (this.runningTurnsBySession.size > 0) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
@@ -135,6 +146,17 @@ export class SessionTreeProjection {
           this.goals.delete(event.sessionId);
         } else {
           this.goals.set(event.sessionId, Object.freeze(structuredClone(event.goal)));
+        }
+        return;
+      }
+      case "schedule_changed": {
+        this.validateScheduleChange(event.task);
+        this.schedules.set(event.task.id, Object.freeze(structuredClone(event.task)));
+        return;
+      }
+      case "schedule_deleted": {
+        if (!this.schedules.delete(event.scheduleId)) {
+          throw new SessionTreeCorruptionError(`Unknown schedule: ${event.scheduleId}`);
         }
         return;
       }
@@ -286,6 +308,36 @@ export class SessionTreeProjection {
       }
       default:
         throw new SessionTreeCorruptionError(`Unknown Session Tree event: ${String((event as { type?: unknown }).type)}`);
+    }
+  }
+
+  /** Validate before an atomic create (which may also introduce its dedicated Session). */
+  validateScheduleChange(task: ScheduledTask, newSession?: ProjectSession): void {
+    if (this.pendingFileRewind) throw new SessionTreeCorruptionError("Cannot change schedules during file rewind");
+    if (!task || typeof task !== "object" || typeof task.id !== "string" || !task.id.trim() ||
+        typeof task.name !== "string" || !task.name.trim() || task.name.length > 200 ||
+        typeof task.prompt !== "string" || !task.prompt.trim() || task.prompt.length > 32_000 ||
+        typeof task.initialPrompt !== "string" || !task.initialPrompt.trim() || task.initialPrompt.length > 32_000 ||
+        typeof task.sessionId !== "string" ||
+        (!this.sessions.has(task.sessionId) && (newSession?.id !== task.sessionId || newSession.treeId !== this.tree?.id)) ||
+        !Number.isSafeInteger(task.createdAt) || task.createdAt < 0 || typeof task.enabled !== "boolean" ||
+        (task.nextRunAt !== null && (!Number.isSafeInteger(task.nextRunAt) || task.nextRunAt < 0)) ||
+        (task.enabled && task.nextRunAt === null) ||
+        (task.lastError !== undefined && typeof task.lastError !== "string")) {
+      throw new SessionTreeCorruptionError("Invalid scheduled task");
+    }
+    try { normalizeSchedule(task.schedule); } catch (cause) {
+      throw new SessionTreeCorruptionError(`Invalid schedule timing: ${String(cause)}`);
+    }
+    const previous = this.schedules.get(task.id);
+    if (previous && (previous.sessionId !== task.sessionId || previous.createdAt !== task.createdAt)) {
+      throw new SessionTreeCorruptionError(`Schedule ${task.id} changed its identity`);
+    }
+    if (task.lastTurnId !== undefined) {
+      const turn = this.turns.get(task.lastTurnId);
+      if (!turn || turn.sessionId !== task.sessionId || turn.scheduled?.scheduleId !== task.id) {
+        throw new SessionTreeCorruptionError(`Schedule ${task.id} has an invalid last turn`);
+      }
     }
   }
 

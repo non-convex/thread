@@ -6,6 +6,7 @@ import type { ContextCompactionService, CompactionResult } from "../context/comp
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { DreamerAdmission } from "../dreamer/state.js";
 import type { SessionGoal, Turn } from "../session-tree/model.js";
+import type { ScheduledWakeup } from "../scheduling/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
@@ -28,6 +29,8 @@ export interface RunTurnOptions extends ExecutionLimits {
   dreamerReview?: DreamerAdmission;
   /** Host-owned goal admission, recorded atomically with the turn. */
   goal?: SessionGoal;
+  /** Runtime-owned scheduled user message; admission consumes its occurrence atomically. */
+  scheduled?: ScheduledWakeup;
 }
 
 interface CompactionInvocation {

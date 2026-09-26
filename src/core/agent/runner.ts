@@ -39,17 +39,22 @@ export class AgentRunner {
   private async runWithDeadline(input: string, options: RunTurnOptions): Promise<TurnResult> {
     this.tree.requireIdle();
     options.signal.throwIfAborted();
-    const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints, options.dreamerReview, options.goal);
+    const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints, options.dreamerReview, options.goal, options.scheduled);
     options = this.withEvents(options, planned.sessionId, planned.id);
     const display = userContentDisplay(planned.content);
-    safeExecutionEvent(options.onExecutionEvent, {
+    const preparing = () => safeExecutionEvent(options.onExecutionEvent, {
       type: "turn_preparing",
       input: display,
       sessionId: planned.sessionId,
+      ...(planned.scheduled ? { scheduled: planned.scheduled } : {}),
     });
+    // A pending wakeup may be paused/deleted while awaiting admission. Do not
+    // display a synthetic user message until its turn has actually been saved.
+    if (!planned.scheduled) preparing();
     options.signal.throwIfAborted();
     // Admit the turn durably before extensions, model requests or tool effects.
-    const turn = await this.tree.startPlannedTurn(planned);
+    const turn = await this.tree.startPlannedTurn(planned, options.signal);
+    if (planned.scheduled) preparing();
     if (options.goal) safeExecutionEvent(options.onExecutionEvent, {
       type: "goal_changed", sessionId: turn.sessionId, goal: this.tree.readGoal(turn.sessionId) ?? null,
     });
@@ -60,6 +65,7 @@ export class AgentRunner {
       timestamp: turn.startedAt,
       input: display,
       sessionId: turn.sessionId,
+      ...(turn.scheduled ? { scheduled: turn.scheduled } : {}),
     });
     const messages: AssistantMessage[] = [];
     let error: Error | undefined;

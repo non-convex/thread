@@ -16,6 +16,10 @@ import { ContextBuilder } from "../context/builder.js";
 import { contextBudget } from "../context/budget.js";
 import { createDreamerProfile, DEFAULT_DREAMER_THINKING_LEVEL, DREAMER_PROFILE_ID } from "../dreamer/profile.js";
 import { DreamerScheduler } from "../dreamer/scheduler.js";
+import { ScheduleScheduler } from "../scheduling/scheduler.js";
+import { createScheduleTools } from "../scheduling/tools.js";
+import { formatScheduledPrompt } from "../scheduling/format.js";
+import type { CreateScheduleInput, ScheduledTask, ScheduledWakeup, ScheduleSummary } from "../scheduling/model.js";
 import { ExtensionEvents, type ExtensionEventType, type ExtensionHandler } from "../extensions/events.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
@@ -66,6 +70,9 @@ export class ThreadRuntime {
   private readonly modelSelection: ModelSelection;
   private readonly memory: GlobalMemorySnapshots | undefined;
   private readonly dreamer: DreamerScheduler | undefined;
+  private readonly scheduler: ScheduleScheduler | undefined;
+  private readonly stateOperations = new Set<Promise<unknown>>();
+  private readonly stateAbort = new AbortController();
   private readonly options: RuntimeOptionsSnapshot;
   private readonly loadedSkills: LoadedSkills;
   private readonly workerSettings: WorkerProfileSettings;
@@ -140,6 +147,14 @@ export class ThreadRuntime {
     if (this.loadedSkills.skills.some((skill) => !skill.disableModelInvocation)) {
       this.toolRegistry.register(createSkillTool(() => this.loadedSkills.skills));
     }
+    this.scheduler = options.scheduling ? new ScheduleScheduler({
+      list: () => [...this.tree.projection.schedules.values()].map((task) => structuredClone(task)),
+      wake: (id) => this.wakeSchedule(id),
+      onError: (id, error) => this.scheduleFailed(id, error),
+    }) : undefined;
+    if (this.scheduler) {
+      for (const tool of createScheduleTools(this)) this.toolRegistry.register(tool);
+    }
     this.syncTaskTools();
     this.setAskPresenter(options.askPresenter);
     this.modelSelection.select(options.model);
@@ -158,6 +173,7 @@ export class ThreadRuntime {
         });
       }
       runtime.dreamer?.start();
+      runtime.scheduler?.start();
       return runtime;
     } catch (error) {
       await Promise.allSettled([resources.recall?.close(), resources.taskRepository.close(), resources.repository.close()]);
@@ -174,6 +190,10 @@ export class ThreadRuntime {
   get fileCheckpoints() { return this.files.captureEnabled; }
   get recallEnabled() { return !!this.recallService; }
   get treeId() { return this.tree.tree.id; }
+  get schedulingEnabled() { return !!this.scheduler; }
+  get busy() { return !!this.active; }
+  /** Execution target, independent of the coding app's selected Session. */
+  get activeSessionId() { return this.active?.sessionId; }
   get workerEnabled() { return this.tasks.enabled; }
   get dreamerEnabled() { return this.dreamer?.enabled ?? false; }
   get dreamerLastError() { return this.dreamer?.lastError; }
@@ -226,15 +246,96 @@ export class ThreadRuntime {
     });
   }
 
-  /** Records the session to reopen next time, without redirecting explicit prompt targets. */
-  openSession(sessionId: string, options: { signal?: AbortSignal } = {}) {
-    return this.operate(sessionId, options.signal, async (signal) => {
+  createSchedule(input: CreateScheduleInput, options: { signal?: AbortSignal } = {}): Promise<ScheduledTask> {
+    const snapshot = structuredClone(input);
+    return this.updateState(async (signal) => {
+      this.assertSchedulingEnabled();
+      const memory = snapshot.sessionId === undefined ? await this.memory?.loadFresh() : undefined;
       signal.throwIfAborted();
-      const session = await this.tree.openSession(sessionId);
+      const task = await this.tree.createSchedule(snapshot, signal);
+      if (memory !== undefined) this.memory?.bind(task.sessionId, memory);
+      return task;
+    }, options.signal);
+  }
+
+  listSchedules(): ScheduleSummary[] {
+    this.assertSchedulingEnabled();
+    return [...this.tree.projection.schedules.values()].map((task) => {
+      const turn = task.lastTurnId ? this.tree.projection.turns.get(task.lastTurnId) : undefined;
+      return structuredClone({ ...task, ...(turn ? { lastRun: {
+        turnId: turn.id, status: turn.status, startedAt: turn.startedAt,
+        ...(turn.finishedAt !== undefined ? { finishedAt: turn.finishedAt } : {}),
+        ...(turn.error ? { error: turn.error.message } : {}),
+      } } : {}) });
+    }).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** Pausing affects future wakeups; interrupt() separately stops an admitted turn. */
+  setScheduleEnabled(id: string, enabled: boolean, options: { signal?: AbortSignal } = {}): Promise<ScheduledTask> {
+    return this.updateState((signal) => {
+      this.assertSchedulingEnabled();
+      return this.tree.setScheduleEnabled(id, enabled, signal);
+    }, options.signal);
+  }
+
+  /** Delete only the plan. Its Session and all past user/assistant turns remain. */
+  deleteSchedule(id: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    return this.updateState((signal) => {
+      this.assertSchedulingEnabled();
+      return this.tree.deleteSchedule(id, signal);
+    }, options.signal);
+  }
+
+  private assertSchedulingEnabled(): void {
+    this.assertOpen();
+    if (!this.scheduler) throw new Error("Scheduling is disabled for this runtime");
+  }
+
+  /** Metadata updates can coexist with execution, but remain owned and drained by this runtime. */
+  private updateState<T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    try { this.assertOpen(); signal?.throwIfAborted(); } catch (error) { return Promise.reject(error); }
+    const combined = signal ? AbortSignal.any([signal, this.stateAbort.signal]) : this.stateAbort.signal;
+    const done = Promise.resolve().then(() => {
+      combined.throwIfAborted();
+      return operation(combined);
+    }).finally(() => { this.stateOperations.delete(done); });
+    this.stateOperations.add(done);
+    void done.catch(() => undefined);
+    return done;
+  }
+
+  private async wakeSchedule(id: string): Promise<void> {
+    // Reserve through operate() synchronously. A status check followed by an
+    // asynchronous enqueue would race a human prompt or another foreground command.
+    if (this.closing || this.active || this.stateOperations.size || !this.model || this.tree.projection.pendingFileRewind) return;
+    const due = this.tree.projection.schedules.get(id);
+    if (!due?.enabled || due.nextRunAt === null || due.nextRunAt > Date.now()) return;
+    await this.operate(due.sessionId, undefined, async (signal) => {
+      const task = this.tree.projection.schedules.get(id);
+      if (!task?.enabled || task.nextRunAt === null || task.nextRunAt > Date.now()) return;
+      const scheduled: ScheduledWakeup = {
+        scheduleId: task.id, scheduledAt: task.nextRunAt, phase: task.lastTurnId ? "followup" : "initial",
+      };
+      await this.executePrompt(task.sessionId, formatScheduledPrompt(task, scheduled, Date.now()), {}, signal, scheduled);
+    }, true);
+  }
+
+  private async scheduleFailed(id: string, error: unknown): Promise<void> {
+    if (this.closing || (error instanceof Error && error.name === "AbortError")) return;
+    const task = this.tree.projection.schedules.get(id);
+    if (!task?.enabled) return;
+    const message = error instanceof Error ? error.message : String(error);
+    await this.updateState((signal) => this.tree.setScheduleEnabled(id, false, signal, message));
+  }
+
+  /** Change the remembered viewing Session, including during a turn; execution keeps its explicit target. */
+  openSession(sessionId: string, options: { signal?: AbortSignal } = {}) {
+    return this.updateState(async (signal) => {
+      const session = await this.tree.openSession(sessionId, signal);
       const liveTipTurnId = this.tree.projection.liveTips.get(session.id) ?? null;
       this.publish({ executionId: session.id, agentId: "main", timestamp: Date.now(), type: "session_changed", sessionId: session.id, turnId: liveTipTurnId, liveTipTurnId, reason: "opened" });
       return session;
-    });
+    }, options.signal);
   }
 
   searchHistory(sessionId: string, queries: readonly string[], options: { limit?: number; signal?: AbortSignal } = {}) {
@@ -245,16 +346,21 @@ export class ThreadRuntime {
   }
 
   prompt(sessionId: string, input: string, options: PromptOptions = {}): Promise<TurnResult> {
-    return this.operate(sessionId, options.signal, async (signal) => {
-      const session = this.tree.resolveSession(sessionId);
-      if (!this.model) throw new Error("No model configured");
-      if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
-      const runner = this.createAgentRunner(session.id);
-      const dreamerReview = await this.dreamer?.admission(signal);
-      signal.throwIfAborted();
-      return runner.run(input, { ...this.runOptions(session.id, signal, options),
-        ...(dreamerReview ? { dreamerReview } : {}) });
-    }, true);
+    return this.operate(sessionId, options.signal,
+      (signal) => this.executePrompt(sessionId, input, options, signal), true);
+  }
+
+  /** Human input and scheduled messages share the same main-agent execution path. */
+  private async executePrompt(sessionId: string, input: string, options: PromptOptions, signal: AbortSignal,
+    scheduled?: ScheduledWakeup): Promise<TurnResult> {
+    const session = this.tree.resolveSession(sessionId);
+    if (!this.model) throw new Error("No model configured");
+    if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
+    const runner = this.createAgentRunner(session.id);
+    const dreamerReview = await this.dreamer?.admission(signal);
+    signal.throwIfAborted();
+    return runner.run(input, { ...this.runOptions(session.id, signal, options),
+      ...(scheduled ? { scheduled } : {}), ...(dreamerReview ? { dreamerReview } : {}) });
   }
 
   readGoal(sessionId: string): SessionGoal | undefined {
@@ -623,22 +729,31 @@ export class ThreadRuntime {
       combined.throwIfAborted();
       return operation(combined);
     }).finally(() => {
-      if (this.active === active) this.active = undefined;
-      if (!this.closing) this.dreamer?.foregroundFinished(resetsDreamerIdle);
+      if (this.active === active) {
+        this.active = undefined;
+        this.publish({ type: "runtime_status", busy: false, executionId: this.treeId, agentId: "main",
+          sessionId: resolvedSessionId ?? null, turnId: null, timestamp: Date.now() });
+      }
+      if (!this.closing && !this.active) this.dreamer?.foregroundFinished(resetsDreamerIdle);
     });
     active.done = done;
     void done.catch(() => undefined);
+    this.publish({ type: "runtime_status", busy: true, executionId: this.treeId, agentId: "main",
+      sessionId: resolvedSessionId ?? null, turnId: null, timestamp: Date.now() });
     return done;
   }
 
   close(): Promise<void> {
     if (this.closing) return this.closing;
     const active = this.active;
+    const schedulerStopped = this.scheduler?.stop();
     // Publish the closing state before an abort handler can re-enter this instance.
     this.closing = Promise.resolve().then(async () => {
       const failures: unknown[] = [];
       const collect = (task: Promise<unknown> | undefined) => task?.catch((error) => { failures.push(error); });
       await collect(active ? this.settleCancellation(active) : undefined);
+      await collect(schedulerStopped);
+      await Promise.allSettled([...this.stateOperations]);
       await Promise.all([collect(this.tasks.close()), collect(this.dreamer?.close()), collect(this.recallService?.close())]);
       await collect(this.files.settle());
       await collect(this.repository.close());
@@ -648,6 +763,7 @@ export class ThreadRuntime {
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "Thread resources failed to close cleanly");
     });
+    this.stateAbort.abort(new DOMException("Thread runtime closed", "AbortError"));
     active?.controller.abort(new DOMException("Thread runtime closed", "AbortError"));
     return this.closing;
   }

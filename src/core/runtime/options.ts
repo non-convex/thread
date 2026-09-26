@@ -35,6 +35,8 @@ export interface ThreadRuntimeOptions {
   skills?: SkillPaths | LoadedSkills;
   /** Capture supported file edits for rewind. Default: false; sessions still persist. */
   fileCheckpoints?: boolean;
+  /** Enable persisted schedules and their main-agent tools. Fires only while this runtime is open. Default: false. */
+  scheduling?: boolean;
   /** Explicitly enables the recall service and its two tools. */
   search?: SessionRecallOptions;
   /** Explicitly enables global memory, using this file only. */

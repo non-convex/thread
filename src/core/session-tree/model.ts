@@ -1,5 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { DreamerAdmission, DreamerCheckpoint } from "../dreamer/state.js";
+import type { ScheduledTask, ScheduledWakeup } from "../scheduling/model.js";
 
 export const SESSION_TREE_FORMAT = "thread-session-tree-v3" as const;
 
@@ -44,6 +45,8 @@ export interface Turn {
   parentTurnId: string | null;
   userEntryId: string;
   goalId?: string;
+  /** This user turn was sent by the online scheduler rather than typed by a person. */
+  scheduled?: ScheduledWakeup;
   status: TurnStatus;
   startedAt: number;
   fileCheckpoints: boolean;
@@ -116,6 +119,8 @@ export type SessionTreeEvent =
   | { type: "active_session_changed"; sessionId: string; reason: "created" | "new" | "opened" }
   | { type: "turn_started"; turn: Turn }
   | { type: "goal_changed"; sessionId: string; goal: SessionGoalState | null }
+  | { type: "schedule_changed"; task: ScheduledTask }
+  | { type: "schedule_deleted"; scheduleId: string }
   | { type: "entry_appended"; entry: SessionEntry }
   | { type: "turn_finished"; turnId: string; status: Exclude<TurnStatus, "running">; error?: { code: string; message: string }; finishedAt: number }
   | { type: "dreamer_reviewed"; memoryPath: string; turnIds: string[]; checkpoint: DreamerCheckpoint }

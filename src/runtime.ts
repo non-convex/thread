@@ -31,6 +31,7 @@ export type { TurnResult } from "./core/agent/runner.js";
 export type { AgentProfile, AgentProfileDiagnostic } from "./core/agent/profile.js";
 export type { WorkerProfileSettings, WorkerLimits } from "./core/agent-task/profile.js";
 export type { DreamerStatus } from "./core/dreamer/scheduler.js";
+export type { CreateScheduleInput, ScheduledTask, ScheduledWakeup, ScheduleSpec, ScheduleSummary } from "./core/scheduling/model.js";
 export type { SessionRecallOptions } from "./core/session-recall/service.js";
 export type { RecallSearchResult, RecallSearchHit } from "./core/session-recall/types.js";
 export type { ExtensionEventMap, ExtensionEventType, ExtensionHandler } from "./core/extensions/events.js";

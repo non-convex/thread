@@ -60,6 +60,8 @@ async function answer(model: ModelClient, customTool: AgentTool) {
 
 coding 应用的默认配置统一由 `ThreadApp.open()` 装配：完整基础工具、默认 Skill 目录、产品提示词、Recall、全局记忆和文件 checkpoint。CLI 和直接使用 coding 应用的调用者共享这份配置；`ThreadRuntime.open()` 的最小默认值保持独立。
 
+定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一次独立空会话，指定则固定到已有会话；用 `listSchedules()`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 同时获得任务工具。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。
+
 `ThreadApp` 持有公开的 `runtime`，负责斜杠命令、菜单及选中的会话。执行、查询、配置和事件通过 `app.runtime` 访问，没有继承或一组重复的转发方法。应用扩展同样经过 runtime 的工具注册和执行边界；命令通过 `context.runtime` 查询历史，使用 `context.openSession()` 选择会话，不再直接访问可写的 Session Tree。
 
 ```ts
@@ -255,7 +257,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 
 ## 会话与读取
 
-每次执行都显式传入 `sessionId`。客户端分别保存自己选中的会话，即使另一个客户端创建或读取会话，也不会改变本次执行的目标。一个 runtime 同时只运行一个前台操作，忙时拒绝新的执行；当前版本不提供同项目跨会话并发。
+每次手动执行都显式传入 `sessionId`；定时任务则始终使用创建时绑定的会话。客户端分别保存自己选中的会话，即使另一个客户端创建或读取会话，也不会改变本次执行的目标。一个 runtime 同时只运行一个执行操作；忙时手动执行会被拒绝，定时任务等待可执行时机，不提供同项目跨会话并发。
 
 | 操作 | 语义 |
 | --- | --- |
@@ -268,7 +270,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `readGoal(sessionId)` | 返回当前目标的独立快照，运行中可读 |
 | `pauseGoal(sessionId)` / `clearGoal(sessionId)` | 停止并结算目标运行，分别保留或清除目标 |
 | `setModel(model)` / `setThinkingLevel(level)` | 模型在空闲时切换；思考偏好可以随时调整，从下一轮生效 |
-| `openSession(sessionId)` | 保存下次启动应恢复的会话，不改变显式 prompt 的目标 |
+| `openSession(sessionId)` | 保存下次启动应恢复的查看会话，执行中也可调用，不改变正在运行的回合或显式 prompt 的目标 |
 | `searchHistory(sessionId, queries, options?)` | 搜索整个项目历史；以传入会话标注当前路径，支持 limit 和取消信号 |
 | `contextSnapshot(sessionId)` | 一次构建返回 `{ messages, usage }`；没有模型时 usage 为 undefined |
 | `compact(sessionId)` / `rewind(sessionId, target, options?)` | 压缩目标会话上下文，或回退 live tip；是否恢复文件由 `restoreFiles` 决定 |
@@ -336,7 +338,7 @@ Thread 不在本地裁剪摘要，也不因 `stopReason: "length"` 单独拒绝�
 
 ## 事件和扩展
 
-`RuntimeEvent` 携带 `timestamp`（Unix 毫秒）、`executionId`、`agentId`、`sessionId` 和 `turnId`。自主后台运行的 session/turn 为 `null`。主 agent、worker、Dreamer 使用相同的平铺事件；worker 另外携带 `taskId`、`revision`、`parentExecutionId` 和 `parentToolCallId`。`executionId` 对主 agent 是 turn ID，对 worker 是 task ID（用 revision 区分修订），对 Dreamer 是本次批次的独立 ID。TUI 在展示入口转换 worker 事件。
+`RuntimeEvent` 携带 `timestamp`（Unix 毫秒）、`executionId`、`agentId`、`sessionId` 和 `turnId`。Dreamer 的 session/turn 为 `null`；定时唤醒仍是主 agent 的普通会话回合，携带绑定的 Session 和 Turn ID，`turn_preparing`、`turn_started` 另有 `scheduled` 来源标记。主 agent、worker、Dreamer 使用相同的平铺事件；worker 另外携带 `taskId`、`revision`、`parentExecutionId` 和 `parentToolCallId`。`executionId` 对主 agent 是 turn ID，对 worker 是 task ID（用 revision 区分修订），对 Dreamer 是本次批次的独立 ID。TUI 在展示入口转换 worker 事件。
 
 Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息：首次运行是任务正文，返工时是新增反馈。事件同时携带该消息的持久 `entryId`，便于界面把输入和后续回复放进同一条对话流。Dreamer 的输入只存在于临时 journal，因此不提供这个持久消息 ID。
 
@@ -354,6 +356,7 @@ Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息�
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
 | `dreamer_status` | 后台审阅的待办、分片进度、最近结果和错误；sessionId/turnId 为 null |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
+| `runtime_status` | 执行准入和结算后的 busy 状态，覆盖尚未创建 turn 就失败或取消的操作；不代表界面当前查看的会话 |
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
 

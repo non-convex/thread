@@ -2,6 +2,8 @@ import type { ImageContent, Message, UserMessage } from "@earendil-works/pi-ai";
 import { emptyDreamerCheckpoint, type DreamerAdmission, type DreamerCheckpoint } from "../dreamer/state.js";
 import type { DreamerReviewSource } from "../dreamer/review.js";
 import { createId, stableId } from "../utils/id.js";
+import type { CreateScheduleInput, ScheduledTask, ScheduledWakeup } from "../scheduling/model.js";
+import { nextScheduleTime, normalizeSchedule } from "../scheduling/timing.js";
 import { isEmptyUserMessageContent, userContentDisplay, userContentFrom, userContentIsEmpty } from "./user-content.js";
 import {
   abortedToolResult,
@@ -53,6 +55,7 @@ export interface PlannedTurn {
   fileCheckpoints: boolean;
   dreamerReview?: DreamerAdmission;
   goal?: SessionGoalState;
+  scheduled?: ScheduledWakeup;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
@@ -125,12 +128,82 @@ export class SessionTreeService {
     return structuredClone(session);
   }
 
-  async openSession(sessionIdOrPrefix: string): Promise<ProjectSession> {
-    this.requireIdle();
+  /** A task and its optional dedicated Session are created together, without selecting that Session. */
+  async createSchedule(input: CreateScheduleInput, signal?: AbortSignal): Promise<ScheduledTask> {
+    signal?.throwIfAborted();
+    const now = Date.now();
+    const schedule = normalizeSchedule(input.schedule);
+    const nextRunAt = nextScheduleTime(schedule, now, now);
+    if (nextRunAt === null) throw new Error("Schedule must have a future occurrence");
+    const session = input.sessionId === undefined
+      ? { id: createId("session"), treeId: this.tree.id, createdAt: now }
+      : undefined;
+    const task: ScheduledTask = {
+      id: createId("schedule"), name: input.name, prompt: input.prompt,
+      initialPrompt: input.initialPrompt === undefined ? input.prompt : input.initialPrompt, schedule,
+      sessionId: session?.id ?? this.resolveSession(input.sessionId!).id,
+      createdAt: now, enabled: true, nextRunAt,
+    };
+    await this.repository.appendBatch(() => {
+      signal?.throwIfAborted();
+      if (this.projection.schedules.size >= 50) throw new Error("A project can hold at most 50 schedules; delete unused schedules first");
+      this.projection.validateScheduleChange(task, session);
+      return [
+        ...(session ? [{ type: "session_created" as const, session }] : []),
+        { type: "schedule_changed", task },
+      ];
+    }, true);
+    return structuredClone(task);
+  }
+
+  resolveSchedule(idOrPrefix: string): Readonly<ScheduledTask> {
+    if (typeof idOrPrefix !== "string" || !idOrPrefix.trim()) throw new Error("Schedule id must be non-empty");
+    const matches = [...this.projection.schedules.values()].filter((task) => task.id.startsWith(idOrPrefix));
+    if (matches.length !== 1) throw new Error(`Could not uniquely resolve schedule: ${idOrPrefix}`);
+    return matches[0]!;
+  }
+
+  async setScheduleEnabled(id: string, enabled: boolean, signal?: AbortSignal, error?: string): Promise<ScheduledTask> {
+    let task: ScheduledTask;
+    await this.repository.append(() => {
+      signal?.throwIfAborted();
+      const current = this.resolveSchedule(id);
+      task = { ...current, enabled };
+      delete task.lastError;
+      if (error !== undefined) task.lastError = error;
+      if (enabled && !current.enabled) {
+        if (current.schedule.kind === "at") {
+          if (current.lastTurnId) throw new Error("This one-shot schedule already ran; create a new schedule to run again");
+          task.nextRunAt = Date.parse(current.schedule.at);
+        } else {
+          task.nextRunAt = nextScheduleTime(current.schedule, Date.now(), current.createdAt);
+        }
+        if (task.nextRunAt === null) throw new Error("Schedule has no future occurrence");
+      }
+      this.projection.validateScheduleChange(task);
+      return { type: "schedule_changed", task };
+    }, true);
+    return structuredClone(task!);
+  }
+
+  async deleteSchedule(id: string, signal?: AbortSignal): Promise<void> {
+    await this.repository.append(() => {
+      signal?.throwIfAborted();
+      if (this.projection.pendingFileRewind) throw new Error("Cannot change schedules during file rewind");
+      return { type: "schedule_deleted", scheduleId: this.resolveSchedule(id).id };
+    }, true);
+  }
+
+  /** Remember a viewing preference without changing any running turn or live tip. */
+  async openSession(sessionIdOrPrefix: string, signal?: AbortSignal): Promise<ProjectSession> {
+    signal?.throwIfAborted();
     const session = this.resolveSession(sessionIdOrPrefix);
-    if (session.id !== this.activeSession.id) {
-      await this.repository.append(() => ({ type: "active_session_changed", sessionId: session.id, reason: "opened" }), true);
-    }
+    // Always append: concurrent selections must retain their invocation order,
+    // including a selection back to the Session that was current before either append.
+    await this.repository.append(() => {
+      signal?.throwIfAborted();
+      return { type: "active_session_changed", sessionId: session.id, reason: "opened" };
+    }, true);
     return structuredClone(session);
   }
 
@@ -143,7 +216,7 @@ export class SessionTreeService {
   }
 
   planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean,
-    dreamerReview?: DreamerAdmission, goal?: SessionGoal): PlannedTurn {
+    dreamerReview?: DreamerAdmission, goal?: SessionGoal, scheduled?: ScheduledWakeup): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
     const session = this.resolveSession(sessionId);
@@ -159,11 +232,13 @@ export class SessionTreeService {
       fileCheckpoints,
       ...(dreamerReview !== undefined ? { dreamerReview: structuredClone(dreamerReview) } : {}),
       ...(goal !== undefined ? { goal: goalState(goal) } : {}),
+      ...(scheduled !== undefined ? { scheduled: structuredClone(scheduled) } : {}),
     };
   }
 
   async startPlannedTurn(
     planned: PlannedTurn,
+    signal?: AbortSignal,
   ): Promise<Turn> {
     const content = planned.content;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
@@ -179,6 +254,7 @@ export class SessionTreeService {
       parentTurnId: planned.parentTurnId,
       userEntryId: planned.userEntryId,
       ...(goal !== undefined ? { goalId: goal.id } : {}),
+      ...(planned.scheduled !== undefined ? { scheduled: structuredClone(planned.scheduled) } : {}),
       status: "running",
       startedAt: planned.startedAt,
       fileCheckpoints: planned.fileCheckpoints,
@@ -194,6 +270,21 @@ export class SessionTreeService {
       message: { role: "user", content, timestamp: turn.startedAt },
     };
     await this.repository.appendBatch(() => {
+      signal?.throwIfAborted();
+      let scheduledTask: ScheduledTask | undefined;
+      if (turn.scheduled) {
+        const wakeup = turn.scheduled;
+        const task = this.projection.schedules.get(wakeup.scheduleId);
+        if (!task || !task.enabled || task.sessionId !== turn.sessionId || task.nextRunAt !== wakeup.scheduledAt ||
+            wakeup.phase !== (task.lastTurnId ? "followup" : "initial")) {
+          throw new DOMException("Scheduled task changed before admission", "AbortError");
+        }
+        // Consume once, in the same durable record as the user turn. A crash or rewind
+        // never replays this occurrence; its ordinary Turn records the eventual outcome.
+        const nextRunAt = nextScheduleTime(task.schedule, Math.max(Date.now(), wakeup.scheduledAt), task.createdAt);
+        scheduledTask = { ...task, nextRunAt, enabled: nextRunAt !== null, lastTurnId: turn.id };
+        delete scheduledTask.lastError;
+      }
       if (goal !== undefined) this.projection.validateGoalChange(planned.sessionId, goal);
       const current = this.projection.goals.get(planned.sessionId);
       const changed = goal !== undefined && (!current ||
@@ -202,6 +293,7 @@ export class SessionTreeService {
       return [
         { type: "turn_started", turn },
         { type: "entry_appended", entry: userEntry },
+        ...(scheduledTask ? [{ type: "schedule_changed" as const, task: scheduledTask }] : []),
         ...(changed ? [{ type: "goal_changed" as const, sessionId: planned.sessionId, goal }] : []),
       ];
     }, true);
