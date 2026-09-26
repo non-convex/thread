@@ -119,7 +119,7 @@ export function snapshotTool(tool: AgentTool): AgentTool {
   return {
     name: tool.name, description: tool.description, parameters: snapshotSchema(tool.parameters),
     ...(tool.prepare ? { prepare: tool.prepare.bind(tool) } : {}),
-    execution: { effect: tool.execution.effect, mode: tool.execution.mode, resources: tool.execution.resources.bind(tool.execution) },
+    execution: { effect: tool.execution.effect, resources: tool.execution.resources.bind(tool.execution) },
     execute: tool.execute.bind(tool),
   };
 }

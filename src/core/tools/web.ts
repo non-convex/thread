@@ -164,7 +164,6 @@ export function createWebSearchTool(options: WebToolOptions = {}): AgentTool<Web
     }),
     execution: {
       effect: "read",
-      mode: "parallel",
       resources: (args) => singletonResource("network", `search:${args.query.trim()}`, "read"),
     },
     async execute(args, context) {
@@ -231,7 +230,6 @@ export function createWebFetchTool(options: WebToolOptions = {}): AgentTool<WebF
     }),
     execution: {
       effect: "read",
-      mode: "parallel",
       resources: (args) => singletonResource("network", args.url.trim(), "read"),
     },
     async execute(args, context) {

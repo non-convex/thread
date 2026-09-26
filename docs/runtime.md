@@ -92,7 +92,7 @@ try {
 
 `ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回不可用结果；TUI 为同一个工具绑定问题面板。ask 工具的 `details` 使用 `AskResultDetails`，以 `answered`、`dismissed`、`unavailable` 或 `invalid` 标明结果；只有 `answered` 携带用户答案。历史分析读取这个结构化结果，不依赖展示文案。
 
-coding 应用始终在主 agent 的系统提示词中加入启动时确定的项目工作目录，使用 `rootPath` 解析后的绝对路径。CLI 默认使用启动目录；指定 `--root` 时使用指定的项目目录。这段信息独立于 `AGENTS.md`，文件缺失、内容为空或设置 `projectInstructions: false` 都不会关闭注入。直接使用 `ThreadRuntime.open()` 的宿主仍自行决定是否提供这段信息。
+coding 应用始终在主 agent 的系统提示词中加入启动时确定的项目工作目录，使用 `rootPath` 解析后的绝对路径。CLI 默认使用启动目录；指定 `--root` 时使用指定的项目目录。这段信息独立于 `AGENTS.md`，文件缺失、内容为空或设置 `projectInstructions: false` 都不会关闭注入。直接使用 `ThreadRuntime.open()` 的宿主仍自行决定是否提供这段信息。默认 coding 提示词将工作目录、文件编辑约定和并行工具调用说明放在同一个 `Working approach` 节中；启用 Worker 后，委派说明使用独立的 `Worker delegation` 标题。
 
 coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共享给主 agent 和 worker；`projectInstructions: false` 可关闭读取。只读取根目录这一份文件，不遍历祖先、子目录或全局指令目录。缺失或空文件不追加内容；文件须为项目内的 UTF-8 普通文件，上限 32 KiB，超限或无法读取时报错，不截断规则。修改文件后重新打开应用才会生效，同一实例内新建会话或重新启用 worker 仍使用启动快照。
 
@@ -135,7 +135,7 @@ await runtime.clearGoal(sessionId);
 
 `tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。
 
-`AgentTool` 不再声明 `replay`；是否执行取决于模型结果、工具策略、资源调度和持久化屏障，重启后不会自动重放结果不确定的工具。自定义工具如需发出执行事件，使用 `ToolContext.onExecutionEvent`，不依赖 UI 类型。
+`AgentTool` 不声明 `replay`；是否执行取决于模型结果、工具策略和持久化屏障，重启后不会自动重放结果不确定的工具。工具的 `execution` 声明 `effect` 和 `resources`，不再有 `execution.mode` 或 `ToolExecutionMode`。自定义工具如需发出执行事件，使用 `ToolContext.onExecutionEvent`，不依赖 UI 类型。
 
 为减少工具结果进入 live context 的体积，几个常用工具默认返回有限内容：
 
@@ -154,11 +154,11 @@ await runtime.clearGoal(sessionId);
 
 取消或超时会尝试终止进程树，最多再等 1 秒就结束调用，不以所有后代进程都已退出为保证。如果提前结束了输出捕获，结果和保存文件会提示末尾输出可能缺失；延后写入的后台进程也可能遇到管道已关闭的错误。
 
-同一助手回复中的多个 `bash` 调用允许并行，也可以与其他并行工具同时执行。它仍声明 `effect: "process"`，在完整助手响应持久化后才启动；每次调用单独管理进程、输出和超时。声明为 `sequential` 的工具仍会等待此前调用完成，并阻挡此后的调用；结果继续按模型声明顺序回传。这里的并行不提供后台进程管理。
+同一助手消息中的所有工具调用均并发调度，不按工具类型、声明顺序或资源冲突排队；多个 `bash` 调用也可与文件工具同时运行。`effect` 仍决定启动时机：已完成预检并记录调用的 `read` 可在模型流式输出时启动，`write`、`process`、`interactive` 必须等完整助手响应持久化。预检按源顺序进行，工具结果消息也按源顺序交给模型，即使实际完成顺序不同；取消和持久化记录仍然生效。Bash 声明 `effect: "process"`，每次调用单独管理前台进程、输出和超时，并行不提供后台进程管理。
 
-Bash 的调度资源声明为空，不再声明整个工作区写入或共享前台进程资源；这不表示命令只读或没有副作用。调度器不解析 Shell 命令的文件读写范围，也不会自动避免 Bash 与文件工具之间的冲突。内置文件工具彼此之间的资源检查、同路径写入协调和版本检查不变，但不保护任意 Shell 写入。宿主的 `toolPolicy` 仍会收到每次调用；需要限制 Bash 时，应检查工具名和命令参数，不能把空 `resources` 当作只读证明。
+Bash 的 `resources` 为空，不表示命令只读或没有副作用。资源声明供宿主 `toolPolicy` 授权和内置文件工具核对实际目标，不用于并发排序；Shell 的文件冲突不会自动检查，同一路径的内置 `write`、`edit` 仍在文件写入入口协调，并保留路径与版本复查，但不保护任意 Shell 或自定义工具写入。需要限制 Bash 时，宿主应检查工具名和命令参数，不能把空 `resources` 当作只读证明。
 
-coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取，将编辑、其他写入、有依赖的操作和等待顺序执行；主 agent 也须顺序处理审批。依赖前一步结果的工具必须等结果返回后再调用，可能互相影响的命令与文件操作不能放入同一并行批次。Bash 的工具描述也包含这一约束，供嵌入宿主使用。这是模型行为约束，不是执行器对并发安全性的保证。
+主 agent、Worker 和 Dreamer 共用并发工具提示词：可以批量发出互不依赖的调用，不能依赖调用列出的顺序。需要前一步结果、状态变更或审批的调用，以及可能互相冲突的修改，必须放在收到前一步结果之后的另一个模型步骤中。Shell 文件冲突未自动检查，这些安排是模型的责任，不是执行器对并发安全性的保证。
 
 自定义工具实现公共 `AgentTool` 接口，提供名称、描述、参数 schema、执行策略和 `execute()`；可在创建时传入，或空闲时通过 `runtime.registerTool(tool)` 添加。内置工具和自定义工具使用同一参数校验、调度、宿主策略、取消信号和执行记录。可运行的自定义工具见离线示例中的 `add`。
 
@@ -166,9 +166,9 @@ coding 主 agent 和 Worker 的提示词要求并行处理独立查询与读取�
 
 `ToolResult.content` 是文本说明；可选的 `images: ImageContent[]` 保存 `{ type: "image", mimeType, data }`，其中 `data` 是 base64 图片字节。执行器把两者合成模型可见的工具结果，像素随消息持久化并参与后续请求，`details.raw` 不重复保存图片字节。`ToolContext.acceptsImages` 表示当前执行模型的能力。`tool_result` 扩展可分别改写 `modelContent` 和 `modelImages`，设 `modelImages: []` 可移除附件。普通工具事件与终端只展示文本、尺寸和格式，不展示 base64；切换纯文本模型时，历史图片在请求中替换为提示，持久化图片保留。压缩时的消息定位、历史摘要和轮内进度摘要使用同样的图片适配，避免原始图片与请求中的占位文字不一致而阻止压缩。
 
-需要解析别名、默认路径或分页参数的工具可实现 `prepare(args, context)`。执行顺序为：schema 校验 → 扩展改写与再次校验 → `prepare()` → 资源声明 → 宿主授权 → 调度与执行。`prepare()` 每次调用只运行一次，收到取消信号，只能进行参数和目标解析，不能执行工具的业务副作用。省略时沿用校验后的参数；`AgentTool<Input, Prepared>` 可声明与模型输入不同的有效参数类型。资源声明、授权、执行与 `effectiveArgs` 记录均使用准备后的参数，模型的原始 tool call 仍保留在助手消息中。
+需要解析别名、默认路径或分页参数的工具可实现 `prepare(args, context)`。每个调用的执行顺序为：schema 校验 → 扩展改写与再次校验 → `prepare()` → 资源声明 → 宿主授权 → 并发调度与执行；预检本身按调用源顺序进行。`prepare()` 每次调用只运行一次，收到取消信号，只能进行参数和目标解析，不能执行工具的业务副作用。省略时沿用校验后的参数；`AgentTool<Input, Prepared>` 可声明与模型输入不同的有效参数类型。资源声明、授权、执行与 `effectiveArgs` 记录均使用准备后的参数，模型的原始 tool call 仍保留在助手消息中。
 
-内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 直接使用搜索条件和零起始的 `offset` 分页，准备阶段补齐默认值并规范化路径，宿主授权时收到这些有效参数。结果中的 `nextOffset` 用于下一页，调用方需沿用原搜索条件；每页仍重新搜索和排序，不保留结果快照。文件访问前仍检查实际路径是否落在批准的资源范围，写入排队后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
+内置文件工具在准备阶段统一处理路径空白和链接别名；普通相对路径的展示保持不变。`grep` 直接使用搜索条件和零起始的 `offset` 分页，准备阶段补齐默认值并规范化路径，宿主授权时收到这些有效参数。结果中的 `nextOffset` 用于下一页，调用方需沿用原搜索条件；每页仍重新搜索和排序，不保留结果快照。文件访问前仍检查实际路径是否落在批准的资源范围，进入内置同路径写入队列后再次检查；这些检查不构成针对任意脚本或自定义工具的操作系统沙箱。
 
 裸 `ThreadRuntime` 的 `write`、`edit` 默认只允许修改项目内的文件。宿主可用 `writableExternalPaths` 授权主 agent 写入指定外部文件，或用 `writableExternalDirectories` 授权指定外部目录及其子目录，包括尚未创建的目录；两者的相对路径都以进程当前目录为基准。目录授权按真实路径检查，不能通过目录内的符号链接写到授权边界外，文件本身是符号链接时仍拒绝写入。宿主的 `toolPolicy` 继续生效，Worker 的内置 `write`、`edit` 仍受项目内的任务 `writeScope` 限制。
 
@@ -363,7 +363,7 @@ Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息�
 | `model_call_started` / `model_call_finished` | 一次 `ModelClient.stream()` 逻辑调用；`callId`、模型、purpose、参数、结束状态、用量和时长 |
 | `model_attempt_started` / `model_attempt_finished` | 内置模型客户端的一次实际请求尝试，包括失败后将重试的响应；通过 callId 和 attempt 关联 |
 | `model_cache_diagnostic` | 显式启用时提供 provider 请求前缀的比较结果，不包含请求正文；通过 callId 和 attempt 关联已观察请求 |
-| `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
+| `tool_started` | `phase: queued` 为进入预检；`running` 为效果满足持久化时机后实际开始执行，参数是准备和策略处理后的实际参数 |
 | `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为执行器当时形成的模型可见结果，details 为工具返回的可选结构化元数据。完整批次结算后可能另向持久化结果追加重复调用提醒。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
 | `dreamer_status` | 后台审阅的待办、分片进度、最近结果和错误；sessionId/turnId 为 null |
@@ -439,7 +439,7 @@ coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(spe
 
 流式增量是临时进度，订阅不是持久化事件重放接口。`turn_started` 和 `turn_finished` 在相应持久化屏障后发布。需要网络重连时，适配层应协调状态快照和后续事件之间的衔接。
 
-宿主工具策略与普通观察者分开。策略收到准备后的 `args` 和已解析的 `resources`，可按资源的 `namespace`、`resource`、`access`、`scope` 判断权限。主 agent、worker 和后台 agent 均使用该策略；拒绝后的调用不会执行。传给策略和资源声明函数的数据是副本，修改它们不会改写后续执行。自定义工具必须如实声明其资源；策略回调不等同于进程沙箱。
+宿主工具策略与普通观察者分开。策略收到准备后的 `args` 和已解析的 `resources`，可按资源的 `namespace`、`resource`、`access`、`scope` 判断权限；这些声明也用于内置文件工具的目标核对，不用于调用之间的冲突排队。主 agent、worker 和后台 agent 均使用该策略；拒绝后的调用不会执行。传给策略和资源声明函数的数据是副本，修改它们不会改写后续执行。自定义工具必须如实声明其资源；策略回调不等同于进程沙箱。
 
 通过 `askPresenter` 提供交互能力，可以传入公共入口导出的 `AskService`，或实现自己的 `AskPresenter`。工具发起的 `AskRequest.invocation` 标明 session、turn、tool call 和 agent 身份。取消或关闭 runtime 会取消它正在等待的问题，并等待 turn 结算；宿主传入的 `AskService` 仍由宿主负责 `dispose()`，可被其他客户端继续使用。
 

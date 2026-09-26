@@ -34,6 +34,7 @@ import { messageWithoutImages } from "../session-tree/user-content.js";
 import { formatSkillsSection, type LoadedSkills } from "../skills/loader.js";
 import { openRuntimeResources, type RuntimeResources } from "./resources.js";
 import { createAskTool } from "../tools/ask.js";
+import { TOOL_CONCURRENCY_PROMPT } from "../tools/execution-prompt.js";
 import { snapshotRuntimeOptions, snapshotTool, type ThreadRuntimeOptions, type RuntimeOptionsSnapshot, type PromptOptions, type GoalOptions, type RewindOptions } from "./options.js";
 import { createSessionReadTool, createSessionSearchTool } from "../tools/session-recall.js";
 import { createSkillTool, formatSkillInvocation } from "../tools/skill.js";
@@ -828,7 +829,8 @@ export class ThreadRuntime {
   private bindProfile(profile: AgentProfile): AgentProfile {
     const model = bindModel(profile.model, `${this.tree.tree.id}:${profile.id}`, this.options.cacheRetention);
     return { ...profile, model, systemPrompt: [profile.systemPrompt,
-      profile.id === WORKER_PROFILE_ID ? this.options.sharedInstructions : undefined].filter(Boolean).join("\n\n") };
+      profile.id === WORKER_PROFILE_ID ? this.options.sharedInstructions : undefined,
+      `# Concurrent tool calls\n\n${TOOL_CONCURRENCY_PROMPT}`].filter(Boolean).join("\n\n") };
   }
 
   private createAgentRunner(sessionId: string, goal?: { state: SessionGoal; tool: AgentTool }): AgentRunner {
@@ -867,7 +869,7 @@ export class ThreadRuntime {
   }
 
   private systemPromptFor(sessionId: string): string {
-    return [this.options.systemPrompt ?? "", this.options.appendSystemPrompt, this.options.sharedInstructions,
+    return [this.options.systemPrompt ?? "", TOOL_CONCURRENCY_PROMPT, this.options.appendSystemPrompt, this.options.sharedInstructions,
       this.tasks.enabled ? AGENT_TASK_ORCHESTRATION_PROMPT : "", formatSkillsSection(this.loadedSkills.skills),
       this.memory ? formatGlobalMemoryPrompt(this.memory.filePath, this.memory.snapshot(sessionId)) : ""].filter(Boolean).join("\n\n");
   }

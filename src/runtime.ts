@@ -39,7 +39,6 @@ export type { AgentTool, ToolContext, ToolResult, ToolResultMetadata, ToolOutcom
 export type { FileWriteScope } from "./core/tools/path-safety.js";
 export type {
   ToolEffect,
-  ToolExecutionMode,
   ToolExecutionPolicy,
   ToolPlanningContext,
   ToolResourceAccess,

@@ -3,14 +3,13 @@ import { assertWritablePath, canonicalTarget, isPathInside, realPath, resolveWor
 import type { ToolContext } from "./types.js";
 
 export type ToolEffect = "read" | "write" | "process" | "interactive";
-export type ToolExecutionMode = "parallel" | "sequential";
 export type ToolResourceAccess = "read" | "write";
 export type ToolResourceScope = "exact" | "subtree";
 
 /**
- * A scheduler-visible resource access. Claims are intentionally independent of
- * tool names: a read tool and a write tool conflict when they address the same
- * resource even if their implementations are unrelated.
+ * A declared resource access for invocation planning and host authorization.
+ * Claims identify resources independently of tool names; they do not serialize
+ * or lock tool calls.
  */
 export interface ToolResourceClaim {
   namespace: "workspace" | "session-tree" | "skills" | "network" | "process" | "interactive" | string;
@@ -30,8 +29,6 @@ export interface ToolPlanningContext {
 export interface ToolExecutionPolicy<TArgs extends Record<string, unknown>> {
   /** Read effects may start as soon as the streamed call is durable. Other effects wait for the complete response. */
   effect: ToolEffect;
-  /** Sequential calls form a source-order barrier around every other call in the assistant batch. */
-  mode: ToolExecutionMode;
   /** Resolve the resources used by this invocation after argument validation and extension transforms. */
   resources(args: TArgs, context: ToolPlanningContext): readonly ToolResourceClaim[] | Promise<readonly ToolResourceClaim[]>;
 }
@@ -39,9 +36,6 @@ export interface ToolExecutionPolicy<TArgs extends Record<string, unknown>> {
 export function validateToolExecutionPolicy(policy: ToolExecutionPolicy<Record<string, unknown>>): void {
   if (!policy || !["read", "write", "process", "interactive"].includes(policy.effect)) {
     throw new Error("Tool execution.effect must be read, write, process, or interactive");
-  }
-  if (policy.mode !== "parallel" && policy.mode !== "sequential") {
-    throw new Error("Tool execution.mode must be parallel or sequential");
   }
   if (typeof policy.resources !== "function") throw new Error("Tool execution.resources must be a function");
 }
@@ -92,7 +86,7 @@ function normalizeResourcePath(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-/** Resolve and canonicalize a workspace path for scheduler conflict detection. */
+/** Resolve and canonicalize a workspace path for a declared resource claim. */
 export async function workspacePathClaim(
   rootPath: string,
   inputPath: string,
@@ -114,9 +108,9 @@ export async function workspacePathClaim(
   return claim("workspace", normalizeResourcePath(await canonicalTarget(target)), access, options.scope ?? "exact");
 }
 
-/** Shared claims for built-in file tools; authorization and execution rechecks stay separate. */
+/** Shared resource declarations for built-in file tools; authorization and execution rechecks stay separate. */
 export function fileAccess(access: ToolResourceAccess, scope: ToolResourceScope = "exact"): ToolExecutionPolicy<{ path?: string }> {
-  return { effect: access, mode: "parallel", resources: async (args, context) => [
+  return { effect: access, resources: async (args, context) => [
     await workspacePathClaim(context.rootPath, args.path ?? (access === "read" ? "." : ""), access, {
       forWrite: access === "write", allowOutside: access === "read", scope,
       ...(access === "write" && context.writableExternalPaths ? { allowedOutsidePaths: context.writableExternalPaths } : {}),

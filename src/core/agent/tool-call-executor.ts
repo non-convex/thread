@@ -33,7 +33,6 @@ export interface PreparedToolCall {
 
 const immediatePolicy: ToolExecutionPolicy<Record<string, unknown>> = {
   effect: "read",
-  mode: "parallel",
   resources: () => [],
 };
 
@@ -58,8 +57,9 @@ export interface ToolExecutorOptions {
  * Owns one tool invocation's lifecycle but not batch scheduling.
  *
  * prepare() performs all sequential preflight work and durably records the call.
- * execute() begins only when ToolScheduler grants it a lane. It returns a
- * model-facing result without persisting it; the batch commits result messages
+ * execute() begins as soon as the call's durability requirements are met,
+ * without waiting for other tools. It returns a model-facing result without
+ * persisting it; the batch commits result messages
  * later in assistant source order.
  */
 export class ToolCallExecutor {

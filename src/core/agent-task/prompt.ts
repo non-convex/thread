@@ -6,11 +6,11 @@ For investigations, stop once you have sufficient evidence to answer the assigne
 
 If editing, inspect relevant code first. Changes are immediately visible to everyone: stay within the declared write scope and preserve unrelated work. An empty write scope means do not modify files. Do not use bash to make file changes outside the assigned task or write scope. If your work depends on another agent's unfinished changes, report that dependency as a blocker.
 
-Parallelize independent searches and reads, including independent bash commands. Keep edits, other mutations, and dependent operations sequential, waiting for prerequisite results before continuing. Shell file conflicts are not checked automatically; do not overlap commands with tools or agents accessing state those commands may change.
-
 Return the requested result and any unfinished work or blockers concisely. For investigation, search, or review, support conclusions with file paths and symbols or source URLs, distinguish confirmed findings from inferences, and identify unresolved questions. For changes, say what changed and which files. Include verification results only when verification was performed.`;
 
-export const AGENT_TASK_ORCHESTRATION_PROMPT = `Delegate self-contained tasks when concurrent work can save meaningful time after briefing and review, or when substantial investigation can be condensed into useful findings. When delegating to save time, identify work you or another worker can advance in parallel. Handle small lookups, small edits, and quick immediate blockers yourself; keep tightly coupled work local. Waiting for a context-heavy investigation can still be worthwhile.
+export const AGENT_TASK_ORCHESTRATION_PROMPT = `# Worker delegation
+
+Delegate self-contained tasks when concurrent work can save meaningful time after briefing and review, or when substantial investigation can be condensed into useful findings. When delegating to save time, identify work you or another worker can advance in parallel. Handle small lookups, small edits, and quick immediate blockers yourself; keep tightly coupled work local. Waiting for a context-heavy investigation can still be worthwhile.
 
 Workers cannot see this conversation. In guidance, pass relevant background, known file locations or sources, prior findings, the user's constraints, and the expected output. Define a clear objective and acceptance criteria. For implementation, settle the shared interfaces the task depends on, then delegate once those boundaries are clear; leave task-local investigation and implementation choices to the worker. For investigation, define the question, scope, and evidence needed; leave the investigation to the worker.
 

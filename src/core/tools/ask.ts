@@ -65,7 +65,6 @@ export function createAskTool(): AgentTool<{ questions: AskQuestion[] }> {
 
     execution: {
       effect: "interactive",
-      mode: "sequential",
       resources: () => singletonResource("interactive", "user", "write"),
     },
     async execute(args, context) {

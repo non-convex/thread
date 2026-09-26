@@ -19,7 +19,7 @@ import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
 import { InputRouter, parseInput, type GoalInputAction, type InputOptions, type InputResult, type RoutedInput } from "./input-router.js";
 import type { SessionGoal } from "../core/session-tree/model.js";
 import { loadProjectInstructions } from "./project-instructions.js";
-import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
+import { COMMUNICATION_STYLE_PROMPT, DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
 
 export type { InputResult } from "./input-router.js";
 
@@ -130,15 +130,19 @@ export class ThreadApp {
       ...core, tools, skills, fileCheckpoints, scheduling,
       writableExternalDirectories: [...(core.writableExternalDirectories ?? []), threadHome, ...paths],
       protectedWritePaths: [...(core.protectedWritePaths ?? []), path.join(threadHome, "projects"), getAuthFilePath(), `${getAuthFilePath()}.lock`],
+      // The runtime appends its concurrency instructions to this Working approach section.
       systemPrompt: [core.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-        `# Working directory\n\nCurrent project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
-        fileEditingPrompt(fileCheckpoints),
+        core.systemPrompt !== undefined ? "# Working approach" : "",
+        `Current project working directory: ${path.resolve(core.rootPath)}\nRelative tool paths resolve from this directory unless the tool specifies otherwise.`,
+        fileEditingPrompt(fileCheckpoints)].filter(Boolean).join("\n\n"),
+      appendSystemPrompt: [core.systemPrompt === undefined ? COMMUNICATION_STYLE_PROMPT : "",
         scheduling ? `# Scheduled tasks
 
 Use schedule_task when the user requests recurring or future work; use list_schedules, update_schedule, pause_schedule, resume_schedule, and delete_schedule to manage it. Use update_schedule to shorten or replace a task's follow-up prompt while preserving its Session and timing. Choose the current Session for follow-ups to this conversation, or a new Session to isolate the work (created once and reused on every wakeup). Creation queues the initial user turn immediately; it runs when this runtime is idle, after the current turn. Put the full background, scope, and ongoing instructions in initialPrompt, including what to do now. Sessions retain context across wakeups, so keep prompt to a brief wakeup cue without repeating background, rules, or checklists. If initialPrompt is omitted, prompt is also used for initialization. For actions that must wait, give initialPrompt preparation-only instructions. The time rule applies to follow-ups, including one follow-up for at schedules. Schedules persist, but only execute while Thread is running. The user can open the bound Session from /schedule, including while it is running. Do not use bash sleep as a substitute.` : "",
         `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Project state directories, auth.json, and its lock file are protected from built-in writes. Use the owning service to manage runtime state; config.json, skills, and global memory remain editable.`,
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
-        formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION)].filter(Boolean).join("\n\n"),
+        formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION),
+        core.appendSystemPrompt].filter(Boolean).join("\n\n"),
       ...(search === false ? {} : { search: search ?? {} }),
       ...(globalMemoryPath === false ? {} : { globalMemoryPath: globalMemoryPath ?? path.join(threadHome, GLOBAL_MEMORY_FILE) }),
     });

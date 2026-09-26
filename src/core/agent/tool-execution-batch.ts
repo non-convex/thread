@@ -17,9 +17,9 @@ export interface IndexedToolCall {
  *
  * Stream callbacks enter through observe(). Preflight is serialized to preserve
  * extension and durable-log order; eligible read effects are then launched
- * immediately. reconcile() binds the streamed facts to the final assistant
- * message. Result messages are returned in final assistant source order even
- * though completion events are emitted as individual tools finish.
+ * immediately. The batch imposes no tool-to-tool ordering. reconcile() binds
+ * the streamed facts to the final assistant message. Result messages are returned
+ * in final assistant source order, with completion events emitted as tools finish.
  */
 export class ToolExecutionBatch {
   private scheduler: ToolScheduler<Message>;
@@ -77,9 +77,7 @@ export class ToolExecutionBatch {
       this.prepared.set(stableCall.id, prepared);
       this.scheduler.schedule({
         id: stableCall.id,
-        mode: prepared.policy.mode,
         eager: prepared.policy.effect === "read",
-        resources: prepared.resources,
         run: (signal) => this.input.runner.execute(prepared, signal, this.input.ui),
       });
     });

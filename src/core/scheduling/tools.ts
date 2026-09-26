@@ -17,7 +17,7 @@ const scheduleSchema = Type.Union([
   Type.Object({ kind: Type.Literal("every"), minutes: Type.Number({ minimum: 1, description: "Minutes between occurrences (at least 1), anchored at creation." }) }),
   Type.Object({ kind: Type.Literal("cron"), expression: Type.String({ description: "Five-field cron expression." }), timezone: Type.String({ description: "IANA timezone, e.g. Asia/Shanghai." }) }),
 ]);
-const mutation = { effect: "write", mode: "sequential", resources: () => singletonResource("schedules", "*", "write") } as const;
+const mutation = { effect: "write", resources: () => singletonResource("schedules", "*", "write") } as const;
 
 /** Ordinary agent tools: the host owns durable creation, session binding and wakeup admission. */
 export function createScheduleTools(host: ScheduleHost): AgentTool[] {
@@ -67,7 +67,7 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     name: "list_schedules",
     description: "List scheduled tasks and their bound Sessions, first/follow-up prompts, time rules, enabled state, next time, last run and last error. Only online Thread schedules execute.",
     parameters: Type.Object({}),
-    execution: { effect: "read", mode: "parallel", resources: () => singletonResource("schedules", "*", "read") },
+    execution: { effect: "read", resources: () => singletonResource("schedules", "*", "read") },
     async execute(_args, context) {
       try {
         requireMain(context);

@@ -50,7 +50,6 @@ export function createSkillTool(skills: () => readonly Skill[]): AgentTool<{ nam
     }),
     execution: {
       effect: "read",
-      mode: "parallel",
       resources: (args) => singletonResource("skills", args.name.trim(), "read"),
     },
     async execute(args, context) {

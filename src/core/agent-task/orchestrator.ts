@@ -33,6 +33,7 @@ export interface AgentTaskOutcome {
 export class AgentTaskOrchestrator {
   private readonly runner: WorkerTaskRunner;
   private readonly runs = new Map<string, { parentTurnId: string; controller: AbortController; done: Promise<void> }>();
+  private readonly admissions = new Map<string, Pick<AgentTask, "id" | "profileId" | "spec">>();
   private closing = false;
 
   constructor(
@@ -67,27 +68,9 @@ export class AgentTaskOrchestrator {
     const profile = this.profiles.require(WORKER_PROFILE_ID);
     const normalized = specs.map((spec, index) => this.validateSpec(spec, index));
     if (normalized.length < 1 || normalized.length > 3) throw new Error("delegate_tasks accepts one to three tasks");
-    for (let left = 0; left < normalized.length; left++) {
-      for (let right = left + 1; right < normalized.length; right++) {
-        if (scopesOverlap(normalized[left]!.writeScope, normalized[right]!.writeScope)) {
-          throw new Error(`Task write scopes overlap: ${normalized[left]!.title} / ${normalized[right]!.title}`);
-        }
-      }
-    }
-    const running = [...this.repository.projection.tasks.values()].filter((task) => task.status === "running");
-    for (const spec of normalized) {
-      const overlap = running.find((task) => scopesOverlap(spec.writeScope, task.spec.writeScope));
-      if (overlap) throw new Error(`Task ${spec.title} overlaps running task ${overlap.id} (${overlap.spec.title})`);
-    }
-    const active = running.filter((task) => task.profileId === profile.id).length;
-    if (active + normalized.length > this.workerSettings.limits.maxConcurrent) {
-      throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before delegating more`);
-    }
-
-    const tasks: AgentTask[] = [];
-    for (const spec of normalized) {
+    const tasks: AgentTask[] = normalized.map((spec) => {
       const now = Date.now();
-      const task: AgentTask = {
+      return {
         id: createId("task"),
         parentTurnId: context.parentTurnId,
         toolCallId: context.toolCallId,
@@ -102,12 +85,20 @@ export class AgentTaskOrchestrator {
         runs: [],
         trace: [],
       };
-      await this.repository.append({ type: "task_created", task }, true);
-      tasks.push(task);
-      safeExecutionEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
-      this.launch(task.id, profile, context.signal, context.ui);
+    });
+    this.reserveAdmissions(tasks);
+    try {
+      for (const task of tasks) {
+        context.signal.throwIfAborted();
+        await this.repository.append({ type: "task_created", task }, true);
+        safeExecutionEvent(context.ui, { type: "agent_task_created", summary: this.repository.projection.summary(task.id) });
+        this.launch(task.id, profile, context.signal, context.ui);
+        this.admissions.delete(task.id);
+      }
+      return tasks.map((task) => this.repository.projection.summary(task.id));
+    } finally {
+      for (const task of tasks) this.admissions.delete(task.id);
     }
-    return tasks.map((task) => this.repository.projection.summary(task.id));
   }
 
   async waitTasks(taskIds: readonly string[], returnWhen: "first" | "all", signal: AbortSignal, timeoutMs = 60_000): Promise<{ tasks: AgentTaskOutcome[]; timedOut: boolean }> {
@@ -137,21 +128,22 @@ export class AgentTaskOrchestrator {
   }
 
   async requestRevision(taskId: string, feedback: string, signal: AbortSignal, ui?: ExecutionEventSink): Promise<AgentTaskSummary> {
+    if (this.closing) throw new Error("Agent Task orchestrator is closing");
+    signal.throwIfAborted();
     const task = this.repository.projection.require(taskId);
     const profile = this.profiles.require(task.profileId);
     if (task.status !== "completed") throw new Error(`Task ${taskId} is not completed`);
     if (task.revision >= this.workerSettings.limits.maxRevisions) throw new Error(`Task ${taskId} reached its revision limit`);
     if (!feedback.trim()) throw new Error("Revision feedback cannot be empty");
-    const running = [...this.repository.projection.tasks.values()].filter((candidate) => candidate.status === "running");
-    if (running.filter((candidate) => candidate.profileId === profile.id).length >= this.workerSettings.limits.maxConcurrent) {
-      throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait before requesting a revision`);
+    this.reserveAdmissions([task]);
+    try {
+      await new AgentTaskJournal(this.repository, taskId).appendUser(feedback.trim());
+      await this.repository.append({ type: "status_changed", taskId, status: "running" }, true);
+      this.launch(taskId, profile, signal, ui);
+      return this.repository.projection.summary(taskId);
+    } finally {
+      this.admissions.delete(taskId);
     }
-    const overlap = running.find((candidate) => candidate.id !== taskId && scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
-    if (overlap) throw new Error(`Task ${taskId} overlaps running task ${overlap.id} (${overlap.spec.title})`);
-    await new AgentTaskJournal(this.repository, taskId).appendUser(feedback.trim());
-    await this.repository.append({ type: "status_changed", taskId, status: "running" }, true);
-    this.launch(taskId, profile, signal, ui);
-    return this.repository.projection.summary(taskId);
   }
 
   async cancelTask(taskId: string, reason: string): Promise<AgentTaskSummary> {
@@ -182,6 +174,25 @@ export class AgentTaskOrchestrator {
     } finally {
       await this.repository.close();
     }
+  }
+
+  /** Reserve capacity and scopes before any await; parallel tool calls cannot admit the same work twice. */
+  private reserveAdmissions(tasks: readonly Pick<AgentTask, "id" | "profileId" | "spec">[]): void {
+    const occupied = new Map<string, Pick<AgentTask, "id" | "profileId" | "spec">>(
+      [...this.repository.projection.tasks.values()].filter((task) => task.status === "running").map((task) => [task.id, task]),
+    );
+    for (const task of this.admissions.values()) occupied.set(task.id, task);
+    for (const task of tasks) {
+      if (occupied.has(task.id)) throw new Error(`Task ${task.id} is already running or starting`);
+      const active = [...occupied.values()];
+      if (active.filter((candidate) => candidate.profileId === task.profileId).length >= this.workerSettings.limits.maxConcurrent) {
+        throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before starting more`);
+      }
+      const overlap = active.find((candidate) => scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
+      if (overlap) throw new Error(`Task ${task.spec.title} overlaps active task ${overlap.id} (${overlap.spec.title})`);
+      occupied.set(task.id, task);
+    }
+    for (const task of tasks) this.admissions.set(task.id, task);
   }
 
   private async cancelRuns(taskIds: readonly string[], reason: string): Promise<void> {

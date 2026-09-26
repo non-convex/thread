@@ -148,7 +148,6 @@ export function createSessionSearchTool(recall: SessionRecallService): AgentTool
     }),
     execution: {
       effect: "read",
-      mode: "parallel",
       resources: () => singletonResource("session-tree", "*", "read", "subtree"),
     },
     async execute(args, context) {
@@ -194,7 +193,6 @@ export function createSessionReadTool(recall: SessionRecallService): AgentTool<{
     }),
     execution: {
       effect: "read",
-      mode: "parallel",
       resources: (args) => singletonResource("session-tree", args.turnId, "read"),
     },
     async execute(args, context) {

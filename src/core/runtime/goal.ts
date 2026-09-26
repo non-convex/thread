@@ -34,7 +34,7 @@ export function createGoalTool(goalId: string, report: (decision: GoalDecision, 
       status: Type.Union([Type.Literal("completed"), Type.Literal("blocked")]),
       reason: Type.String({ minLength: 1, maxLength: 4000, description: "Evidence for completion, or the concrete blocker and what the user needs to provide." }),
     }),
-    execution: { effect: "write", mode: "sequential", resources: () => singletonResource("session-tree", goalId, "write") },
+    execution: { effect: "write", resources: () => singletonResource("session-tree", goalId, "write") },
     async execute(args, context) {
       context.signal.throwIfAborted();
       const reason = args.reason.trim();

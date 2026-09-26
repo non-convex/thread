@@ -41,7 +41,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     description: "Delegate one to three self-contained tasks with individually selected tools. Workers share the current project workspace; any file changes are immediately visible and declared write scopes must not overlap.",
     parameters: Type.Object({ tasks: Type.Array(specSchema, { minItems: 1, maxItems: 3 }) }),
 
-    execution: { effect: "process", mode: "sequential", resources: () => noResources() },
+    execution: { effect: "process", resources: () => noResources() },
     async execute(args, context) {
       try {
         const summaries = await orchestrator.delegate(args.tasks, {
@@ -63,7 +63,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
       returnWhen: Type.Union([Type.Literal("first"), Type.Literal("all")]),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Maximum time to wait in milliseconds. Default: 60000. Does not change worker runtime limits." })),
     }),
-    execution: { effect: "process", mode: "sequential", resources: () => noResources() },
+    execution: { effect: "process", resources: () => noResources() },
     async execute(args, context) {
       try {
         for (const id of args.taskIds) ownTask(orchestrator, id, context);
@@ -77,7 +77,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     description: "Continue a completed worker in the same shared workspace with concrete feedback. The task specification, assigned tools, and write scope remain fixed.",
     parameters: Type.Object({ taskId: Type.String(), feedback: Type.String() }),
 
-    execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
+    execution: { effect: "process", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
     async execute(args, context) {
       try {
         ownTask(orchestrator, args.taskId, context);
@@ -91,7 +91,7 @@ export function createAgentTaskTools(orchestrator: AgentTaskOrchestrator): Agent
     description: "Interrupt a running task. Files already changed in the shared workspace are preserved and must be reviewed by the main agent.",
     parameters: Type.Object({ taskId: Type.String(), reason: Type.String() }),
 
-    execution: { effect: "process", mode: "sequential", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
+    execution: { effect: "process", resources: (args) => singletonResource("agent-task", args.taskId, "write") },
     async execute(args, context) {
       try {
         ownTask(orchestrator, args.taskId, context);

@@ -134,16 +134,15 @@ async function presentBashOutput(result: ProcessResult): Promise<ToolResult> {
 export const bashTool: AgentTool<{ command: string; timeoutMs?: number }> = {
   name: "bash",
   description:
-    `Run a foreground shell command in the workspace. Independent commands may run in parallel. Wait for prerequisite results and keep mutations or commands that could conflict with other tool calls sequential; shell file conflicts are not checked automatically. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Shows up to ${BASH_PREVIEW_BYTES / 1024} KiB from the end of stdout and stderr; longer captured output is saved to a temporary file. Capture is limited to the last 64KB per stream.`,
+    `Run a foreground shell command in the workspace. Shell file effects are not enumerated automatically; this is not filesystem isolation. Prefer grep, read, and list for inspecting files, and edit or write for changing them. Detached/background commands are unsupported. Shows up to ${BASH_PREVIEW_BYTES / 1024} KiB from the end of stdout and stderr; longer captured output is saved to a temporary file. Capture is limited to the last 64KB per stream.`,
   parameters: Type.Object({
     command: Type.String(),
     timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: BASH_MAX_TIMEOUT_MS })),
   }),
   execution: {
     effect: "process",
-    mode: "parallel",
-    // Shell effects are not enumerated; the model must sequence conflicting calls.
-    // Empty claims allow concurrency, not read-only access or filesystem isolation.
+    // Shell effects are not enumerated; empty claims do not imply read-only access
+    // or filesystem isolation.
     resources: noResources,
   },
   async execute(args, context) {
