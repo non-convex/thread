@@ -225,6 +225,7 @@ export function ThreadRoot(props: {
           overlaySelected={overlaySelected} overlayNavigated={overlayNavigated} composerHeight={composerHeight}
           terminalWidth={() => dimensions().width} terminalHeight={() => dimensions().height}
           workerCards={workerCards} workerPanelCard={workerPanelCard} onOpenWorker={toggleWorker}
+          onCloseWorker={() => setOpenedWorkerTaskId(undefined)}
           setWorkerScroll={(value) => { workerScroll = value; }} setScroll={(value) => { sessionScroll = value; }} />
       </Match>
       <Match when={screen().type === "document"}>

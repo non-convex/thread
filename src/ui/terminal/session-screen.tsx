@@ -1,4 +1,4 @@
-import type { KeyBinding, ScrollBoxRenderable } from "@opentui/core";
+import { MouseButton, type KeyBinding, type ScrollBoxRenderable } from "@opentui/core";
 import { createSignal, Show, type Accessor } from "solid-js";
 import { isSlashCommandInput } from "../../app/input-router.js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem, UiState } from "../state.js";
@@ -61,6 +61,7 @@ export function SessionScreen(props: {
   workerCards: Accessor<readonly AgentTaskCard[]>;
   workerPanelCard: Accessor<AgentTaskCard | undefined>;
   onOpenWorker: (taskId: string) => void;
+  onCloseWorker: () => void;
   setWorkerScroll: (value: ScrollBoxRenderable | undefined) => void;
   setScroll: (value: ScrollBoxRenderable) => void;
 }) {
@@ -103,7 +104,12 @@ export function SessionScreen(props: {
     draft.replace("");
     if (!command) draft.setAttachments([]);
   };
-  return <box position="relative" width="100%" height="100%" backgroundColor={theme.background}>
+  return <box position="relative" width="100%" height="100%" backgroundColor={theme.background}
+    onMouseDown={(event) => {
+      // Worker cards and their detail panel stop this event; other areas dismiss on press.
+      // Do not consume the click: the composer and transcript keep their normal interactions.
+      if (event.button === MouseButton.LEFT && props.workerPanelCard()) props.onCloseWorker();
+    }}>
     <Show when={hasTranscript()} fallback={
       <box position="absolute" top={0} right={0} bottom={controlsHeight()} left={0}>
         <WelcomeView resources={props.resources} />
