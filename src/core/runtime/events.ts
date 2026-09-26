@@ -3,6 +3,7 @@ import type { ExecutionIdentity } from "./policy.js";
 import type { AgentTaskSummary } from "../agent-task/model.js";
 import type { PromptCacheDiagnostic, PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
 import type { DreamerStatus } from "../dreamer/scheduler.js";
+import type { SessionGoal } from "../session-tree/model.js";
 
 export type ModelEvent = {
   callId: string;
@@ -36,6 +37,7 @@ type AgentEvent = ModelEvent | ToolEvent
 type ExecutionPayload = (
   | AgentEvent
   | { type: "dreamer_status"; status: DreamerStatus }
+  | { type: "goal_changed"; sessionId: string; goal: SessionGoal | null }
   | { type: "agent_task_created"; summary: AgentTaskSummary }
   | { type: "agent_task_updated"; summary: AgentTaskSummary }
   | {

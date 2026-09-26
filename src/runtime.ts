@@ -1,6 +1,6 @@
 /** Supported headless entrypoint. Terminal rendering lives in thread/tui. */
 export { ThreadRuntime } from "./core/runtime/thread-runtime.js";
-export type { ThreadRuntimeOptions, PromptOptions, RewindOptions } from "./core/runtime/options.js";
+export type { ThreadRuntimeOptions, PromptOptions, GoalOptions, RewindOptions } from "./core/runtime/options.js";
 export type { BuiltinToolName } from "./core/tools/builtins.js";
 export type { RuntimeEvent, RuntimeEventSink, RuntimeScope, RuntimeSubscriptionOptions, ModelEvent } from "./core/runtime/events.js";
 export type { ExecutionIdentity, HostToolCall, HostToolDecision, HostToolPolicy } from "./core/runtime/policy.js";
@@ -46,7 +46,7 @@ export type {
 } from "./core/tools/execution.js";
 export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./core/tools/execution.js";
 export type { Project } from "./core/project/model.js";
-export type { ProjectSession, SessionEntry, Turn } from "./core/session-tree/model.js";
+export type { ProjectSession, SessionEntry, SessionGoal, Turn } from "./core/session-tree/model.js";
 export type { RewindCandidate } from "./core/session-tree/service.js";
 export type { CompactionResult } from "./core/context/compaction/service.js";
 export { loadSkills, type LoadedSkills, type Skill, type SkillDiagnostic, type SkillPaths } from "./core/skills/loader.js";

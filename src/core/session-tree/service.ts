@@ -20,6 +20,7 @@ import {
   type ProjectSession,
   type RetainedTurn,
   type SessionEntry,
+  type SessionGoal,
   type SessionTree,
   type ToolExecutionEntry,
   type Turn,
@@ -49,6 +50,7 @@ export interface PlannedTurn {
   startedAt: number;
   fileCheckpoints: boolean;
   dreamerReview?: DreamerAdmission;
+  goal?: SessionGoal;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
@@ -133,7 +135,7 @@ export class SessionTreeService {
   }
 
   planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean,
-    dreamerReview?: DreamerAdmission): PlannedTurn {
+    dreamerReview?: DreamerAdmission, goal?: SessionGoal): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
     const session = this.resolveSession(sessionId);
@@ -148,6 +150,7 @@ export class SessionTreeService {
       startedAt: Date.now(),
       fileCheckpoints,
       ...(dreamerReview !== undefined ? { dreamerReview: structuredClone(dreamerReview) } : {}),
+      ...(goal !== undefined ? { goal: structuredClone(goal) } : {}),
     };
   }
 
@@ -156,6 +159,7 @@ export class SessionTreeService {
   ): Promise<Turn> {
     const content = planned.content;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
+    const goal = planned.goal === undefined ? undefined : structuredClone(planned.goal);
     this.requireIdle();
     if (!this.projection.sessions.has(planned.sessionId) ||
         planned.parentTurnId !== (this.projection.liveTips.get(planned.sessionId) ?? null)) {
@@ -166,6 +170,7 @@ export class SessionTreeService {
       sessionId: planned.sessionId,
       parentTurnId: planned.parentTurnId,
       userEntryId: planned.userEntryId,
+      ...(goal !== undefined ? { goalId: goal.id } : {}),
       status: "running",
       startedAt: planned.startedAt,
       fileCheckpoints: planned.fileCheckpoints,
@@ -180,11 +185,29 @@ export class SessionTreeService {
       type: "message",
       message: { role: "user", content, timestamp: turn.startedAt },
     };
-    await this.repository.appendBatch(() => [
-      { type: "turn_started", turn },
-      { type: "entry_appended", entry: userEntry },
-    ], true);
+    await this.repository.appendBatch(() => {
+      if (goal !== undefined) this.projection.validateGoalChange(planned.sessionId, goal);
+      return [
+        { type: "turn_started", turn },
+        { type: "entry_appended", entry: userEntry },
+        ...(goal !== undefined ? [{ type: "goal_changed" as const, sessionId: planned.sessionId, goal }] : []),
+      ];
+    }, true);
     return structuredClone(turn);
+  }
+
+  readGoal(sessionId: string): SessionGoal | undefined {
+    const goal = this.projection.goals.get(sessionId);
+    return goal ? { ...structuredClone(goal), turnsUsed: this.projection.goalTurns.get(goal.id) ?? 0 } : undefined;
+  }
+
+  async setGoal(sessionId: string, goal: SessionGoal | null, signal?: AbortSignal): Promise<void> {
+    const snapshot = structuredClone(goal);
+    await this.repository.append(() => {
+      signal?.throwIfAborted();
+      this.projection.validateGoalChange(sessionId, snapshot);
+      return { type: "goal_changed", sessionId, goal: snapshot };
+    }, true);
   }
 
   planMessageEntry(turnId: string): PlannedMessageEntry {

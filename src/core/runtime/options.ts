@@ -81,6 +81,12 @@ export interface PromptOptions extends ExecutionLimits {
   onEvent?: RuntimeEventSink;
 }
 
+/** Goal runs have no per-turn model-step cap or elapsed-time limit. */
+export interface GoalOptions extends Pick<PromptOptions, "signal" | "images" | "onEvent"> {
+  /** Additional turns admitted by this explicit run/resume, including its first turn. Default: 20. */
+  maxTurns?: number;
+}
+
 export interface RewindOptions {
   signal?: AbortSignal;
   /** Default: the runtime's fileCheckpoints setting. False only moves the session's live tip. */

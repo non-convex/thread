@@ -5,7 +5,7 @@ import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../
 import type { ContextCompactionService, CompactionResult } from "../context/compaction/service.js";
 import type { ExtensionEvents } from "../extensions/events.js";
 import type { DreamerAdmission } from "../dreamer/state.js";
-import type { Turn } from "../session-tree/model.js";
+import type { SessionGoal, Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
@@ -26,6 +26,8 @@ export interface RunTurnOptions extends ExecutionLimits {
   onExecutionEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];
   dreamerReview?: DreamerAdmission;
+  /** Host-owned goal admission, recorded atomically with the turn. */
+  goal?: SessionGoal;
 }
 
 interface CompactionInvocation {

@@ -4,6 +4,7 @@ import type {
   ProjectSession,
   FileRewindIntent,
   SessionEntry,
+  SessionGoal,
   SessionTree,
   SessionTreeEvent,
   SessionTreeRecord,
@@ -21,8 +22,6 @@ function assertUnused<T>(values: Map<string, T>, id: string, label: string): voi
   if (values.has(id)) throw new SessionTreeCorruptionError(`Duplicate ${label}: ${id}`);
 }
 
-
-
 export class SessionTreeProjection {
   tree: SessionTree | undefined;
   activeSessionId: string | undefined;
@@ -33,6 +32,9 @@ export class SessionTreeProjection {
   readonly entries = new Map<string, SessionEntry>();
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
   readonly liveTips = new Map<string, string | null>();
+  readonly goals = new Map<string, SessionGoal>();
+  readonly goalsBeforeTurn = new Map<string, SessionGoal | null>();
+  readonly goalTurns = new Map<string, number>();
   pendingFileRewind: FileRewindIntent | undefined;
   nextSequence = 1;
 
@@ -44,12 +46,12 @@ export class SessionTreeProjection {
     }
     if (!Number.isFinite(record.timestamp)) throw new SessionTreeCorruptionError("Invalid record timestamp");
     const events = record.type === "batch" ? record.events : [record];
-    for (const event of events) this.applyEvent(event);
+    for (const event of events) this.applyEvent(event, record.timestamp);
     this.nextSequence++;
     if (this.tree) this.tree.updatedAt = Math.max(this.tree.updatedAt, record.timestamp);
   }
 
-  private applyEvent(event: SessionTreeEvent): void {
+  private applyEvent(event: SessionTreeEvent, timestamp: number): void {
     if (this.pendingFileRewind && event.type !== "file_rewind_finished") {
       throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
     }
@@ -99,6 +101,9 @@ export class SessionTreeProjection {
         if (turn.dreamerReviewedAt !== undefined) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} was reviewed before it started`);
         }
+        if (turn.goalId !== undefined && (typeof turn.goalId !== "string" || !turn.goalId.trim())) {
+          throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid goal id`);
+        }
         if (this.runningTurnsBySession.size > 0) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
         }
@@ -111,9 +116,28 @@ export class SessionTreeProjection {
             throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid parent`);
           }
         }
+        this.goalsBeforeTurn.set(turn.id, structuredClone(this.goals.get(turn.sessionId) ?? null));
+        if (turn.goalId !== undefined) {
+          const count = (this.goalTurns.get(turn.goalId) ?? 0) + 1;
+          if (!Number.isSafeInteger(count)) throw new SessionTreeCorruptionError(`Goal turn count overflow: ${turn.goalId}`);
+          this.goalTurns.set(turn.goalId, count);
+          const current = this.goals.get(turn.sessionId);
+          if (current?.id === turn.goalId) current.turnsUsed = count;
+        }
         this.turns.set(turn.id, structuredClone(turn));
         this.runningTurnsBySession.set(turn.sessionId, this.turns.get(turn.id)!);
         this.entriesByTurn.set(turn.id, []);
+        return;
+      }
+      case "goal_changed": {
+        this.validateGoalChange(event.sessionId, event.goal);
+        if (event.goal === null) {
+          this.goals.delete(event.sessionId);
+        } else {
+          const goal = structuredClone(event.goal);
+          goal.turnsUsed = this.goalTurns.get(goal.id) ?? 0;
+          this.goals.set(event.sessionId, goal);
+        }
         return;
       }
       case "entry_appended": {
@@ -223,6 +247,7 @@ export class SessionTreeProjection {
           throw new SessionTreeCorruptionError("File rewind finished without a matching intent");
         }
         // The file service emits this only after every destination has been restored.
+        this.restoreGoalForRewind(event.sessionId, rewind.fromTurnId, rewind.toTurnId, timestamp);
         this.liveTips.set(event.sessionId, rewind.toTurnId);
         this.pendingFileRewind = undefined;
         return;
@@ -247,12 +272,60 @@ export class SessionTreeProjection {
         } else if (!this.isAncestor(event.turnId, currentTip)) {
           throw new SessionTreeCorruptionError(`Rewind target is not on the current live path: ${event.turnId}`);
         }
+        if (event.reason === "rewind") this.restoreGoalForRewind(event.sessionId, currentTip, event.turnId, timestamp);
         this.liveTips.set(event.sessionId, event.turnId);
         return;
       }
       default:
         throw new SessionTreeCorruptionError(`Unknown Session Tree event: ${String((event as { type?: unknown }).type)}`);
     }
+  }
+
+  /** Also called inside a serialized append factory, before an invalid goal can enter the log. */
+  validateGoalChange(sessionId: string, goal: SessionGoal | null): void {
+    if (this.pendingFileRewind) {
+      throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
+    }
+    if (typeof sessionId !== "string" || !this.sessions.has(sessionId)) {
+      throw new SessionTreeCorruptionError(`Unknown session: ${String(sessionId)}`);
+    }
+    if (goal === null) return;
+    if (!goal || typeof goal !== "object" || Array.isArray(goal) ||
+        typeof goal.id !== "string" || !goal.id.trim() ||
+        typeof goal.objective !== "string" || !goal.objective.trim() ||
+        !["active", "paused", "blocked", "completed"].includes(goal.status) ||
+        (goal.reason !== undefined && typeof goal.reason !== "string") ||
+        !Number.isSafeInteger(goal.turnsUsed) || goal.turnsUsed < 0 ||
+        !Number.isSafeInteger(goal.turnLimit) || goal.turnLimit < 1 ||
+        !Number.isFinite(goal.createdAt) || goal.createdAt < 0 ||
+        !Number.isFinite(goal.updatedAt) || goal.updatedAt < goal.createdAt) {
+      throw new SessionTreeCorruptionError("Invalid Session goal");
+    }
+  }
+
+  private restoreGoalForRewind(sessionId: string, fromTurnId: string | null, toTurnId: string | null, timestamp: number): void {
+    if (fromTurnId === toTurnId) return;
+    let firstRemoved = fromTurnId;
+    while (firstRemoved && this.turns.get(firstRemoved)?.parentTurnId !== toTurnId) {
+      firstRemoved = this.turns.get(firstRemoved)?.parentTurnId ?? null;
+    }
+    if (!firstRemoved || !this.goalsBeforeTurn.has(firstRemoved)) {
+      throw new SessionTreeCorruptionError("Rewind has no goal snapshot for its first removed turn");
+    }
+    const snapshot = this.goalsBeforeTurn.get(firstRemoved);
+    if (snapshot === null) {
+      this.goals.delete(sessionId);
+      return;
+    }
+    if (!snapshot) throw new SessionTreeCorruptionError("Missing goal snapshot for rewind");
+    const goal = structuredClone(snapshot);
+    goal.turnsUsed = this.goalTurns.get(goal.id) ?? 0;
+    if (goal.status === "active") {
+      goal.status = "paused";
+      goal.reason = "Paused after rewind";
+      goal.updatedAt = Math.max(timestamp, goal.updatedAt);
+    }
+    this.goals.set(sessionId, goal);
   }
 
   /** Also called inside a serialized append factory, before an invalid review can enter the log. */

@@ -39,7 +39,7 @@ export class AgentRunner {
   private async runWithDeadline(input: string, options: RunTurnOptions): Promise<TurnResult> {
     this.tree.requireIdle();
     options.signal.throwIfAborted();
-    const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints, options.dreamerReview);
+    const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints, options.dreamerReview, options.goal);
     options = this.withEvents(options, planned.sessionId, planned.id);
     const display = userContentDisplay(planned.content);
     safeExecutionEvent(options.onExecutionEvent, {
@@ -50,6 +50,9 @@ export class AgentRunner {
     options.signal.throwIfAborted();
     // Admit the turn durably before extensions, model requests or tool effects.
     const turn = await this.tree.startPlannedTurn(planned);
+    if (options.goal) safeExecutionEvent(options.onExecutionEvent, {
+      type: "goal_changed", sessionId: turn.sessionId, goal: this.tree.readGoal(turn.sessionId) ?? null,
+    });
     safeExecutionEvent(options.onExecutionEvent, {
       type: "turn_started",
       turnId: turn.id,

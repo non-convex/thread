@@ -86,6 +86,35 @@ coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共�
 
 `PromptOptions` 只接受 `signal`、`maxSteps`、`timeoutMs`、`images` 和 `onEvent`，执行时也只转发这些公开字段。文本增量从 `assistant_text_delta` 事件读取。`ThreadApp.handleInput()` 另有 `onCommandEvent`，只发送 `command_started`、`command_finished`；所有模型执行事件通过 `app.runtime.subscribe()` 或公开的 `onEvent` 观察。
 
+## 持续目标
+
+`prompt()` 仍然只执行一轮。需要自动推进一个明确目标时，宿主显式调用 `runGoal()`：
+
+```ts
+await runtime.runGoal(sessionId, "更新指定 API 的全部调用点，保持现有行为", {
+  maxTurns: 10,
+  signal,
+});
+const goal = runtime.readGoal(sessionId);
+
+// 这些控制方法也可以从另一个事件处理器中调用。
+await runtime.pauseGoal(sessionId);
+await runtime.runGoal(sessionId, undefined); // 显式恢复未完成目标
+await runtime.clearGoal(sessionId);
+```
+
+每个 Session 只有一个目标。传入新的目标文字会替换原目标并立即开始，文字长度为 1–4,000 字符；传入 `undefined` 则恢复暂停或受阻的目标。运行中不能替换目标，但可以读取状态、暂停或清除。暂停会取消并等待整个目标运行结算；清除先做同样的结算，再移除目标。`interrupt()`、调用方的取消信号和 `close()` 同样停止整个运行，不会在当前轮结束后重新启动下一轮。
+
+`GoalOptions` 接受 `signal`、`images`、`onEvent` 和 `maxTurns`。目标运行不设置每轮模型步骤上限，也不设置总运行时间限制；默认一次设置或恢复最多执行 20 轮。`images` 只附在本次运行的第一轮。累计已开始轮数保存在 `turnsUsed`，`turnLimit` 是本次运行允许达到的累计上限；显式恢复增加一份新的轮数预算，但不会抹掉此前消耗。这里没有 token 总量硬上限。
+
+每轮复用原来的 agent、工具、压缩和 Worker 生命周期。目标随系统指令进入该轮的每次模型请求，不依赖摘要保留。只有目标运行会临时提供 `update_goal` 工具：主代理用 `completed` 提交完成依据，或用 `blocked` 说明需要用户处理的问题。工具只记录本轮的结果意向，要求先等待或取消仍在运行的 Worker，再报告结果。报告后如果继续调用其他工具，原结果意向失效，需要重新报告；取消也不能被当成完成。只有整轮正常结算后才保存目标结果，这不是独立模型审核或宿主自动验收。目标模式不增加文件、命令或外部操作权限。
+
+模型正常结束回复而没有报告结果时，运行时会在上一轮结算后继续。达到轮数上限，或连续三轮没有成功的工作工具调用时，目标暂停；后者只是有限的空转保护，不是判断实际工作价值的通用算法。运行异常和取消也会暂停并保存原因。`runGoal()` 返回最后一轮的 `TurnResult`，其中 `outcome: "completed"` 只代表该轮正常结束；整个目标是否完成应读取 `readGoal()` 的 `status`，或订阅 `goal_changed`。
+
+目标和状态变化保存在现有 Session Tree，关闭文件 checkpoint 不影响它们。重新打开 runtime 时，原本 active 的目标恢复为 paused，不自动继续。rewind 会恢复第一个被移除 turn 开始前的目标；恢复出的 active 目标也暂停，累计已开始轮数不回退。目标轮次带有 `Turn.goalId`，后续自动输入也明确标记为目标续跑，不表示用户授予了新的权限。
+
+`readGoal()` 返回独立快照或 `undefined`。`goal_changed` 事件携带 `sessionId` 和目标快照，清除时为 `null`；状态包括 `active`、`paused`、`blocked`、`completed`，可选 `reason` 说明完成依据或停止原因。宿主用现有实时事件显示各轮内容，并在每次 turn 提交后刷新历史，不能只在整个目标结束时保存最后一轮的界面内容。
+
 ## 选择工具与加载 Skill
 
 `tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。
@@ -233,6 +262,9 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `readSession(sessionId)` | 返回会话、已提交 live path 上的 `turns`、`entries`、`tasks`、`liveTipTurnId`，以及独立的 `activeTurn` |
 | `readHistory()` | 返回整个项目保留的会话、turn、条目和 live tips，包含回退后保留的分支 |
 | `prompt(sessionId, input, options?)` | 执行并返回 `TurnResult`，包含 turn、结果和模型消息 |
+| `runGoal(sessionId, objective, options?)` | 设置或恢复持续目标，等待本次运行结束，返回最后一轮结果 |
+| `readGoal(sessionId)` | 返回当前目标的独立快照，运行中可读 |
+| `pauseGoal(sessionId)` / `clearGoal(sessionId)` | 停止并结算目标运行，分别保留或清除目标 |
 | `setModel(model)` / `setThinkingLevel(level)` | 模型在空闲时切换；思考偏好可以随时调整，从下一轮生效 |
 | `openSession(sessionId)` | 保存下次启动应恢复的会话，不改变显式 prompt 的目标 |
 | `searchHistory(sessionId, queries, options?)` | 搜索整个项目历史；以传入会话标注当前路径，支持 limit 和取消信号 |

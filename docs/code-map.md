@@ -18,6 +18,8 @@ ThreadApp.handleInput → InputRouter → ThreadRuntime.prompt
 
 These stages have different responsibilities. `AgentRunner` in `core/agent/runner.ts` admits and finishes the durable turn; `core/runtime/create-agent-runner.ts` assembles it from the project runtime's configured services. `TurnRunner` assembles context and handles compaction. `AgentStepRunner` owns one model response. A tool batch reconciles streamed calls with that response and preserves result order, while the scheduler controls concurrent execution. The executor validates and authorizes each invocation before calling the tool.
 
+`ThreadRuntime.runGoal()` reuses this path for a bounded sequence of turns inside one foreground operation. `runtime/goal.ts` supplies the goal instructions and the runner-local outcome tool; the Session Tree stores goal changes and per-turn rewind snapshots. The app permits goal status and stop controls while its main input remains active. Ordinary `prompt()` still runs exactly one turn.
+
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 
 `app/model-catalog.ts` limits the coding app's OpenAI Codex model lists to GPT-6 Astra, Sol, and Luna. The core catalog accepts an optional `isModelVisible` predicate for `list()` and `listAll()`; without it, embedded hosts retain the complete catalog. This display filter does not restrict explicit `createClient()` selections or change provider authentication.
