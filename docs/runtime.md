@@ -145,6 +145,10 @@ CLI 和 `ThreadApp` 自动把配置的 Skill 扫描目录加入可写目录，�
 
 配置 `globalMemoryPath` 后，Main 使用内置 `read`、`write`、`edit` 管理该文件时，修改必须基于较早模型步骤中的读取；文件被其他 Main 回合或 Dreamer 更新后，旧修改会被拒绝，需要重新读取并生成更新。Dreamer 的内置文件工具只能访问这个文件。读写协调限于同一进程，不覆盖 Bash、自定义文件写入或外部进程，具体边界见[全局记忆与 Dreamer](./global-memory-architecture.md#写入边界)。
 
+Dreamer 需要显式配置 `globalMemoryPath` 和 `dreamer: { enabled: true, model: dreamerModel }`。可选的调度参数为 `idleTurns`（默认 10）、`idleMs`（默认 10 分钟）、`maxWaitMs`（默认 30 分钟）、`maxSteps`（每批默认 20）和 `maxRuntimeMs`（一次运行默认 5 分钟）。小批量达到 `maxWaitMs` 后也可启动，但仍须满足 `idleMs`；这不是在主代理忙碌时强制启动的期限。
+
+审阅资格在 turn 开始时持久化，完整 turn 和长 turn 的分片进度记录在 Session Tree。关闭或禁用 Dreamer 不丢待办，重启或重新启用后继续；禁用期间发起的 turn 不自动补录。前台操作先取消并结算 Dreamer，新 turn 重置空闲计时，普通查询不重置。`runtime.dreamerStatus` 返回状态副本，包含待办数量、完整审阅数量、部分 turn、最近成功时间和结果、下次可运行时间与错误；未配置全局记忆时为 `undefined`。`dreamer_status` 事件提供同样的状态变化。完整策略见[全局记忆与 Dreamer](./global-memory-architecture.md)。
+
 MCP 属于未来的核心能力，将通过同一工具注册、策略、执行与取消机制接入。当前尚未实现 MCP 客户端或配置项。
 
 通过 `worker: { enabled: true, model: workerModel }` 启用 Worker；`runtime.workerEnabled` 和 `runtime.workerModel` 查询状态，空闲时用 `runtime.configureAgent("worker", enabled, workerModel)` 调整配置。只接受当前的 `worker` 名称。主 agent 在委派时交代实现、调查、搜索或审查任务，无需选择固定角色。
@@ -310,6 +314,7 @@ Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息�
 | `tool_started` | `phase: queued` 为进入准备/排队；`running` 为调度器放行，参数是准备和策略处理后的实际参数 |
 | `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为执行器当时形成的模型可见结果，details 为工具返回的可选结构化元数据。完整批次结算后可能另向持久化结果追加重复调用提醒。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
+| `dreamer_status` | 后台审阅的待办、分片进度、最近结果和错误；sessionId/turnId 为 null |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
