@@ -14,6 +14,9 @@ pnpm-debug.log*
 # Thread runtime state
 .thread/
 
+# Browser screenshots and local artifacts
+.agent-browser/
+
 # Local configuration and secrets
 AGENTS.md
 plan.md
