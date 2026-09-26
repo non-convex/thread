@@ -2,7 +2,7 @@ import type { ImageContent, Message, UserMessage } from "@earendil-works/pi-ai";
 import { emptyDreamerCheckpoint, type DreamerAdmission, type DreamerCheckpoint } from "../dreamer/state.js";
 import type { DreamerReviewSource } from "../dreamer/review.js";
 import { createId, stableId } from "../utils/id.js";
-import type { CreateScheduleInput, ScheduledTask, ScheduledWakeup } from "../scheduling/model.js";
+import type { CreateScheduleInput, UpdateScheduleInput, ScheduledTask, ScheduledWakeup } from "../scheduling/model.js";
 import { nextScheduleTime, normalizeSchedule } from "../scheduling/timing.js";
 import { isEmptyUserMessageContent, userContentDisplay, userContentFrom, userContentIsEmpty } from "./user-content.js";
 import {
@@ -160,6 +160,23 @@ export class SessionTreeService {
     const matches = [...this.projection.schedules.values()].filter((task) => task.id.startsWith(idOrPrefix));
     if (matches.length !== 1) throw new Error(`Could not uniquely resolve schedule: ${idOrPrefix}`);
     return matches[0]!;
+  }
+
+  async updateSchedule(id: string, input: UpdateScheduleInput, signal?: AbortSignal): Promise<ScheduledTask> {
+    signal?.throwIfAborted();
+    const prompt = input.prompt;
+    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 32_000) {
+      throw new Error("prompt must contain between 1 and 32000 characters and cannot be blank");
+    }
+    let task: ScheduledTask;
+    await this.repository.append(() => {
+      signal?.throwIfAborted();
+      const current = this.resolveSchedule(id);
+      task = { ...current, prompt };
+      this.projection.validateScheduleChange(task);
+      return { type: "schedule_changed", task };
+    }, true);
+    return structuredClone(task!);
   }
 
   async setScheduleEnabled(id: string, enabled: boolean, signal?: AbortSignal, error?: string): Promise<ScheduledTask> {

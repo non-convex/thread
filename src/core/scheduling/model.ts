@@ -6,12 +6,19 @@ export type ScheduleSpec =
 
 export interface CreateScheduleInput {
   name: string;
+  /** Brief wakeup cue; the Session retains the task's background and ongoing instructions. */
   prompt: string;
-  /** Queued immediately at creation; runs once the runtime is idle. Defaults to prompt. */
+  /** Full task setup, queued at creation and run once the runtime is idle. Defaults to prompt. */
   initialPrompt?: string;
   schedule: ScheduleSpec;
   /** Omit to create one independent Session for initialization and all follow-ups. */
   sessionId?: string;
+}
+
+/** Update future wakeup text without changing the task's identity or scheduling state. */
+export interface UpdateScheduleInput {
+  /** Brief wakeup cue; initial instructions and already-prepared turns remain unchanged. */
+  prompt: string;
 }
 
 export interface ScheduledTask {
@@ -50,6 +57,7 @@ export interface ScheduleSummary extends ScheduledTask {
 export interface ScheduleHost {
   createSchedule(input: CreateScheduleInput, options?: { signal?: AbortSignal }): Promise<ScheduledTask>;
   listSchedules(): ScheduleSummary[];
+  updateSchedule(id: string, input: UpdateScheduleInput, options?: { signal?: AbortSignal }): Promise<ScheduledTask>;
   setScheduleEnabled(id: string, enabled: boolean, options?: { signal?: AbortSignal }): Promise<ScheduledTask>;
   deleteSchedule(id: string, options?: { signal?: AbortSignal }): Promise<void>;
 }

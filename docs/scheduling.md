@@ -1,10 +1,12 @@
 # Scheduled tasks
 
-A schedule asks Thread to initialize a task in a fixed Session immediately, then send ordinary user turns at the configured times. In the coding app, ask the main agent to create one (for example, “Every morning, check the build and summarize any failures”). The agent can use `schedule_task`; it can also manage tasks with `list_schedules`, `pause_schedule`, `resume_schedule`, and `delete_schedule`. For model-free management, use `/schedule` or `/schedule list`, `/schedule pause <id>`, `/schedule resume <id>`, and `/schedule delete <id>`. In the TUI, the list is a picker: select a task and press Enter to open its bound Session. You can also use `/schedule open <id>` directly, including in plain mode. Creation is done by asking the agent or using the runtime API, not a slash command.
+A schedule asks Thread to initialize a task in a fixed Session immediately, then send ordinary user turns at the configured times. In the coding app, ask the main agent to create one (for example, “Every morning, check the build and summarize any failures”). The agent can use `schedule_task`; it can also manage tasks with `list_schedules`, `update_schedule`, `pause_schedule`, `resume_schedule`, and `delete_schedule`. For model-free management, use `/schedule` or `/schedule list`, `/schedule pause <id>`, `/schedule resume <id>`, and `/schedule delete <id>`; there is no CLI edit subcommand. In the TUI, the list is a picker: select a task and press Enter to open its bound Session. You can also use `/schedule open <id>` directly, including in plain mode. Creation is done by asking the agent or using the runtime API, not a slash command.
 
 ## Sessions and instructions
 
-By default, `schedule_task` uses `target: "new"`: creation makes **one independent Session**, reused for every wakeup. It does not copy the conversation in which the request was made. Creation queues `initialPrompt` immediately instead of waiting for the first scheduled time. Give it all the background, scope, and instructions for what the agent should do now. The shorter `prompt` is used at the configured times; if `initialPrompt` is omitted, `prompt` runs both immediately and at those times.
+By default, `schedule_task` uses `target: "new"`: creation makes **one independent Session**, reused for every wakeup. It does not copy the conversation in which the request was made. Creation queues `initialPrompt` immediately instead of waiting for the first scheduled time. Give it all the background, scope, ongoing instructions, and what the agent should do now. The Session retains context across wakeups, so `prompt` should be only a brief cue such as “Wake up and continue.” Do not repeat the setup, rules, or checklists in each follow-up. If `initialPrompt` is omitted, `prompt` runs both immediately and at the configured times.
+
+The first message includes the task's full scheduling context. Later messages contain only a short scheduled-wakeup label, the task name, and `prompt`. Task IDs, timestamps, time rules, and permission reminders are not repeated in the message body. Timing and wakeup provenance remain in the task and turn records.
 
 The runtime executes one turn at a time. If an agent creates a task during a turn, initialization waits for that turn to finish, then runs on the scheduler's next scan (normally within one second). Creation does not wait for the initial model response. The message appears in the Session history when execution starts, so the Session can still appear empty while the runtime is busy or has no configured model.
 
@@ -12,12 +14,18 @@ If an action must wait until a future time, make the initial instructions prepar
 
 ```text
 initialPrompt: "You will inspect the build status each morning. Now identify the build service and access requirements, without running the scheduled check. Later, report failing jobs and their evidence; do not change files. Ask for guidance if the build system is unavailable."
-prompt:        "Check the latest build again; report new or remaining failures."
+prompt:        "Time for the build check."
 ```
 
 To continue **this conversation** instead, ask the main agent to schedule with `target: "current"`. That binds the task to the Session making the tool call, including its existing context. An embedded host uses `sessionId` in `createSchedule()` for the same binding; omit it to create the dedicated Session. The binding never changes. Both wakeup texts are normal `user` messages, retain Session context, and use ordinary compaction. The first text is determined by whether a scheduled turn has been admitted, **not** by whether the Session is otherwise empty. Even if that first turn is interrupted, its user message stays in history and the next wakeup uses `prompt`.
 
 A dedicated Session inherits the application's configured model instructions and tools and shares the project workspace; it does **not** inherit the creator's chat history or provide a sandbox. A background wakeup does not switch the coding app's selected Session.
+
+To replace the follow-up cue, the agent can call `update_schedule({ id, prompt })`. The `id` accepts an existing task ID or a unique prefix; `prompt` must be nonempty and at most 32,000 characters. Keep it brief and rely on the bound Session's context instead of repeating the setup.
+
+The update changes only `prompt`: the task ID, bound Session and history, `initialPrompt`, time rule, `nextRunAt`, enabled/paused state, and last run/error remain unchanged. It does not initialize or recreate the task, resume it, or trigger an immediate run. Paused or completed tasks can be updated without reactivation.
+
+Updates are allowed during execution; a wakeup whose message has already been prepared or whose turn has started keeps its old text, while subsequent wakeups use the new cue.
 
 You can open the bound Session while the task is running, through `/schedule` or the regular `/session` picker. The TUI shows its history and current text, thinking, tools, and workers. It keeps receiving the running turn's events while you view another Session, so switching back retains the live content already received. Viewing a Session does not interrupt or redirect the running agent; starting another agent turn still waits for the project to become idle.
 
@@ -45,11 +53,13 @@ try {
   const task = await runtime.createSchedule({
     name: "Build check",
     initialPrompt: "Prepare for this project's morning build checks: identify the build service and access requirements, without running a check yet. Later report failures with evidence. Do not change files.",
-    prompt: "Check the latest build and report new or remaining failures.",
+    prompt: "Time for the build check.",
     schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
     // Omit sessionId for one new dedicated Session; pass an existing ID to bind it instead.
   });
   console.log(task.id, task.sessionId);
+  // Replace future follow-up text; the preparation and Session context remain intact.
+  await runtime.updateSchedule(task.id, { prompt: "Wake up and continue." });
   await new Promise<void>((resolve) => process.once("SIGINT", () => resolve()));
 } finally {
   clearInterval(keepAlive);
@@ -57,4 +67,4 @@ try {
 }
 ```
 
-Use `runtime.listSchedules()`, `runtime.setScheduleEnabled(id, false | true)`, and `runtime.deleteSchedule(id)` for management. `runtime.schedulingEnabled` reports availability; `runtime.busy` and `runtime.activeSessionId` report execution state, with the latter naming only the current execution target, not the UI-selected Session.
+Use `runtime.listSchedules()`, `runtime.updateSchedule(id, { prompt }, { signal? })`, `runtime.setScheduleEnabled(id, false | true)`, and `runtime.deleteSchedule(id)` for management. `UpdateScheduleInput` requires `prompt: string`; the optional third argument accepts an `AbortSignal` as `signal`. `runtime.schedulingEnabled` reports availability; `runtime.busy` and `runtime.activeSessionId` report execution state, with the latter naming only the current execution target, not the UI-selected Session.

@@ -19,7 +19,7 @@ import { DreamerScheduler } from "../dreamer/scheduler.js";
 import { ScheduleScheduler } from "../scheduling/scheduler.js";
 import { createScheduleTools } from "../scheduling/tools.js";
 import { formatScheduledPrompt } from "../scheduling/format.js";
-import type { CreateScheduleInput, ScheduledTask, ScheduledWakeup, ScheduleSummary } from "../scheduling/model.js";
+import type { CreateScheduleInput, UpdateScheduleInput, ScheduledTask, ScheduledWakeup, ScheduleSummary } from "../scheduling/model.js";
 import { ExtensionEvents, type ExtensionEventType, type ExtensionHandler } from "../extensions/events.js";
 import type { FileHistoryService } from "../file-history/service.js";
 import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memory.js";
@@ -268,6 +268,15 @@ export class ThreadRuntime {
         ...(turn.error ? { error: turn.error.message } : {}),
       } } : {}) });
     }).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** Replace the follow-up cue without rescheduling or changing a prepared/running turn. */
+  updateSchedule(id: string, input: UpdateScheduleInput, options: { signal?: AbortSignal } = {}): Promise<ScheduledTask> {
+    const snapshot = structuredClone(input);
+    return this.updateState((signal) => {
+      this.assertSchedulingEnabled();
+      return this.tree.updateSchedule(id, snapshot, signal);
+    }, options.signal);
   }
 
   /** Pausing affects future wakeups; interrupt() separately stops an admitted turn. */

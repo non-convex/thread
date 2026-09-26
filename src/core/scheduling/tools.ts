@@ -29,13 +29,14 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
       "Schedules wake only while Thread is running; missed intervals are merged, not replayed. " +
       "target=new (default) creates one independent Session reused for all wakeups; it does not inherit this chat. " +
       "Creation queues initialPrompt immediately (defaulting to prompt); it runs as soon as the runtime is idle, after any current turn. " +
-      "For new Sessions, make initialPrompt self-contained with task background and instructions for what to do now; prompt is used at the scheduled times. " +
+      "For new Sessions, put the full background, scope, and ongoing instructions in initialPrompt, including what to do now. " +
+      "Sessions retain context across wakeups: keep prompt to a brief wakeup cue, without repeating background, rules, or checklists. " +
       "If the requested action must wait, use initialPrompt only for preparation, not early execution. " +
       "target=current sends wakeups to this invoking Session. The time rule applies after the initial turn; at still delivers one follow-up at its specified time.",
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 200, description: "Recognizable task name." }),
-      prompt: Type.String({ minLength: 1, maxLength: 32_000, description: "Instructions for scheduled follow-ups; also run immediately after creation if initialPrompt is omitted." }),
-      initialPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Self-contained background and instructions queued immediately at creation, run once when the runtime is idle." })),
+      prompt: Type.String({ minLength: 1, maxLength: 32_000, description: "Brief cue for scheduled wakeups, e.g. 'Wake up and continue.' Rely on Session context; do not repeat the task setup. Also used at creation if initialPrompt is omitted." }),
+      initialPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Complete background, scope, ongoing instructions, and what to do now. Queued immediately at creation; runs once when the runtime is idle." })),
       schedule: scheduleSchema,
       target: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("new")], { description: "Current invoking Session, or one new independent Session (default)." })),
     }),
@@ -82,6 +83,24 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     },
   };
 
+  const update: AgentTool<{ id: string; prompt: string }> = {
+    name: "update_schedule",
+    description: "Replace a task's follow-up prompt without recreating its Session or changing its schedule, next wakeup, or enabled state. " +
+      "Use list_schedules to find the id. Keep prompt to a brief wakeup cue; rely on the Session's retained context. " +
+      "Initial instructions and already-prepared or running turns are unchanged. Updating does not resume a paused or completed task.",
+    parameters: Type.Object({
+      id: Type.String({ minLength: 1, description: "Task id or unique prefix from list_schedules." }),
+      prompt: Type.String({ minLength: 1, maxLength: 32_000, description: "Replacement brief cue for future wakeups, e.g. 'Wake up and continue.' Do not repeat the task setup." }),
+    }),
+    execution: mutation,
+    async execute(args, context) {
+      try {
+        requireMain(context);
+        return ok(JSON.stringify(await host.updateSchedule(args.id, { prompt: args.prompt }, { signal: context.signal }), null, 2));
+      } catch (error) { return fail(error); }
+    },
+  };
+
   const pause: AgentTool<{ id: string }> = {
     name: "pause_schedule",
     description: "Pause future wakeups without deleting the task or stopping an already-running turn. Use list_schedules to find the id.",
@@ -122,5 +141,5 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     },
   };
 
-  return [create, list, pause, resume, remove];
+  return [create, list, update, pause, resume, remove];
 }
