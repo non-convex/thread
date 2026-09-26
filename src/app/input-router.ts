@@ -22,7 +22,26 @@ export interface InputRouteHandlers {
   session(args: string[], options: InputOptions): Promise<InputResult>;
   rewind(args: string[], options: InputOptions): Promise<InputResult>;
   thread(input: string, options: InputOptions): Promise<InputResult>;
+  goal(action: GoalInputAction, options: InputOptions): Promise<InputResult>;
   turn(input: string, options: InputOptions): Promise<InputResult>;
+}
+
+export type GoalInputAction = { type: "status" | "pause" | "resume" | "clear" } | { type: "run"; objective: string };
+
+/** Keep the objective verbatim (including quotes and trailing whitespace). */
+export function parseGoalInput(input: string): GoalInputAction | undefined {
+  const start = input.trimStart();
+  if (!/^\/goal(?:\s|$)/.test(start)) return undefined;
+  const rest = start.slice(5).replace(/^\s/, "");
+  const command = rest.trim();
+  if (!command || command === "status") return { type: "status" };
+  if (command === "pause" || command === "resume" || command === "clear") return { type: command };
+  return { type: "run", objective: rest };
+}
+
+export function isGoalControlInput(input: string): boolean {
+  const action = parseGoalInput(input);
+  return action?.type === "status" || action?.type === "pause" || action?.type === "clear";
 }
 
 function slashCommandName(trimmed: string): string | undefined {
@@ -47,6 +66,7 @@ export class InputRouter {
     if (!command || command === "exit") return this.handlers.turn(input, options);
     const rest = trimmed.slice(command.length + 1).trim();
     switch (command) {
+      case "goal": return this.handlers.goal(parseGoalInput(input)!, options);
       case "new":
       case "compact":
       case "clear":

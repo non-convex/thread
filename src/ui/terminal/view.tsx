@@ -169,7 +169,8 @@ export function ThreadRoot(props: {
       return;
     }
     if (key.name === "escape") {
-      if (props.controller.interrupt()) key.preventDefault();
+      if (screen().type === "document") { key.preventDefault(); props.controller.closeView(); }
+      else if (props.controller.interrupt()) key.preventDefault();
       else if (screen().type !== "session") { key.preventDefault(); props.controller.closeView(); }
       else if (draft.forcePaths()) { key.preventDefault(); draft.setForcePaths(false); }
       return;

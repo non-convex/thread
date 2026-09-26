@@ -64,6 +64,14 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.sessionId = event.sessionId;
       state.liveTipTurnId = event.liveTipTurnId;
       return;
+    case "goal_changed":
+      if (event.sessionId === state.sessionId) {
+        state.goal = event.goal ?? undefined;
+        if ((event.goal?.status === "paused" || event.goal?.status === "blocked") && event.goal.reason) {
+          state.notice = { level: "info", text: `Goal ${event.goal.status}: ${event.goal.reason}` };
+        }
+      }
+      return;
     case "turn_preparing":
       state.busy = true;
       state.activity = "preparing";
@@ -80,9 +88,13 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
       state.modelRetryError = undefined;
       state.notice = undefined;
       const previous = state.liveTurn;
+      const preparing = previous?.id.startsWith("pending:") && previous.input === event.input && previous.sessionId === event.sessionId
+        ? previous : undefined;
+      state.turnStartedAt = preparing?.startedAt ?? Date.now();
+      state.turnFinishedAt = undefined;
       state.liveTurn = { id: event.turnId, input: event.input, sessionId: event.sessionId,
-        blocks: previous?.input === event.input && previous.sessionId === event.sessionId ? previous.blocks : [],
-        startedAt: previous?.startedAt ?? Date.now() };
+        blocks: preparing?.blocks ?? [],
+        startedAt: state.turnStartedAt };
       return;
     }
     case "model_retry_scheduled":

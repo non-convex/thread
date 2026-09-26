@@ -18,6 +18,8 @@ export interface TerminalMeta {
 export interface SlashSuggestion {
   name: string;
   description: string;
+  /** Enter executes by default; false only fills the command for further input. */
+  submit?: boolean;
 }
 
 export interface TerminalKey {

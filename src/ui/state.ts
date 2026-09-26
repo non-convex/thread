@@ -1,4 +1,5 @@
 import type { ModelDescriptor } from "../core/agent/model-catalog.js";
+import type { SessionGoal } from "../core/session-tree/model.js";
 import type { EphemeralView } from "../app/commands/types.js";
 import type { AskRequest } from "../core/runtime/interaction.js";
 import type { AgentTaskSummary } from "../core/agent-task/model.js";
@@ -115,6 +116,7 @@ export interface UiState {
   modelRetryError: string | undefined;
   notice: { level: "info" | "success" | "error"; text: string } | undefined;
   sessionId: string;
+  goal: SessionGoal | undefined;
   liveTipTurnId: string | null;
   turnStartedAt: number | undefined;
   turnFinishedAt: number | undefined;
@@ -130,6 +132,7 @@ export function createUiState(sessionId: string, liveTipTurnId: string | null, t
     modelRetryError: undefined,
     notice: undefined,
     sessionId,
+    goal: undefined,
     liveTipTurnId,
     turnStartedAt: undefined,
     turnFinishedAt: undefined,

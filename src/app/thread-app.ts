@@ -15,11 +15,20 @@ import { routeThreadCommand } from "./commands/registry.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
-import { InputRouter, type InputOptions, type InputResult } from "./input-router.js";
+import { InputRouter, isGoalControlInput, type GoalInputAction, type InputOptions, type InputResult } from "./input-router.js";
+import type { SessionGoal } from "../core/session-tree/model.js";
 import { loadProjectInstructions } from "./project-instructions.js";
 import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
 
 export type { InputResult } from "./input-router.js";
+
+function formatGoalStatus(goal: SessionGoal): string {
+  return [
+    `Goal: ${goal.status} · ${goal.turnsUsed}/${goal.turnLimit} turns`,
+    `Objective: ${goal.objective}`,
+    ...(goal.reason ? [`Reason: ${goal.reason}`] : []),
+  ].join("\n");
+}
 /** Product options for the coding application. Other hosts open ThreadRuntime directly. */
 export interface ThreadAppOptions extends Omit<ThreadRuntimeOptions, "search" | "globalMemoryPath"> {
   search?: ThreadRuntimeOptions["search"] | false;
@@ -36,6 +45,7 @@ export class ThreadApp {
   selectedSessionId: string;
   private readonly inputRouter: InputRouter;
   private inputOperation: { controller: AbortController; done: Promise<InputResult> } | undefined;
+  private readonly goalControls = new Map<Promise<InputResult>, AbortController>();
   private readonly extensionDisposers: ExtensionDisposer[] = [];
   private extensionLoading: Promise<void> = Promise.resolve();
   private appClosing: Promise<void> | undefined;
@@ -95,6 +105,7 @@ export class ThreadApp {
         return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
       },
       thread: (input, options) => this.routeThreadCommand(input, options),
+      goal: (action, options) => this.routeGoal(action, options),
       turn: async (input, options) => {
         if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
         if (options.images?.length && runtime.model.acceptsImages !== true) {
@@ -160,7 +171,18 @@ export class ThreadApp {
 
   handleInput(input: string, options: InputOptions): Promise<InputResult> {
     try { this.assertOpen(); } catch (error) { return Promise.reject(error); }
-    if (this.inputOperation) return Promise.reject(new Error("Wait for the active turn or command to finish"));
+    if (this.inputOperation && !isGoalControlInput(input)) return Promise.reject(new Error("Wait for the active turn or command to finish"));
+    if (this.inputOperation) {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([options.signal, controller.signal]);
+      const done = Promise.resolve().then(() => {
+        signal.throwIfAborted();
+        return this.inputRouter.route(input, { ...options, signal });
+      }).finally(() => { this.goalControls.delete(done); });
+      this.goalControls.set(done, controller);
+      void done.catch(() => undefined);
+      return done;
+    }
     const controller = new AbortController();
     const signal = AbortSignal.any([options.signal, controller.signal]);
     const done = Promise.resolve().then(() => {
@@ -172,6 +194,26 @@ export class ThreadApp {
     this.inputOperation = { controller, done };
     void done.catch(() => undefined);
     return done;
+  }
+
+  private async routeGoal(action: GoalInputAction, options: InputOptions): Promise<InputResult> {
+    const sessionId = this.selectedSessionId;
+    const runtime = this.runtime;
+    if (action.type === "run" || action.type === "resume") {
+      if (!runtime.model) throw new Error("/goal requires a configured model. Use /model to choose one.");
+      return { kind: "turn", result: await runtime.runGoal(sessionId, action.type === "run" ? action.objective : undefined, options) };
+    }
+    if (action.type === "status") {
+      const goal = runtime.readGoal(sessionId);
+      const content = goal ? formatGoalStatus(goal) : "No goal for this Session. Use /goal <objective> to start one.";
+      return { kind: "command", result: viewResult(content, { type: "document", title: "Goal status", content }) };
+    }
+    const previous = runtime.readGoal(sessionId);
+    if (action.type === "pause") await runtime.pauseGoal(sessionId);
+    else await runtime.clearGoal(sessionId);
+    const message = action.type === "clear" ? previous ? "Goal cleared." : "No goal to clear."
+      : !previous ? "No goal to pause." : previous.status === "completed" ? "Goal already completed." : "Goal paused.";
+    return { kind: "command", result: ephemeral(message, Boolean(previous)) };
   }
 
   private async runCommand(name: string, options: InputOptions, execute: () => Promise<CommandResult>): Promise<InputResult> {
@@ -207,6 +249,7 @@ export class ThreadApp {
     const input = this.inputOperation;
     this.appClosing = Promise.resolve().then(async () => {
       await input?.done.catch(() => undefined);
+      await Promise.allSettled([...this.goalControls.keys()]);
       await this.extensionLoading;
       try {
         await this.runtime.close();
@@ -215,6 +258,7 @@ export class ThreadApp {
       }
     });
     input?.controller.abort(new DOMException("Thread application closed", "AbortError"));
+    for (const controller of this.goalControls.values()) controller.abort(new DOMException("Thread application closed", "AbortError"));
     return this.appClosing;
   }
 }

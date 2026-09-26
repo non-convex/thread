@@ -75,7 +75,7 @@ function commandSuggestions(
         start: 0,
         end: cursor,
         cursor: replacement.length,
-        submit: true,
+        submit: command.submit ?? true,
       };
     });
 }

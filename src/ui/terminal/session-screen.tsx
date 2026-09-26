@@ -1,6 +1,6 @@
 import { MouseButton, type KeyBinding, type ScrollBoxRenderable } from "@opentui/core";
 import { createSignal, Show, type Accessor } from "solid-js";
-import { isSlashCommandInput } from "../../app/input-router.js";
+import { isGoalControlInput, isSlashCommandInput } from "../../app/input-router.js";
 import type { AgentTaskCard, LiveTurn, TranscriptItem, UiState } from "../state.js";
 import type { ComposerImage } from "../images.js";
 import type { ComposerSuggestion } from "./completion.js";
@@ -87,7 +87,7 @@ export function SessionScreen(props: {
   };
   const submit = () => {
     const editor = draft.editor;
-    if (!editor || state().busy) return;
+    if (!editor || (state().busy && !isGoalControlInput(editor.plainText))) return;
     if (draft.busy()) {
       props.controller.note("Wait for the clipboard image to finish processing.", "info");
       return;

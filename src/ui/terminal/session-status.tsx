@@ -113,6 +113,13 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
     const running = snapshot.busy && snapshot.turnStartedAt !== undefined && snapshot.turnFinishedAt === undefined;
     return statusLineParts(snapshot, running ? tuiAnimationTime() : Date.now());
   });
+  const goalSummary = () => {
+    const goal = state().goal;
+    if (!goal) return "";
+    const objective = goal.objective.replace(/\s+/g, " ").trim();
+    const short = [...objective].slice(0, 48).join("");
+    return `goal ${goal.status} · ${goal.turnsUsed}/${goal.turnLimit} · ${short}${[...objective].length > 48 ? "…" : ""}`;
+  };
   const changes = createMemo(() => turnChangeCounts(state()));
   const hasChanges = () => changes().additions > 0 || changes().deletions > 0;
   const noticeLevel = () => state().notice?.level;
@@ -135,6 +142,11 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
         </text>
         <Show when={parts().elapsed}>
           <text marginLeft={2} height={1} flexShrink={0} wrapMode="none" fg={theme().faint}>{parts().elapsed}</text>
+        </Show>
+        <Show when={goalSummary()}>
+          <text marginLeft={2} height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme().accentDim}>
+            {goalSummary()}
+          </text>
         </Show>
       </box>
       <Show when={hasChanges()}>

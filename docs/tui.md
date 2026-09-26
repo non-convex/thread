@@ -73,7 +73,7 @@
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
-提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记忙碌并清空本次文字（普通 turn 也清空已发送图片），随后仍可编辑下一条草稿；忙碌或输入无效时拒绝且保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。
+提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记忙碌并清空本次文字（普通 turn 也清空已发送图片），随后仍可编辑下一条草稿；忙碌或输入无效时拒绝且保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。目标运行期间例外允许 `/goal`、`/goal status`、`/goal pause`、`/goal clear`；其他输入仍拒绝插队。
 
 文字可用鼠标拖选，再按 `Ctrl+C` 或 `Alt+C` 复制；输入框通过键盘选中的文字也支持复制。选区存在时，`Ctrl+C` 优先复制，不中断任务、清空输入或退出；`Esc` 先取消选区。没有选区时，`Ctrl+C` 保留原有的中断／清空／退出行为，`Alt+C` 不执行操作。终端若拦截复制快捷键，可用 `Alt+C`。欢迎页和文档页提供复制提示。
 
@@ -183,9 +183,28 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 - 方向键只改 view 里的 selection signal，不经 controller `notify()`，避免整棵 session 树跟着闪。
 - Ask 多选在未开始自由回答时用空格勾选／取消当前选项；已开始自由回答后空格照常输入文本。
 
+## 持续目标
+
+在命令补全中选中 `/goal` 后按回车，只会在输入框填入 `/goal `（末尾带一个空格），光标留在空格后，等待输入目标；此时不执行命令，也不打开状态页。输入目标后再按回车才开始工作。查看状态可直接输入 `/goal status`。
+
+`/goal <objective>` 设置当前 Session 的目标并立即开始工作，保留目标原文和引号。如果一轮结束后目标还没完成，Thread 会继续下一轮，直到主代理报告完成或受阻，或者运行被暂停。每个 Session 同时只有一个目标；设置新的目标会替换旧目标，但运行中不能替换。
+
+| 命令 | 作用 |
+| --- | --- |
+| `/goal` 或 `/goal status` | 查看完整目标、状态、累计轮数和完成／停止原因 |
+| `/goal pause` | 中断当前运行，等待清理结束，并保留目标 |
+| `/goal resume` | 恢复暂停或受阻的目标；没有目标或已经完成时拒绝恢复 |
+| `/goal clear` | 停止运行并清除目标 |
+
+运行时仍可以查看、暂停或清除目标，普通输入不插队。Esc 和 Ctrl+C 沿用原有的选区、浮层优先级；实际触发中断时会停止整个目标运行，不会在下一轮自动重启。重新打开会话时，未完成的运行恢复为暂停，等待明确恢复。
+
+默认每次设置或恢复最多运行 20 轮，不限制每轮模型步骤数，也不设置总运行时间限制。恢复会增加本次轮数预算，但不清零累计消耗。完成／受阻由主模型通过 `update_goal` 提交依据，不代表另一个模型或宿主已经独立验收。持久化、回退和宿主 API 见 [runtime 的持续目标说明](./runtime.md#持续目标)。
+
+plain 模式也会输出目标状态。交互式 plain 在目标运行时继续接受查看、暂停和清除命令；非交互式 plain 则先等待目标运行结束，再读取下一行。
+
 ## 状态与页脚
 
-状态行在输入框上方。忙碌时左侧依次显示共享时钟的 braille spinner、活动文案和耗时；耗时紧跟在活动文案后面，仍属于左侧信息区，右侧只提示 `esc interrupt`。空间不足时先截断活动文案，优先保留计时。文案来自当前 activity（thinking / 工具名 / compacting / workers），结束后留下 `worked <duration>` 或 notice，notice 附带的独立耗时同样跟在文案后面。
+状态行在输入框上方。当前 Session 有目标时在同一行展示简短目标状态、截断的目标文本与累计轮数／上限；切换会话、启动和 rewind 后从持久状态读取，详细内容使用 `/goal status`，不增加面板。忙碌时左侧依次显示共享时钟的 braille spinner、活动文案和耗时；耗时紧跟在活动文案后面，仍属于左侧信息区，右侧只提示 `esc interrupt`。空间不足时先截断活动文案，优先保留计时。文案来自当前 activity（thinking / 工具名 / compacting / workers），结束后留下 `worked <duration>` 或 notice，notice 附带的独立耗时同样跟在文案后面。
 
 模型重试时显示次数、退避等待时间和最近一次失败原因；下一次尝试开始后保留该原因，恢复输出后回到正常状态。原因去除终端转义序列、合并空白并限制为 240 个字符，状态行仍按可用宽度截断。
 
@@ -240,6 +259,6 @@ Transcript 滚动区开启 `viewportCulling` 和 sticky-to-bottom，垂直滚动
 - `src/ui/terminal/tool-presentation.ts` / `tool-output.tsx`：工具参数、结果摘要、预览与展开。
 - `src/ui/terminal/view.tsx`：挂载、键盘、overlay selection。
 - `src/ui/terminal/spinner.tsx`：共享动画时钟。
-- `src/ui/events.ts` / `src/ui/state.ts`：展示事件、live 状态、`tool_finished.content`。
+- `src/ui/events.ts` / `src/ui/state.ts`：展示事件、live 状态、`tool_finished.content` 和目标状态。
 - `src/ui/reducer.ts` / `src/ui/transcript-stream.ts`：状态更新；主 agent 与 Worker 共用文字和工具调用的流式更新规则。
 - `src/core/agent/tool-call-executor.ts`：生成工具执行事件，由 UI 订阅展示。

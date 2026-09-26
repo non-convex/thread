@@ -1,5 +1,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app/thread-app.js";
+import { isGoalControlInput } from "../../app/input-router.js";
 import type { CommandResult, EphemeralView } from "../../app/commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../core/context/usage.js";
 import { gitBranchName } from "./git.js";
@@ -24,6 +25,7 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
   return [
     { name: "clear", description: "Clear the visible transcript" },
     { name: "compact", description: "Compact the current path's live context" },
+    { name: "goal", description: "Enter a goal to work toward", submit: false },
     { name: "agent", description: "Configure agent models and background agents" },
     { name: "model", description: "Inspect or select the main model" },
     { name: "new", description: "Create an empty Session from the project Root" },
@@ -73,6 +75,7 @@ export class ThreadTuiController {
     this.slashSuggestions = primarySlashSuggestions(app.runtime.skills.length > 0, app.runtime.fileCheckpoints);
     const session = app.runtime.readSession(app.selectedSessionId);
     this.state = createUiState(session.session.id, session.liveTipTurnId, []);
+    this.state.goal = app.runtime.readGoal(session.session.id);
     this.meta = {
       rootPath: app.runtime.rootPath,
       modelName: app.runtime.model?.modelId ?? "no model",
@@ -255,15 +258,30 @@ export class ThreadTuiController {
 
   /** Returns acceptance synchronously; the draft may be cleared without waiting for the operation. */
   submit(raw: string, images: readonly ComposerImage[] = []): boolean {
-    const done = this.executeInput(raw, images);
+    const done = (this.active || this.state.busy) && isGoalControlInput(raw)
+      ? this.executeGoalControl(raw, images) : this.executeInput(raw, images);
     if (!done) return false;
     this.viewHistory.length = 0;
     void done;
     return true;
   }
 
+  private executeGoalControl(raw: string, images: readonly ComposerImage[]): Promise<boolean> | undefined {
+    if (images.length || this.stopped || this.disposed) return undefined;
+    // Do not replace the active AbortController or clear its busy/streaming state.
+    return this.app.handleInput(raw, { signal: new AbortController().signal }).then((result) => {
+      if (this.stopped || this.disposed) return false;
+      if (result.kind === "command") this.presentCommand(result.result);
+      this.notify();
+      return true;
+    }, (error) => {
+      if (!this.stopped && !this.disposed) this.note(error instanceof Error ? error.message : String(error), "error");
+      return false;
+    });
+  }
+
   private executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> | undefined {
-    const input = raw.trim();
+    const input = /^\s*\/goal(?:\s|$)/.test(raw) ? raw.trimStart() : raw.trim();
     if ((!input && images.length === 0) || this.active || this.stopped || this.disposed) return undefined;
     if (input === "/exit") {
       this.requestStop();
@@ -331,6 +349,7 @@ export class ThreadTuiController {
 
   private receiveRuntimeEvent(event: RuntimeEvent): void {
     if (this.stopped || this.disposed) return;
+    if (event.type === "goal_changed" && event.agentId !== "main") return;
     if (event.type === "dreamer_status") {
       this.batcher.push(event);
       return;
@@ -365,6 +384,12 @@ export class ThreadTuiController {
         if (notifyKind(event) === "full") kind = "full";
         if (event.type === "turn_finished" || (event.type === "session_changed" && event.reason !== "turn")) {
           this.historyDirty = true;
+          // Owned multi-turn input commits each turn here. External turns still settle below.
+          if (this.active && this.syncTranscript()) {
+            this.state.liveTurn = undefined;
+            this.refreshMeta();
+            kind = "full";
+          }
           settled = true;
         } else if (event.type === "compaction_finished" && event.reason === "manual" && event.ok && event.entryId) {
           this.historyDirty = true;
@@ -460,6 +485,7 @@ export class ThreadTuiController {
     this.state.transcript = transcript;
     this.state.sessionId = session.id;
     this.state.liveTipTurnId = liveTipTurnId;
+    this.state.goal = this.app.runtime.readGoal(session.id);
     this.historyDirty = false;
     return true;
   }
