@@ -6,8 +6,9 @@ export class AgentTaskProjection {
   nextSequence = 1;
 
   apply(record: AgentTaskRecord): void {
-    if (record.format !== AGENT_TASK_FORMAT || record.formatVersion !== 2) throw new Error("Unsupported Agent Task record");
+    if (record.format !== AGENT_TASK_FORMAT || record.formatVersion !== 3) throw new Error("Unsupported Agent Task record");
     if (record.sequence !== this.nextSequence) throw new Error(`Expected Agent Task sequence ${this.nextSequence}, got ${record.sequence}`);
+    const eventType: string = record.type;
     switch (record.type) {
       case "task_created":
         if (this.tasks.has(record.task.id)) throw new Error(`Duplicate Agent Task ${record.task.id}`);
@@ -46,12 +47,6 @@ export class AgentTaskProjection {
         task.updatedAt = record.timestamp;
         break;
       }
-      case "revision_requested": {
-        const task = this.require(record.taskId);
-        task.reviewFeedback.push(record.feedback);
-        task.updatedAt = record.timestamp;
-        break;
-      }
       case "status_changed": {
         const task = this.require(record.taskId);
         task.status = record.status;
@@ -60,6 +55,8 @@ export class AgentTaskProjection {
         task.updatedAt = record.timestamp;
         break;
       }
+      default:
+        throw new Error(`Unsupported Agent Task event: ${eventType}`);
     }
     this.nextSequence++;
   }

@@ -94,7 +94,7 @@ completed ──request_revision──▶ running
 
 `request_revision` 只接受 `completed` 任务。主 agent 的返工反馈原文（去除首尾空白）作为后续 user 消息追加到原来的 Agent Task journal，不另加反馈前缀，也不重新发送初始任务；worker 因而能继续利用此前对话和工具结果，且保留原任务的工具与范围；revision 随新运行递增。
 
-任务属于创建它的主回合。主回合结束或应用关闭时，先向所有所属运行中任务发出取消信号，再等待它们全部收尾；结束后移除临时运行对象，保留任务历史。重启时发现 v2 历史中仍有 `running` 任务，也会把它标记为 `cancelled`。Thread 不让 worker 跨回合存活，也不提供后台 mailbox。
+任务属于创建它的主回合。主回合结束或应用关闭时，先向所有所属运行中任务发出取消信号，再等待它们全部收尾；结束后移除临时运行对象，保留任务历史。重启时发现 v3 历史中仍有 `running` 任务，也会把它标记为 `cancelled`。Thread 不让 worker 跨回合存活，也不提供后台 mailbox。
 
 Worker 失败、达到运行时限或被取消时，不恢复文件；`wait_tasks` 的等待时限只结束本次等待。主 agent 必须检查共享目录中的部分修改；需要撤销内置 `edit`、`write` 修改时使用 `/rewind`；bash 修改不被跟踪。
 
@@ -111,16 +111,16 @@ Worker 默认最多 100 个模型步骤、60 分钟。上下文溢出时以 `Wor
 
 这样可以复用同一套“模型回复—工具执行—结果回传”循环，同时不把 worker 的完整轨迹塞进主 agent 上下文。TUI 在原始委派位置显示精简任务卡片，状态只可能是 `running`、`completed`、`failed` 或 `cancelled`。
 
-初始任务和返工反馈分别保存为 trace 的 user 消息。每轮 `agent_run_started` 使用该轮实际输入的正文和持久 `entryId`，让界面按同一条记录展示实时输入与历史对话。Dreamer 没有持久 user entry，因此事件类型中的 `entryId` 是可选字段。
+初始任务和返工反馈分别保存为 trace 的 user 消息。返工只追加一次真实 user 消息，不另存 `reviewFeedback` 字段或 `revision_requested` 事件；该消息保存后才将任务标记为运行中并启动新一轮。每轮 `agent_run_started` 使用该轮实际输入的正文和持久 `entryId`，让界面按同一条记录展示实时输入与历史对话。卡片完成摘要只取最后一条 user 消息之后的 assistant 文本；当前修订没有文本时显示 `completed`，此前回复仍保留在详情中。Dreamer 没有持久 user entry，因此事件类型中的 `entryId` 是可选字段。
 
-Agent Task 历史使用独立的 `thread-agent-task-v2` JSONL 事件流：
+Agent Task 历史使用独立的 `thread-agent-task-v3`（`formatVersion: 3`）JSONL 事件流：
 
 ```text
 agent-tasks/
   events.jsonl
 ```
 
-旧 v1 记录、ChangeSet 清单和私有工作区数据不会迁移或读取。若现有 `events.jsonl` 不是 v2 格式，启动会快速失败，避免把旧语义误解成共享工作区任务。
+旧 v1/v2 记录、ChangeSet 清单和私有工作区数据不会迁移或读取。若现有 `events.jsonl` 不是 v3 格式或出现未知事件，启动会明确失败，不会默默忽略旧记录，也不会把旧语义误解成共享工作区任务。
 
 Worker 和主 agent 共用文件历史入口。开启文件 checkpoint 时，内置 `edit`、`write` 写入前的记录保存在父 turn 的 Session Tree 中，每个 turn 对同一路径只保存首次编辑前的状态；worker 的 bash 改动不被跟踪。返工、失败和取消均保留已保存的编辑记录。
 
@@ -138,7 +138,7 @@ Worker 和主 agent 共用文件历史入口。开启文件 checkpoint 时，内
 - `src/core/agent-task/tools.ts`：四个主 agent 任务工具。
 - `src/core/agent-task/orchestrator.ts`：范围校验、并发、等待、返工、取消和回合归属。
 - `src/core/agent-task/profile.ts`、`task-runner.ts`：注册候选工具，按任务选择工具后以项目根目录运行 worker。
-- `src/core/agent-task/model.ts` 与 `repository.ts`：v2 状态、事件和持久化。
+- `src/core/agent-task/model.ts` 与 `repository.ts`：v3 状态、事件和持久化。
 - `src/core/agent/step-runner.ts`：主 agent 与 worker 复用的单步执行核心。
 - `src/core/file-history/`：主 agent 和 worker 共用的内置编辑备份、恢复、校验和 GC。
 - `src/ui/`：精简的任务卡片和 trace 展示。

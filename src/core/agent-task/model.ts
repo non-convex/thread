@@ -4,7 +4,7 @@ import type { BuiltinToolName } from "../tools/builtins.js";
 import type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
 export type { FileWriteScope as AgentTaskWriteScope } from "../tools/path-safety.js";
 
-export const AGENT_TASK_FORMAT = "thread-agent-task-v2" as const;
+export const AGENT_TASK_FORMAT = "thread-agent-task-v3" as const;
 export const AGENT_TASK_TOOL_NAMES = new Set([
   "delegate_tasks",
   "wait_tasks",
@@ -53,7 +53,6 @@ export interface AgentTask {
   revision: number;
   runs: AgentTaskRun[];
   trace: AgentTaskTraceEntry[];
-  reviewFeedback: string[];
   error?: string;
   cancelReason?: string;
 }
@@ -83,12 +82,11 @@ export type AgentTaskEvent =
   | { type: "trace_message"; taskId: string; entry: Extract<AgentTaskTraceEntry, { kind: "message" }> }
   | { type: "trace_tool_execution"; taskId: string; entry: Extract<AgentTaskTraceEntry, { kind: "tool_execution" }> }
   | { type: "run_finished"; taskId: string; run: AgentTaskRun }
-  | { type: "revision_requested"; taskId: string; feedback: string }
   | { type: "status_changed"; taskId: string; status: AgentTaskStatus; error?: string; reason?: string };
 
 export type AgentTaskRecord = {
   format: typeof AGENT_TASK_FORMAT;
-  formatVersion: 2;
+  formatVersion: 3;
   sequence: number;
   timestamp: number;
 } & AgentTaskEvent;

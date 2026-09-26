@@ -3,7 +3,7 @@ import type { CommandEvent } from "../app/events.js";
 
 /** Presentation events for TUI commands and execution progress. */
 export type UiEvent = ExecutionEvent | CommandEvent
-  | { type: "agent_task_trace"; taskId: string; revision: number; event: ExecutionEvent };
+  | { type: "agent_task_trace"; taskId: string; event: ExecutionEvent };
 export type UiEventSink = (event: UiEvent) => void;
 
 export type UiEventBatchSink = (events: readonly UiEvent[]) => void;

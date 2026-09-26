@@ -41,7 +41,8 @@ function cardCurrentAction(card: AgentTaskCard): {
   if (card.summary.status === "failed") return { text: firstLine(card.summary.error ?? "") || "failed", tone: "error" };
   if (card.summary.status === "cancelled") return { text: "cancelled", tone: "muted" };
   if (card.summary.status === "completed") {
-    const reply = card.trace.findLast((block) => block.kind === "assistant" && block.content.trim());
+    const lastUser = card.trace.findLastIndex((block) => block.kind === "user");
+    const reply = card.trace.findLast((block, index) => index > lastUser && block.kind === "assistant" && block.content.trim());
     return { text: reply ? firstLine(reply.content) : "completed", tone: "text" };
   }
   const latest = card.trace.findLast((block) => block.tool?.status === "running" || block.tool?.status === "queued")

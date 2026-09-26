@@ -30,7 +30,7 @@ export class AgentTaskRepository {
 
   async append(event: AgentTaskEvent, flush = false): Promise<void> {
     await this.log.append(() => ({
-      format: AGENT_TASK_FORMAT, formatVersion: 2, sequence: this.projection.nextSequence,
+      format: AGENT_TASK_FORMAT, formatVersion: 3, sequence: this.projection.nextSequence,
       timestamp: Date.now(), ...structuredClone(event),
     }), flush);
   }

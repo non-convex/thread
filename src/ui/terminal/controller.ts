@@ -359,7 +359,7 @@ export class ThreadTuiController {
         event.type === "model_attempt_started" || event.type === "model_attempt_finished" ||
         ((event.type === "agent_run_started" || event.type === "agent_run_finished") && !event.taskId)) return;
     if (event.taskId && event.type !== "agent_task_created" && event.type !== "agent_task_updated" && event.type !== "context_updated") {
-      this.batcher.push({ type: "agent_task_trace", taskId: event.taskId, revision: event.revision ?? 0, event });
+      this.batcher.push({ type: "agent_task_trace", taskId: event.taskId, event });
       return;
     }
     this.batcher.push(event.type === "context_updated"
