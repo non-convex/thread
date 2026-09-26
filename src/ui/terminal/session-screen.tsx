@@ -11,7 +11,7 @@ import type { ThreadViewResources } from "./resources.js";
 import { wheelScrollAcceleration } from "./scroll.js";
 import { TranscriptTurnsView, WelcomeView } from "./transcript.js";
 import { ComposerSuggestions, overlayHeight, SessionOverlay } from "./session-overlays.js";
-import { Footer, Status } from "./session-status.js";
+import { Footer, GoalStatus, Status } from "./session-status.js";
 import { bold } from "./theme.js";
 import { Line, Row } from "./widgets.js";
 import { WorkerCardsBar, workerCardsHeight, WorkerTraceOverlay } from "./worker-cards.js";
@@ -70,8 +70,8 @@ export function SessionScreen(props: {
   const theme = props.resources.theme;
   const [scroll, setScroll] = createSignal<ScrollBoxRenderable>();
   const hasAttachments = () => draft.attachments().length > 0 || draft.busy();
-  // Cards, status, bordered composer, optional attachment row and footer share one fixed area.
-  const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments())
+  // Cards, optional goal row, status, bordered composer, attachments and footer share one fixed area.
+  const controlsHeight = () => props.composerHeight() + 4 + Number(hasAttachments()) + Number(Boolean(state().goal))
     + workerCardsHeight(props.workerCards().length, props.terminalWidth());
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
   // Floating panels share the composer's outer edges.
@@ -145,6 +145,9 @@ export function SessionScreen(props: {
       <Show when={props.workerCards().length > 0}>
         <WorkerCardsBar cards={props.workerCards()} resources={props.resources} terminalWidth={props.terminalWidth()}
           openedTaskId={props.workerPanelCard()?.summary.taskId} onOpenTask={props.onOpenWorker} />
+      </Show>
+      <Show when={state().goal}>
+        <GoalStatus state={props.state} resources={props.resources} />
       </Show>
       <box flexShrink={0} width="100%">
         <Status state={props.state} resources={props.resources} workerPanelOpen={Boolean(props.workerPanelCard())} />
