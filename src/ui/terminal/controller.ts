@@ -1,6 +1,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadApp } from "../../app/thread-app.js";
-import { isGoalControlInput } from "../../app/input-router.js";
+import { parseInput, type RoutedInput } from "../../app/input-router.js";
 import type { CommandResult, EphemeralView } from "../../app/commands/types.js";
 import { cacheHitPercent, latestCacheMissReason, scanCacheUsage } from "../../core/context/usage.js";
 import { gitBranchName } from "./git.js";
@@ -59,6 +59,7 @@ export class ThreadTuiController {
   private readonly viewHistory: UiScreen[] = [];
   private readonly batcher: UiEventBatcher;
   private active: AbortController | undefined;
+  private readonly inputControllers = new Set<AbortController>();
   private historyDirty = true;
   private stopped = false;
   private lastCtrlC = 0;
@@ -126,7 +127,7 @@ export class ThreadTuiController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.active?.abort(new DOMException("Aborted", "AbortError"));
+    for (const controller of this.inputControllers) controller.abort(new DOMException("Aborted", "AbortError"));
     this.detachRuntime();
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
@@ -140,7 +141,7 @@ export class ThreadTuiController {
     this.stopped = true;
     this.cancelIdleExitGesture();
     this.detachRuntime();
-    this.active?.abort(new DOMException("Aborted", "AbortError"));
+    for (const controller of this.inputControllers) controller.abort(new DOMException("Aborted", "AbortError"));
     this.resolveDone?.();
     this.notify();
   }
@@ -258,31 +259,19 @@ export class ThreadTuiController {
 
   /** Returns acceptance synchronously; the draft may be cleared without waiting for the operation. */
   submit(raw: string, images: readonly ComposerImage[] = []): boolean {
-    const done = (this.active || this.state.busy) && isGoalControlInput(raw)
-      ? this.executeGoalControl(raw, images) : this.executeInput(raw, images);
+    const done = this.executeInput(raw, images);
     if (!done) return false;
     this.viewHistory.length = 0;
     void done;
     return true;
   }
 
-  private executeGoalControl(raw: string, images: readonly ComposerImage[]): Promise<boolean> | undefined {
-    if (images.length || this.stopped || this.disposed) return undefined;
-    // Do not replace the active AbortController or clear its busy/streaming state.
-    return this.app.handleInput(raw, { signal: new AbortController().signal }).then((result) => {
-      if (this.stopped || this.disposed) return false;
-      if (result.kind === "command") this.presentCommand(result.result);
-      this.notify();
-      return true;
-    }, (error) => {
-      if (!this.stopped && !this.disposed) this.note(error instanceof Error ? error.message : String(error), "error");
-      return false;
-    });
-  }
-
   private executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> | undefined {
     const input = /^\s*\/goal(?:\s|$)/.test(raw) ? raw.trimStart() : raw.trim();
-    if ((!input && images.length === 0) || this.active || this.stopped || this.disposed) return undefined;
+    if ((!input && images.length === 0) || this.stopped || this.disposed) return undefined;
+    const route = parseInput(input);
+    const foreground = !this.active && !this.state.busy;
+    if (!this.app.canHandleInput(route, !foreground) || (!foreground && images.length > 0)) return undefined;
     if (input === "/exit") {
       this.requestStop();
       return Promise.resolve(true);
@@ -292,23 +281,26 @@ export class ThreadTuiController {
       this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
       return undefined;
     }
-    const active = new AbortController();
-    this.active = active;
-    // App input is reserved before its router emits any turn/command events (including /thread search).
-    this.state.busy = true;
-    this.state.activity = input.startsWith("/") ? `running ${input.split(/\s/, 1)[0]}` : "preparing";
-    this.state.notice = undefined;
-    this.state.modelRetryError = undefined;
-    this.state.turnStartedAt = undefined;
-    this.state.turnFinishedAt = undefined;
-    this.notify("live");
-    return this.finishInput(input, imageBlocks, active);
+    const controller = new AbortController();
+    this.inputControllers.add(controller);
+    if (foreground) {
+      this.active = controller;
+      // Reserve UI input before the router emits turn/command events.
+      this.state.busy = true;
+      this.state.activity = input.startsWith("/") ? `running ${input.split(/\s/, 1)[0]}` : "preparing";
+      this.state.notice = undefined;
+      this.state.modelRetryError = undefined;
+      this.state.turnStartedAt = undefined;
+      this.state.turnFinishedAt = undefined;
+      this.notify("live");
+    }
+    return this.finishInput(route, imageBlocks, controller, foreground);
   }
 
-  private async finishInput(input: string, imageBlocks: ReturnType<typeof composerImageContent>[], active: AbortController): Promise<boolean> {
+  private async finishInput(route: RoutedInput, imageBlocks: ReturnType<typeof composerImageContent>[], controller: AbortController, foreground: boolean): Promise<boolean> {
     try {
-      const result = await this.app.handleInput(input, {
-        signal: active.signal,
+      const result = await this.app.handleInput(route, {
+        signal: controller.signal,
         onCommandEvent: (event) => {
           if (!this.stopped && !this.disposed && (event.type === "command_started" || event.type === "command_finished")) {
             this.batcher.push(event);
@@ -318,30 +310,36 @@ export class ThreadTuiController {
       });
       if (this.stopped || this.disposed) return true;
       this.batcher.flush();
-      if (result.kind === "turn") this.historyDirty = true;
-      const historyChanged = this.syncTranscript();
+      // turn_finished already handed committed turns to the transcript, including each goal turn.
+      if (foreground && result.kind === "turn" && this.state.liveTipTurnId !== result.result.turn.id) this.historyDirty = true;
+      const historyChanged = foreground && this.syncTranscript();
       if (historyChanged) this.state.liveTurn = undefined;
-      if (historyChanged || (result.kind === "command" && result.result.changedState)) this.refreshMeta();
+      if (historyChanged || (foreground && result.kind === "command" && result.result.changedState)) this.refreshMeta();
       if (result.kind === "command") this.presentCommand(result.result);
       return true;
     } catch (error) {
       if (this.stopped || this.disposed) return false;
       this.batcher.flush();
-      // A failed turn may have persisted messages without reaching turn_finished.
-      this.historyDirty ||= this.state.liveTurn !== undefined;
-      this.syncTranscript();
-      this.state.liveTurn = undefined;
+      // A failed input may have persisted messages without reaching turn_finished.
+      if (foreground) {
+        this.historyDirty = true;
+        this.syncTranscript();
+        this.state.liveTurn = undefined;
+      }
       this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
       return false;
     } finally {
-      if (this.active === active) this.active = undefined;
+      this.inputControllers.delete(controller);
+      if (this.active === controller) this.active = undefined;
       if (!this.stopped && !this.disposed) {
-        if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
-          this.state.turnFinishedAt = Date.now();
+        if (foreground) {
+          if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
+            this.state.turnFinishedAt = Date.now();
+          }
+          this.state.busy = false;
+          this.state.activity = undefined;
+          this.refreshGit();
         }
-        this.state.busy = false;
-        this.state.activity = undefined;
-        this.refreshGit();
         this.notify();
       }
     }

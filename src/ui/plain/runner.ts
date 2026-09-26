@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { ThreadApp } from "../../app/thread-app.js";
-import { parseGoalInput } from "../../app/input-router.js";
+import { parseInput, type RoutedInput } from "../../app/input-router.js";
 import type { SessionGoal } from "../../core/session-tree/model.js";
 
 function goalLine(goal: SessionGoal | undefined): string {
@@ -31,8 +31,12 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
   }
   const interactive = Boolean(input.isTTY && output.isTTY);
   const readline = createInterface({ input, output, terminal: interactive });
+  // Keep piped lines queued while an earlier operation is running.
+  const lines = interactive ? undefined : readline[Symbol.asyncIterator]();
   let active: AbortController | undefined;
-  let runningGoal: Promise<void> | undefined;
+  const pending = new Set<Promise<void>>();
+  const controllers = new Set<AbortController>();
+  let explicitExit = false;
   const onSigint = () => active?.abort(new Error("Interrupted by user"));
   process.on("SIGINT", onSigint);
   let streamed = false;
@@ -70,10 +74,10 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
       : undefined;
     if (label) output.write(`\n[${label}] ${event.summary.taskId} ${event.summary.title}\n`);
   });
-  const handleLine = async (line: string, controller: AbortController): Promise<void> => {
+  const handleLine = async (route: RoutedInput, controller: AbortController): Promise<void> => {
     const previousSessionId = app.selectedSessionId;
     try {
-      const result = await app.handleInput(line, { signal: controller.signal });
+      const result = await app.handleInput(route, { signal: controller.signal });
       if (streamed) { output.write("\n"); streamed = false; }
       if (result.kind === "command" && result.result.presentation === "clear") {
         output.write(output.isTTY ? "\x1b[2J\x1b[H" : "[display cleared]\n");
@@ -96,38 +100,39 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
     while (true) {
       let line: string;
       try {
-        line = await readline.question(`\n${app.selectedSessionId.slice(0, 12)}> `);
+        if (lines) {
+          const next = await lines.next();
+          if (next.done) break;
+          line = next.value;
+        } else {
+          line = await readline.question(`\n${app.selectedSessionId.slice(0, 12)}> `);
+        }
       } catch {
         break;
       }
-      if (line.trim() === "/exit") break;
+      if (line.trim() === "/exit") { explicitExit = true; break; }
       if (!line.trim()) continue;
-      const action = parseGoalInput(line);
-      if (action?.type === "run" || action?.type === "resume") {
-        if (runningGoal) { output.write("[error] Wait for the active goal to finish.\n"); continue; }
-        const controller = new AbortController();
-        active = controller;
-        const pending = handleLine(line, controller).finally(() => {
-          if (runningGoal === pending) runningGoal = undefined;
-          if (active === controller) active = undefined;
-        });
-        runningGoal = pending;
-        // Piped input must finish this goal before consuming another line (or EOF).
-        if (!interactive) await pending;
-        continue;
-      }
-      if (runningGoal && action?.type !== "status" && action?.type !== "pause" && action?.type !== "clear") {
-        output.write("[error] Wait for the active goal to finish.\n");
+      const route = parseInput(line);
+      if (!app.canHandleInput(route)) {
+        output.write("[error] Wait for the active turn or command to finish.\n");
         continue;
       }
       const controller = new AbortController();
-      if (!runningGoal) active = controller;
-      await handleLine(line, controller);
-      if (active === controller) active = undefined;
+      controllers.add(controller);
+      if (!active) active = controller;
+      const operation = handleLine(route, controller).finally(() => {
+        controllers.delete(controller);
+        pending.delete(operation);
+        if (active === controller) active = undefined;
+      });
+      pending.add(operation);
+      // Interactive input stays available for control commands during any work input.
+      // Piped input consumes lines in order and waits for the final operation at EOF.
+      if (!interactive || route.category === "control") await operation;
     }
   } finally {
-    active?.abort(new Error("Plain CLI closed"));
-    await runningGoal;
+    if (explicitExit) for (const controller of controllers) controller.abort(new Error("Plain CLI closed"));
+    await Promise.allSettled([...pending]);
     detachRuntime();
     process.off("SIGINT", onSigint);
     readline.close();

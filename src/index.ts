@@ -37,7 +37,7 @@ export type {
   AgentPickerItem,
   HistoryViewItem,
 } from "./app/commands/types.js";
-export type { InputOptions } from "./app/input-router.js";
+export { parseInput, type InputOptions, type RoutedInput } from "./app/input-router.js";
 export type { CommandEvent, CommandEventSink } from "./app/events.js";
 
 export const THREAD_VERSION = "0.1.0";

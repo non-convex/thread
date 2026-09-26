@@ -15,7 +15,7 @@ import { routeThreadCommand } from "./commands/registry.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
-import { InputRouter, isGoalControlInput, type GoalInputAction, type InputOptions, type InputResult } from "./input-router.js";
+import { InputRouter, parseInput, type GoalInputAction, type InputOptions, type InputResult, type RoutedInput } from "./input-router.js";
 import type { SessionGoal } from "../core/session-tree/model.js";
 import { loadProjectInstructions } from "./project-instructions.js";
 import { DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
@@ -44,8 +44,7 @@ export class ThreadApp {
   readonly extensionApi: ExtensionAPI;
   selectedSessionId: string;
   private readonly inputRouter: InputRouter;
-  private inputOperation: { controller: AbortController; done: Promise<InputResult> } | undefined;
-  private readonly goalControls = new Map<Promise<InputResult>, AbortController>();
+  private readonly inputOperations = new Map<Promise<InputResult>, AbortController>();
   private readonly extensionDisposers: ExtensionDisposer[] = [];
   private extensionLoading: Promise<void> = Promise.resolve();
   private appClosing: Promise<void> | undefined;
@@ -169,29 +168,21 @@ export class ThreadApp {
     return session;
   }
 
-  handleInput(input: string, options: InputOptions): Promise<InputResult> {
-    try { this.assertOpen(); } catch (error) { return Promise.reject(error); }
-    if (this.inputOperation && !isGoalControlInput(input)) return Promise.reject(new Error("Wait for the active turn or command to finish"));
-    if (this.inputOperation) {
-      const controller = new AbortController();
-      const signal = AbortSignal.any([options.signal, controller.signal]);
-      const done = Promise.resolve().then(() => {
-        signal.throwIfAborted();
-        return this.inputRouter.route(input, { ...options, signal });
-      }).finally(() => { this.goalControls.delete(done); });
-      this.goalControls.set(done, controller);
-      void done.catch(() => undefined);
-      return done;
-    }
+  canHandleInput(route: RoutedInput, busy = false): boolean {
+    return !this.appClosing && (route.category === "control" || (!busy && this.inputOperations.size === 0));
+  }
+
+  handleInput(input: string | RoutedInput, options: InputOptions): Promise<InputResult> {
+    const route = typeof input === "string" ? parseInput(input) : input;
+    if (this.appClosing) return Promise.reject(new Error("Thread application is closed or closing"));
+    if (!this.canHandleInput(route)) return Promise.reject(new Error("Wait for the active turn or command to finish"));
     const controller = new AbortController();
     const signal = AbortSignal.any([options.signal, controller.signal]);
     const done = Promise.resolve().then(() => {
       signal.throwIfAborted();
-      return this.inputRouter.route(input, { ...options, signal });
-    }).finally(() => {
-      if (this.inputOperation?.controller === controller) this.inputOperation = undefined;
-    });
-    this.inputOperation = { controller, done };
+      return this.inputRouter.route(route, { ...options, signal });
+    }).finally(() => { this.inputOperations.delete(done); });
+    this.inputOperations.set(done, controller);
     void done.catch(() => undefined);
     return done;
   }
@@ -246,10 +237,9 @@ export class ThreadApp {
 
   close(): Promise<void> {
     if (this.appClosing) return this.appClosing;
-    const input = this.inputOperation;
+    const operations = [...this.inputOperations.entries()];
     this.appClosing = Promise.resolve().then(async () => {
-      await input?.done.catch(() => undefined);
-      await Promise.allSettled([...this.goalControls.keys()]);
+      await Promise.allSettled(operations.map(([done]) => done));
       await this.extensionLoading;
       try {
         await this.runtime.close();
@@ -257,8 +247,7 @@ export class ThreadApp {
         await Promise.allSettled(this.extensionDisposers.splice(0).map((dispose) => Promise.resolve().then(dispose)));
       }
     });
-    input?.controller.abort(new DOMException("Thread application closed", "AbortError"));
-    for (const controller of this.goalControls.values()) controller.abort(new DOMException("Thread application closed", "AbortError"));
+    for (const [, controller] of operations) controller.abort(new DOMException("Thread application closed", "AbortError"));
     return this.appClosing;
   }
 }

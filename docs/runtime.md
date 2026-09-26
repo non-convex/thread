@@ -74,6 +74,8 @@ try {
 }
 ```
 
+界面需要在清空草稿前同步判断输入能否提交时，可以先用 `parseInput(text)` 得到不可变的 `RoutedInput`，调用 `app.canHandleInput(route)`，再将同一对象传给 `app.handleInput(route, options)`。工作输入和控制输入由解析器统一分类；`/goal status`、`pause`、`clear` 可以在工作运行期间执行，其余输入仍等待空闲。`handleInput()` 同时接受原始字符串，不需要额外的执行入口。关闭应用会取消并等待所有已接受的输入操作。
+
 `ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回不可用结果；TUI 为同一个工具绑定问题面板。ask 工具的 `details` 使用 `AskResultDetails`，以 `answered`、`dismissed`、`unavailable` 或 `invalid` 标明结果；只有 `answered` 携带用户答案。历史分析读取这个结构化结果，不依赖展示文案。
 
 coding 应用始终在主 agent 的系统提示词中加入启动时确定的项目工作目录，使用 `rootPath` 解析后的绝对路径。CLI 默认使用启动目录；指定 `--root` 时使用指定的项目目录。这段信息独立于 `AGENTS.md`，文件缺失、内容为空或设置 `projectInstructions: false` 都不会关闭注入。直接使用 `ThreadRuntime.open()` 的宿主仍自行决定是否提供这段信息。

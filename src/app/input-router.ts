@@ -26,10 +26,10 @@ export interface InputRouteHandlers {
   turn(input: string, options: InputOptions): Promise<InputResult>;
 }
 
-export type GoalInputAction = { type: "status" | "pause" | "resume" | "clear" } | { type: "run"; objective: string };
+export type GoalInputAction = { readonly type: "status" | "pause" | "resume" | "clear" } | { readonly type: "run"; readonly objective: string };
 
 /** Keep the objective verbatim (including quotes and trailing whitespace). */
-export function parseGoalInput(input: string): GoalInputAction | undefined {
+function parseGoalInput(input: string): GoalInputAction | undefined {
   const start = input.trimStart();
   if (!/^\/goal(?:\s|$)/.test(start)) return undefined;
   const rest = start.slice(5).replace(/^\s/, "");
@@ -39,9 +39,12 @@ export function parseGoalInput(input: string): GoalInputAction | undefined {
   return { type: "run", objective: rest };
 }
 
-export function isGoalControlInput(input: string): boolean {
-  const action = parseGoalInput(input);
-  return action?.type === "status" || action?.type === "pause" || action?.type === "clear";
+export interface RoutedInput {
+  readonly input: string;
+  readonly command: string | undefined;
+  readonly rest: string;
+  readonly goal: GoalInputAction | undefined;
+  readonly category: "work" | "control";
 }
 
 function slashCommandName(trimmed: string): string | undefined {
@@ -56,17 +59,25 @@ export function isSlashCommandInput(input: string): boolean {
   return slashCommandName(input.trim()) !== undefined;
 }
 
-/** Parses each slash command once; paths such as /tmp/file remain ordinary input. */
+/** Parse once without a handler; paths such as /tmp/file remain ordinary input. */
+export function parseInput(input: string): RoutedInput {
+  const trimmed = input.trim();
+  const command = slashCommandName(trimmed);
+  const goal = command === "goal" ? parseGoalInput(input) : undefined;
+  if (goal) Object.freeze(goal);
+  const category: RoutedInput["category"] = goal && (goal.type === "status" || goal.type === "pause" || goal.type === "clear")
+    ? "control" : "work";
+  return Object.freeze({ input, command, rest: command ? trimmed.slice(command.length + 1).trim() : "", goal, category });
+}
+
 export class InputRouter {
   constructor(private readonly handlers: InputRouteHandlers) {}
 
-  route(input: string, options: InputOptions): Promise<InputResult> {
-    const trimmed = input.trim();
-    const command = slashCommandName(trimmed);
+  route(route: RoutedInput, options: InputOptions): Promise<InputResult> {
+    const { input, command, rest, goal } = route;
     if (!command || command === "exit") return this.handlers.turn(input, options);
-    const rest = trimmed.slice(command.length + 1).trim();
     switch (command) {
-      case "goal": return this.handlers.goal(parseGoalInput(input)!, options);
+      case "goal": return this.handlers.goal(goal!, options);
       case "new":
       case "compact":
       case "clear":
@@ -83,7 +94,7 @@ export class InputRouter {
         return this.handlers.skill(match?.[1], match?.[2]?.trim() || undefined, options);
       }
       case "thread":
-        return this.handlers.thread(trimmed, options);
+        return this.handlers.thread(input.trim(), options);
       default:
         throw new Error(`Unknown command: /${command}`);
     }
