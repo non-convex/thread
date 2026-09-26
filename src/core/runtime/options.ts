@@ -60,6 +60,14 @@ export interface ThreadRuntimeOptions {
     thinkingLevel?: ModelThinkingLevel;
     /** Model steps per review batch. Default: 20. */
     maxSteps?: number;
+    /** Preferred number of pending turns before review. Default: 10. */
+    idleTurns?: number;
+    /** Foreground-turn quiet period before review. Default: 10 minutes. */
+    idleMs?: number;
+    /** Smaller queues become eligible after this age, still subject to idleMs. Default: 30 minutes. */
+    maxWaitMs?: number;
+    /** Shared deadline for one background run, across all its batches. Default: 5 minutes. */
+    maxRuntimeMs?: number;
   };
   agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
   state?: ThreadState;

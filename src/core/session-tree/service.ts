@@ -1,4 +1,5 @@
 import type { ImageContent, Message, UserMessage } from "@earendil-works/pi-ai";
+import { emptyDreamerCheckpoint, type DreamerAdmission, type DreamerCheckpoint } from "../dreamer/state.js";
 import { createId, stableId } from "../utils/id.js";
 import { isEmptyUserMessageContent, userContentDisplay, userContentFrom, userContentIsEmpty } from "./user-content.js";
 import {
@@ -47,6 +48,7 @@ export interface PlannedTurn {
   status: "running";
   startedAt: number;
   fileCheckpoints: boolean;
+  dreamerReview?: DreamerAdmission;
 }
 
 /** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
@@ -130,7 +132,8 @@ export class SessionTreeService {
     return matches[0]!;
   }
 
-  planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean): PlannedTurn {
+  planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean,
+    dreamerReview?: DreamerAdmission): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
     this.requireIdle();
     const session = this.resolveSession(sessionId);
@@ -144,6 +147,7 @@ export class SessionTreeService {
       status: "running",
       startedAt: Date.now(),
       fileCheckpoints,
+      ...(dreamerReview !== undefined ? { dreamerReview: structuredClone(dreamerReview) } : {}),
     };
   }
 
@@ -165,6 +169,7 @@ export class SessionTreeService {
       status: "running",
       startedAt: planned.startedAt,
       fileCheckpoints: planned.fileCheckpoints,
+      ...(planned.dreamerReview !== undefined ? { dreamerReview: structuredClone(planned.dreamerReview) } : {}),
     };
     const userEntry: MessageEntry = {
       id: turn.userEntryId,
@@ -279,6 +284,28 @@ export class SessionTreeService {
       turnId,
       reason: "rewind",
     }), true);
+  }
+
+  pendingDreamerTurns(memoryPath: string): Turn[] {
+    return [...this.projection.turns.values()]
+      .filter((turn) => turn.status !== "running" && turn.dreamerReview?.memoryPath === memoryPath &&
+        turn.dreamerReviewedAt === undefined)
+      .map((turn) => structuredClone(turn));
+  }
+
+  dreamerCheckpoint(memoryPath: string): DreamerCheckpoint {
+    return structuredClone(this.projection.dreamerCheckpoints.get(memoryPath) ?? emptyDreamerCheckpoint());
+  }
+
+  async checkpointDreamer(memoryPath: string, turnIds: readonly string[], checkpoint: DreamerCheckpoint, signal?: AbortSignal): Promise<void> {
+    const ids = [...turnIds];
+    const snapshot = structuredClone(checkpoint);
+    await this.repository.append(() => {
+      // Once admitted, the record finishes durably even if cancellation arrives during I/O.
+      signal?.throwIfAborted();
+      this.projection.validateDreamerReview(memoryPath, ids, snapshot);
+      return { type: "dreamer_reviewed", memoryPath, turnIds: ids, checkpoint: snapshot };
+    }, true);
   }
 
   livePath(sessionId: string): Turn[] {

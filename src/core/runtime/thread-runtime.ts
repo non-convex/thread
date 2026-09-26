@@ -103,13 +103,25 @@ export class ThreadRuntime {
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
       readTurn: (turnId) => {
-        const entries = this.tree.projection.entriesByTurn.get(turnId) ?? [];
+        const entries = this.tree.projection.entriesByTurn.get(turnId);
+        if (!entries) throw new Error(`Dreamer cannot read missing turn: ${turnId}`);
         return (function* () {
           for (const entry of entries) if (entry.type === "message") yield entry.message;
         })();
       },
+      pendingTurns: () => this.tree.pendingDreamerTurns(this.memory!.filePath).map((turn) => ({
+        id: turn.id, sessionId: turn.sessionId, status: turn.status, startedAt: turn.startedAt,
+        ...(turn.finishedAt !== undefined ? { finishedAt: turn.finishedAt } : {}),
+        memoryRevision: turn.dreamerReview!.memoryRevision,
+      })),
+      checkpoint: () => this.tree.dreamerCheckpoint(this.memory!.filePath),
+      saveCheckpoint: (turnIds, checkpoint, signal) => this.tree.checkpointDreamer(this.memory!.filePath, turnIds, checkpoint, signal),
       protectedWritePaths: this.protectedWritePaths,
       ...(options.dreamer?.maxSteps !== undefined ? { maxSteps: options.dreamer.maxSteps } : {}),
+      ...(options.dreamer?.idleTurns !== undefined ? { idleTurns: options.dreamer.idleTurns } : {}),
+      ...(options.dreamer?.idleMs !== undefined ? { idleMs: options.dreamer.idleMs } : {}),
+      ...(options.dreamer?.maxWaitMs !== undefined ? { maxWaitMs: options.dreamer.maxWaitMs } : {}),
+      ...(options.dreamer?.maxRuntimeMs !== undefined ? { maxRuntimeMs: options.dreamer.maxRuntimeMs } : {}),
       onEvent: runtimeEventSink({ executionId: "dreamer", agentId: "dreamer", sessionId: null, turnId: null },
         (event) => this.publish(event), () => this.captureModelContent(), () => this.promptCacheDiagnostics()),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
@@ -134,6 +146,7 @@ export class ThreadRuntime {
     try {
       const runtime = new ThreadRuntime(options, resources);
       await runtime.tasks.initialize();
+      runtime.dreamer?.start();
       return runtime;
     } catch (error) {
       await Promise.allSettled([resources.recall?.close(), resources.taskRepository.close(), resources.repository.close()]);
@@ -153,6 +166,7 @@ export class ThreadRuntime {
   get workerEnabled() { return this.tasks.enabled; }
   get dreamerEnabled() { return this.dreamer?.enabled ?? false; }
   get dreamerLastError() { return this.dreamer?.lastError; }
+  get dreamerStatus() { return this.dreamer?.status; }
   get workerModel() { return this.secondaryModel(WORKER_PROFILE_ID); }
   get dreamerModel() { return this.secondaryModel(DREAMER_PROFILE_ID); }
   get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
@@ -225,10 +239,11 @@ export class ThreadRuntime {
       if (!this.model) throw new Error("No model configured");
       if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
       const runner = this.createAgentRunner(session.id);
-      const result = await runner.run(input, this.runOptions(session.id, signal, options));
-      this.dreamer?.recordTurn(result.turn.id);
-      return result;
-    });
+      const dreamerReview = await this.dreamer?.admission(signal);
+      signal.throwIfAborted();
+      return runner.run(input, { ...this.runOptions(session.id, signal, options),
+        ...(dreamerReview ? { dreamerReview } : {}) });
+    }, true);
   }
 
   invokeSkill(sessionId: string, name: string, extra?: string, options: PromptOptions = {}) {
@@ -430,7 +445,8 @@ export class ThreadRuntime {
     this.tree.requireIdle();
   }
 
-  private operate<T>(sessionId: string | undefined, signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T> | T): Promise<T> {
+  private operate<T>(sessionId: string | undefined, signal: AbortSignal | undefined,
+    operation: (signal: AbortSignal) => Promise<T> | T, resetsDreamerIdle = false): Promise<T> {
     let resolvedSessionId: string | undefined;
     try {
       this.assertIdle();
@@ -441,10 +457,14 @@ export class ThreadRuntime {
     const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const active: ActiveOperation = { ...(resolvedSessionId ? { sessionId: resolvedSessionId } : {}), controller, signal: combined, done: Promise.resolve() };
     this.active = active;
-    this.dreamer?.foregroundStarting();
-    const done = Promise.resolve().then(() => { combined.throwIfAborted(); return operation(combined); }).finally(() => {
+    const backgroundSettled = this.dreamer?.foregroundStarting(resetsDreamerIdle);
+    const done = Promise.resolve().then(async () => {
+      await backgroundSettled;
+      combined.throwIfAborted();
+      return operation(combined);
+    }).finally(() => {
       if (this.active === active) this.active = undefined;
-      if (!this.closing) this.dreamer?.foregroundFinished();
+      if (!this.closing) this.dreamer?.foregroundFinished(resetsDreamerIdle);
     });
     active.done = done;
     void done.catch(() => undefined);

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { DreamerCheckpoint } from "../dreamer/state.js";
 import type {
   ProjectSession,
   FileRewindIntent,
@@ -27,6 +28,7 @@ export class SessionTreeProjection {
   activeSessionId: string | undefined;
   readonly sessions = new Map<string, ProjectSession>();
   readonly turns = new Map<string, Turn>();
+  readonly dreamerCheckpoints = new Map<string, DreamerCheckpoint>();
   readonly runningTurnsBySession = new Map<string, Turn>();
   readonly entries = new Map<string, SessionEntry>();
   readonly entriesByTurn = new Map<string, SessionEntry[]>();
@@ -88,6 +90,14 @@ export class SessionTreeProjection {
         if (turn.status !== "running") throw new SessionTreeCorruptionError(`Turn ${turn.id} did not start running`);
         if (turn.fileCheckpoints !== undefined && typeof turn.fileCheckpoints !== "boolean") {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} has an invalid file checkpoint setting`);
+        }
+        if (turn.dreamerReview !== undefined &&
+            (!turn.dreamerReview || typeof turn.dreamerReview.memoryPath !== "string" || !turn.dreamerReview.memoryPath ||
+              typeof turn.dreamerReview.memoryRevision !== "string")) {
+          throw new SessionTreeCorruptionError(`Turn ${turn.id} has invalid Dreamer admission`);
+        }
+        if (turn.dreamerReviewedAt !== undefined) {
+          throw new SessionTreeCorruptionError(`Turn ${turn.id} was reviewed before it started`);
         }
         if (this.runningTurnsBySession.size > 0) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
@@ -186,6 +196,14 @@ export class SessionTreeProjection {
         if (event.error) turn.error = structuredClone(event.error);
         return;
       }
+      case "dreamer_reviewed": {
+        this.validateDreamerReview(event.memoryPath, event.turnIds, event.checkpoint);
+        for (const turnId of event.turnIds) {
+          this.turns.get(turnId)!.dreamerReviewedAt = event.checkpoint.lastReviewedAt!;
+        }
+        this.dreamerCheckpoints.set(event.memoryPath, structuredClone(event.checkpoint));
+        return;
+      }
       case "file_rewind_started": {
         const rewind = event.rewind;
         const source = this.turns.get(rewind.fromTurnId);
@@ -234,6 +252,69 @@ export class SessionTreeProjection {
       }
       default:
         throw new SessionTreeCorruptionError(`Unknown Session Tree event: ${String((event as { type?: unknown }).type)}`);
+    }
+  }
+
+  /** Also called inside a serialized append factory, before an invalid review can enter the log. */
+  validateDreamerReview(memoryPath: string, turnIds: readonly string[], checkpoint: DreamerCheckpoint): void {
+    if (this.pendingFileRewind) {
+      throw new SessionTreeCorruptionError("Session Tree changed before its pending file rewind finished");
+    }
+    if (typeof memoryPath !== "string" || !memoryPath || !Array.isArray(turnIds) ||
+        !checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+      throw new SessionTreeCorruptionError("Invalid Dreamer review record");
+    }
+    const previous = this.dreamerCheckpoints.get(memoryPath);
+    if (typeof checkpoint.evidence !== "string" || checkpoint.evidence.length > 2_000 ||
+        !Array.isArray(checkpoint.sourceRevisions) ||
+        !checkpoint.sourceRevisions.every((revision) => typeof revision === "string") ||
+        !Number.isSafeInteger(checkpoint.consecutiveFailures) || checkpoint.consecutiveFailures < 0 ||
+        (checkpoint.missingMemorySince !== undefined &&
+          (!Number.isFinite(checkpoint.missingMemorySince) || checkpoint.missingMemorySince < 0)) ||
+        !Number.isSafeInteger(checkpoint.reviewedTurns) || checkpoint.reviewedTurns < 0 ||
+        checkpoint.reviewedTurns !== (previous?.reviewedTurns ?? 0) + turnIds.length ||
+        (checkpoint.memoryRevision !== undefined && typeof checkpoint.memoryRevision !== "string") ||
+        (checkpoint.lastReviewedAt !== undefined &&
+          (typeof checkpoint.lastReviewedAt !== "number" || !Number.isFinite(checkpoint.lastReviewedAt) || checkpoint.lastReviewedAt < 0)) ||
+        (checkpoint.inputBudget !== undefined &&
+          (!Number.isSafeInteger(checkpoint.inputBudget) || checkpoint.inputBudget < 0)) ||
+        (checkpoint.modelKey !== undefined && typeof checkpoint.modelKey !== "string") ||
+        (checkpoint.retryAfter !== undefined &&
+          (typeof checkpoint.retryAfter !== "number" || !Number.isFinite(checkpoint.retryAfter) || checkpoint.retryAfter < 0)) ||
+        (checkpoint.lastResult !== undefined && !["updated", "unchanged", "observed", "read_only"].includes(checkpoint.lastResult)) ||
+        (checkpoint.lastError !== undefined && typeof checkpoint.lastError !== "string") ||
+        (checkpoint.blocked !== undefined && typeof checkpoint.blocked !== "boolean") ||
+        (turnIds.length > 0 && checkpoint.lastReviewedAt === undefined)) {
+      throw new SessionTreeCorruptionError("Invalid Dreamer checkpoint");
+    }
+    const completed = new Set<string>();
+    for (const turnId of turnIds) {
+      const turn = this.turns.get(turnId);
+      if (typeof turnId !== "string" || completed.has(turnId) || !turn || turn.status === "running" ||
+          turn.dreamerReview?.memoryPath !== memoryPath || turn.dreamerReviewedAt !== undefined) {
+        throw new SessionTreeCorruptionError(`Invalid Dreamer reviewed turn: ${String(turnId)}`);
+      }
+      completed.add(turnId);
+    }
+    const pending = [...this.turns.values()].filter((turn) =>
+      turn.status !== "running" && turn.dreamerReview?.memoryPath === memoryPath &&
+      turn.dreamerReviewedAt === undefined);
+    if (turnIds.length > pending.length || turnIds.some((turnId, index) => turnId !== pending[index]?.id)) {
+      throw new SessionTreeCorruptionError("Dreamer reviewed turns must be a pending prefix");
+    }
+    if (checkpoint.cursor !== undefined) {
+      const cursor = checkpoint.cursor;
+      if (!cursor || typeof cursor.turnId !== "string" ||
+          !Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
+          cursor.turnId !== pending[turnIds.length]?.id) {
+        throw new SessionTreeCorruptionError("Invalid Dreamer review cursor");
+      }
+    }
+    const priorCursor = previous?.cursor;
+    if (priorCursor && !completed.has(priorCursor.turnId) &&
+        (!checkpoint.cursor || checkpoint.cursor.turnId !== priorCursor.turnId ||
+          checkpoint.cursor.offset < priorCursor.offset)) {
+      throw new SessionTreeCorruptionError("Dreamer review cursor cannot move backwards or skip its turn");
     }
   }
 

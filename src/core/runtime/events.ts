@@ -2,6 +2,7 @@ import type { Context, AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { ExecutionIdentity } from "./policy.js";
 import type { AgentTaskSummary } from "../agent-task/model.js";
 import type { PromptCacheDiagnostic, PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
+import type { DreamerStatus } from "../dreamer/scheduler.js";
 
 export type ModelEvent = {
   callId: string;
@@ -34,6 +35,7 @@ type AgentEvent = ModelEvent | ToolEvent
 
 type ExecutionPayload = (
   | AgentEvent
+  | { type: "dreamer_status"; status: DreamerStatus }
   | { type: "agent_task_created"; summary: AgentTaskSummary }
   | { type: "agent_task_updated"; summary: AgentTaskSummary }
   | {

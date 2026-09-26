@@ -1,4 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
+import type { DreamerAdmission, DreamerCheckpoint } from "../dreamer/state.js";
 
 export const SESSION_TREE_FORMAT = "thread-session-tree-v2" as const;
 
@@ -30,6 +31,8 @@ export interface Turn {
   startedAt: number;
   /** Missing on legacy records, which captured file checkpoints by default. */
   fileCheckpoints?: boolean;
+  dreamerReview?: DreamerAdmission;
+  dreamerReviewedAt?: number;
   finishedAt?: number;
   error?: { code: string; message: string };
 }
@@ -98,6 +101,7 @@ export type SessionTreeEvent =
   | { type: "turn_started"; turn: Turn }
   | { type: "entry_appended"; entry: SessionEntry }
   | { type: "turn_finished"; turnId: string; status: Exclude<TurnStatus, "running">; error?: { code: string; message: string }; finishedAt: number }
+  | { type: "dreamer_reviewed"; memoryPath: string; turnIds: string[]; checkpoint: DreamerCheckpoint }
   | { type: "live_tip_changed"; sessionId: string; turnId: string | null; reason: "turn" | "rewind" }
   | { type: "file_rewind_started"; rewind: FileRewindIntent }
   | { type: "file_rewind_finished"; sessionId: string };

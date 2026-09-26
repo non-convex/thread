@@ -1,5 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import type { BigIntStats } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { getThreadHome } from "./config/home.js";
 import type { FileContents } from "./file-history/service.js";
@@ -19,11 +21,88 @@ type MemoryInvocation = Pick<ToolContext, "rootPath" | "signal" | "invocation">;
 // Shared by runtimes in this process; entries disappear when their I/O settles.
 const pendingMemoryAccess = new Map<string, Promise<unknown>>();
 
+function revisionStat(info: BigIntStats): string {
+  return [info.dev, info.ino, info.mode, info.size, info.birthtimeNs, info.mtimeNs, info.ctimeNs]
+    .map(String).join(":");
+}
+
+/** Observe both the contents and the identity of a stable publication, not only its text. */
+async function observeGlobalMemoryRevision(filePath: string, signal?: AbortSignal, expectedContent?: Buffer): Promise<string> {
+  const inspect = async (): Promise<BigIntStats | undefined> => stat(filePath, { bigint: true }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    signal?.throwIfAborted();
+    const before = await inspect();
+    signal?.throwIfAborted();
+    if (!before) {
+      if (!(await inspect())) {
+        signal?.throwIfAborted();
+        if (expectedContent !== undefined) throw new Error("Global memory changed after Dreamer's write; cannot confirm its published revision.");
+        return "missing";
+      }
+      continue;
+    }
+    let content: Buffer;
+    try { content = await readFile(filePath, { signal }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    signal?.throwIfAborted();
+    const after = await inspect();
+    signal?.throwIfAborted();
+    if (!after || revisionStat(before) !== revisionStat(after)) continue;
+    if (expectedContent !== undefined && !content.equals(expectedContent)) {
+      throw new Error("Global memory changed after Dreamer's write; cannot confirm its published revision.");
+    }
+    return createHash("sha256").update(revisionStat(after)).update("\0").update(content).digest("hex");
+  }
+  signal?.throwIfAborted();
+  throw new Error("Global memory changed while determining its revision. Retry when it settles.");
+}
+
+export async function globalMemoryRevision(filePath: string, signal?: AbortSignal): Promise<string> {
+  return observeGlobalMemoryRevision(filePath, signal);
+}
+
+function validateGlobalMemoryEntries(content: Buffer): void {
+  const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  let count = 0;
+  for (const line of text.split(/\r\n|\r|\n/u)) {
+    if (!line.trim()) continue;
+    const entry = /^- \[(\d{4})-(\d{2})-(\d{2})\] (.+)$/u.exec(line);
+    if (!entry || !entry[4]!.trim()) throw new Error("Global memory must contain only dated Markdown list entries (- [YYYY-MM-DD] content).");
+    const year = Number(entry[1]);
+    const month = Number(entry[2]);
+    const day = Number(entry[3]);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (month < 1 || month > 12 || day < 1 || day > days[month - 1]!) {
+      throw new Error("Global memory entry has an invalid date.");
+    }
+    if (++count > 15) throw new Error("Global memory must contain no more than 15 entries.");
+  }
+  if (content.length > 0 && count === 0) throw new Error("Global memory must be empty or contain dated Markdown list entries.");
+}
+
 /** One execution's observed memory version, separate from its fixed Session snapshot. */
 export class GlobalMemoryAccess {
   private observed: { content: Buffer | null; toolCallId: string; visible: boolean } | undefined;
+  private expectedRevision: string | undefined;
 
-  constructor(private readonly filePath: string, private readonly memoryOnly = false) {}
+  constructor(private readonly filePath: string, private readonly memoryOnly = false,
+    private readonly options: { expectedRevision?: string; validateEntries?: boolean } = {}) {
+    this.expectedRevision = options.expectedRevision;
+  }
+
+  get revision(): string | undefined { return this.expectedRevision; }
+
+  get readObservation(): { toolCallId: string; missing: boolean; visible: boolean } | undefined {
+    const observed = this.observed;
+    return observed ? { toolCallId: observed.toolCallId, missing: observed.content === null, visible: observed.visible } : undefined;
+  }
 
   observeModelContext(messages: readonly Message[]): void {
     const observed = this.observed;
@@ -92,8 +171,19 @@ export class GlobalMemoryAccess {
         this.observed = undefined;
         throw new Error("Global memory changed since it was read. Re-read it in a separate step and regenerate the update.");
       }
+      if (this.options.validateEntries) validateGlobalMemoryEntries(content);
+      const guardedCommit = async () => {
+        await beforeCommit();
+        if (this.expectedRevision !== undefined &&
+            await globalMemoryRevision(memory, context.signal) !== this.expectedRevision) {
+          throw new Error("Global memory changed since Dreamer's source revision. Re-review the material against current memory before writing; re-reading alone cannot authorize this update.");
+        }
+      };
       await atomicFile(memory, content, { ...(before ? { mode: before.mode } : {}), overwrite: before !== undefined,
-        signal: context.signal, beforeCommit });
+        signal: context.signal, beforeCommit: guardedCommit });
+      // Publication already completed. Settle this short observation even if the turn was cancelled;
+      // never advance to an external writer's different content sampled after our publication.
+      if (this.expectedRevision !== undefined) this.expectedRevision = await observeGlobalMemoryRevision(memory, undefined, content);
       this.observed = { ...observed, content: Buffer.from(content) };
     }));
   }

@@ -4,6 +4,7 @@ import type { ContextBuilder, BuiltContext } from "../context/builder.js";
 import { COMPACTION_TRIGGER_RATIO, contextBudget, type ContextBudget } from "../context/budget.js";
 import type { ContextCompactionService, CompactionResult } from "../context/compaction/service.js";
 import type { ExtensionEvents } from "../extensions/events.js";
+import type { DreamerAdmission } from "../dreamer/state.js";
 import type { Turn } from "../session-tree/model.js";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ToolRegistry } from "../tools/types.js";
@@ -24,6 +25,7 @@ export interface RunTurnOptions extends ExecutionLimits {
   promptCacheDiagnostics?: () => import("./prompt-cache-diagnostics.js").PromptCacheDiagnostics | undefined;
   onExecutionEvent?: ExecutionEventSink;
   images?: readonly ImageContent[];
+  dreamerReview?: DreamerAdmission;
 }
 
 interface CompactionInvocation {
