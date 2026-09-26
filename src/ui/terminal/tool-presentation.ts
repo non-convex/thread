@@ -77,8 +77,8 @@ export function presentTool(tool: TranscriptTool, content: string): ToolPresenta
     case "grep":
       result.summary = number(d.totalMatches) === undefined ? "search completed"
         : `${d.totalMatches} matches in ${d.totalFiles} files · ${d.shown} shown`;
-      result.body = content.split("\n").slice(2).filter((line) => !line.startsWith("[Continue with cursor=") && !line.startsWith("scan capped")).join("\n").trimEnd();
-      result.notice = [d.scanCapped ? "Search scan capped; counts are partial" : "", d.nextCursor ? "More results available" : ""].filter(Boolean).join(" · ");
+      result.body = content.split("\n").slice(2).filter((line) => !line.startsWith("[Continue with offset=") && !line.startsWith("scan capped")).join("\n").trimEnd();
+      result.notice = [d.scanCapped ? "Search scan capped; counts are partial" : "", number(d.nextOffset) !== undefined ? `More results available at offset ${d.nextOffset}` : ""].filter(Boolean).join(" · ");
       break;
     case "bash":
       result.summary = number(d.exitCode) === undefined ? "completed" : `exit ${d.exitCode}`;

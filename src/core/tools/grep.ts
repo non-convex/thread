@@ -7,8 +7,7 @@ import { prepareFilePath, resolveToolPath, fileAccess, type ToolPlanningContext 
 import type { AgentTool } from "./types.js";
 import { ok, fail, limited, clampInt } from "./results.js";
 import {
-  assertCursorCompatible, decodeGrepCursor, presentPage,
-  renderMatchWithContext, searchFromArgs, GREP_DEFAULT_LIMIT, GREP_MAX_CONTEXT, GREP_MAX_LIMIT,
+  presentPage, renderMatchWithContext, searchFromArgs, GREP_DEFAULT_LIMIT, GREP_MAX_CONTEXT, GREP_MAX_LIMIT,
   GREP_SCAN_BYTES, GREP_SCAN_CAP, type GrepArgs, type GrepMatch, type GrepSearch,
 } from "./grep-results.js";
 
@@ -17,13 +16,10 @@ type PreparedGrepArgs = GrepSearch & { offset: number; limit: number };
 async function prepareGrep(args: GrepArgs, context: ToolPlanningContext): Promise<PreparedGrepArgs> {
   const pattern = args.pattern.trim();
   if (!pattern) throw new Error("pattern cannot be empty");
-  const cursor = args.cursor ? decodeGrepCursor(args.cursor) : undefined;
-  const search = await prepareFilePath(cursor?.search ?? searchFromArgs({ ...args, pattern }), context, { literal: true });
-  if (cursor) {
-    const explicit = args.path === undefined ? {} : { path: (await prepareFilePath(args, context, { defaultPath: "." })).path };
-    assertCursorCompatible({ ...args, ...explicit, pattern }, search);
-  }
-  return { ...search, offset: cursor?.offset ?? 0, limit: clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT) };
+  const offset = args.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("offset must be a nonnegative safe integer");
+  const search = await prepareFilePath(searchFromArgs({ ...args, pattern }), context, { literal: true });
+  return { ...search, offset, limit: clampInt(args.limit, 1, GREP_MAX_LIMIT, GREP_DEFAULT_LIMIT) };
 }
 
 export function grepFilePath(root: string, absolute: string): string {
@@ -176,7 +172,7 @@ async function mtimesFor(root: string, files: Iterable<string>): Promise<Map<str
 export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
   name: "grep",
   description:
-    "Search text with ripgrep. Defaults to the workspace root; absolute paths and paths outside the project are allowed. Matches are grouped by file and ranked so git-changed and recently modified files come first, then paginated (default 20 matches, max 100). Use glob to narrow, outputMode=files for ranked paths only, and pass cursor unchanged to continue the same search. Hidden files are not searched; .gitignore is respected. Requires rg on PATH.",
+    "Search text with ripgrep. Defaults to the workspace root; absolute paths and paths outside the project are allowed. Matches are grouped by file and ranked so git-changed and recently modified files come first, then paginated (default 20 matches, max 100). Use glob to narrow, outputMode=files for ranked paths only, and repeat the same search parameters with the returned offset for the next page. Hidden files are not searched; .gitignore is respected. Requires rg on PATH.",
   parameters: Type.Object({
     pattern: Type.String({ description: "Search pattern (regex, or a literal string when literal is true)." }),
     path: Type.Optional(
@@ -204,12 +200,14 @@ export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
         description: "content (default) returns grouped lines; files returns ranked paths with counts.",
       }),
     ),
-    cursor: Type.Optional(
-      Type.String({
-        description: "Pagination cursor from a previous grep result. Pass it unchanged to fetch the next page.",
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+        description: "Number of matches to skip, or files in files mode; default 0. For the next page, use the returned offset with the same search parameters.",
       }),
     ),
-  }),
+  }, { additionalProperties: false }),
   prepare: prepareGrep,
   execution: fileAccess("read", "subtree"),
   async execute(args, context) {
@@ -239,7 +237,7 @@ export const grepTool: AgentTool<GrepArgs, PreparedGrepArgs> = {
         ordered,
         offset,
         limit,
-        search,
+        outputMode: search.outputMode,
         scanCapped: parsed.scanCapped,
         ...(renderLine ? { renderLine } : {}),
       });

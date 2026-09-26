@@ -9,7 +9,6 @@ export const GREP_SCAN_CAP = 2_000;
 const GREP_MAX_LINE_CHARS = 200;
 export const GREP_MAX_CONTEXT = 5;
 export const GREP_SCAN_BYTES = 8 * 1024 * 1024;
-const CURSOR_PREFIX = "g1.";
 const SCAN_LIMIT_NOTICE = `scan capped at ${GREP_SCAN_CAP} matches or ${GREP_SCAN_BYTES / 1024 / 1024}MB of ripgrep output; refine the pattern or glob`;
 
 type GrepOutputMode = "content" | "files";
@@ -22,9 +21,9 @@ export type GrepArgs = {
   context?: number;
   limit?: number;
   outputMode?: GrepOutputMode;
-  cursor?: string;
+  offset?: number;
 };
-export type GrepSearch = Required<Omit<GrepArgs, "glob" | "limit" | "cursor">> & Pick<GrepArgs, "glob">;
+export type GrepSearch = Required<Omit<GrepArgs, "glob" | "limit" | "offset">> & Pick<GrepArgs, "glob">;
 export interface GrepMatch { file: string; line: number; text: string }
 export interface GrepDetails {
   totalMatches: number;
@@ -32,14 +31,13 @@ export interface GrepDetails {
   offset: number;
   shown: number;
   scanCapped: boolean;
-  nextCursor?: string;
+  nextOffset?: number;
 }
-interface GrepCursor { v: 1; search: GrepSearch; offset: number }
 interface PageOptions {
   ordered: GrepMatch[];
   offset: number;
   limit: number;
-  search: GrepSearch;
+  outputMode: GrepOutputMode;
   scanCapped: boolean;
   renderLine?: (match: GrepMatch) => string;
 }
@@ -58,33 +56,6 @@ export function searchFromArgs(args: GrepArgs): GrepSearch {
   };
 }
 
-export function assertCursorCompatible(args: GrepArgs, search: GrepSearch): void {
-  const normalized = searchFromArgs(args);
-  // Paths have already been canonicalized during preparation; preserve their literal spelling.
-  if (args.path !== undefined) normalized.path = args.path;
-  for (const key of ["pattern", "path", "glob", "ignoreCase", "literal", "context", "outputMode"] as const) {
-    if ((key === "pattern" || args[key] !== undefined) && normalized[key] !== search[key]) {
-      throw new Error("cursor does not match this search; pass the same query fields and the cursor from the previous result");
-    }
-  }
-}
-
-export function decodeGrepCursor(value: string): GrepCursor {
-  if (!value.startsWith(CURSOR_PREFIX)) throw new Error("Invalid grep cursor");
-  let cursor: GrepCursor;
-  try { cursor = JSON.parse(Buffer.from(value.slice(CURSOR_PREFIX.length), "base64url").toString("utf8")); }
-  catch { throw new Error("Invalid grep cursor"); }
-  const search = cursor?.search;
-  if (cursor?.v !== 1 || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
-      !search || typeof search.pattern !== "string" || !search.pattern.trim() ||
-      typeof search.path !== "string" || !search.path ||
-      (search.glob !== undefined && typeof search.glob !== "string") ||
-      typeof search.ignoreCase !== "boolean" || typeof search.literal !== "boolean" ||
-      !Number.isInteger(search.context) || search.context < 0 || search.context > GREP_MAX_CONTEXT ||
-      !["content", "files"].includes(search.outputMode)) throw new Error("Invalid grep cursor");
-  return cursor;
-}
-
 function fileTotals(matches: GrepMatch[]): Map<string, number> {
   const totals = new Map<string, number>();
   for (const match of matches) totals.set(match.file, (totals.get(match.file) ?? 0) + 1);
@@ -92,25 +63,28 @@ function fileTotals(matches: GrepMatch[]): Map<string, number> {
 }
 
 export function presentPage(options: PageOptions): { content: string; details: GrepDetails } {
-  const { ordered, offset, limit, search, scanCapped } = options;
-  const filesMode = search.outputMode === "files";
+  const { ordered, offset, limit, outputMode, scanCapped } = options;
+  const filesMode = outputMode === "files";
   const totals = fileTotals(ordered);
   const files = [...totals.keys()];
   const total = filesMode ? files.length : ordered.length;
   const shown = Math.max(0, Math.min(limit, total - offset));
   const details: GrepDetails = { totalMatches: ordered.length, totalFiles: files.length, offset, shown, scanCapped };
   if (offset + shown < total) {
-    details.nextCursor = CURSOR_PREFIX + Buffer.from(JSON.stringify({ v: 1, search, offset: offset + shown }), "utf8").toString("base64url");
+    details.nextOffset = offset + shown;
   }
   const blocks = filesMode
     ? files.slice(offset, offset + limit).map((file) => `${file} (${totals.get(file)})`)
     : contentBlocks(options, totals);
+  const pageRange = shown > 0
+    ? `Showing ${filesMode ? "files " : ""}${offset + 1}–${offset + shown}, ranked by git changes then recency.`
+    : `No ${filesMode ? "files" : "matches"} at offset ${offset}.`;
   const header = ordered.length
-    ? `${ordered.length} matches in ${files.length} files. Showing ${filesMode ? "files " : ""}${offset + 1}–${offset + shown}, ranked by git changes then recency.`
+    ? `${ordered.length} matches in ${files.length} files. ${pageRange}`
     : scanCapped ? "No complete matches collected before the scan limit." : "No matches found.";
   return { content: [header, ...(ordered.length ? ["", ...blocks] : []),
     ...(scanCapped ? [...(ordered.length ? [""] : []), SCAN_LIMIT_NOTICE] : []),
-    ...(details.nextCursor ? ["", `[Continue with cursor="${details.nextCursor}"]`] : []),
+    ...(details.nextOffset !== undefined ? ["", `[Continue with offset=${details.nextOffset}]`] : []),
   ].join("\n"), details };
 }
 
