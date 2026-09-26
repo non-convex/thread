@@ -3,8 +3,8 @@ import path from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThreadState } from "../../core/runtime/state.js";
 import { atomicJson } from "../../core/utils/atomic-json.js";
-import { getThreadHome } from "../../core/config/home.js";
 import type { ModelSelectionConfig } from "../../core/config/model-config.js";
+import type { Project } from "../../core/project/model.js";
 import type { ThreadConfig } from "./thread-config.js";
 
 export const DEFAULT_THREAD_STATE_FILE = "state.json";
@@ -19,8 +19,8 @@ const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   "max",
 ];
 
-export function getThreadStatePath(): string {
-  return path.join(getThreadHome(), DEFAULT_THREAD_STATE_FILE);
+export function getThreadStatePath(project: Pick<Project, "statePath">): string {
+  return path.join(project.statePath, DEFAULT_THREAD_STATE_FILE);
 }
 
 function isThinkingLevel(value: unknown): value is ModelThinkingLevel {
@@ -36,7 +36,7 @@ function modelSelection(value: unknown): ModelSelectionConfig | undefined {
 }
 
 /** Invalid or unreadable state is ignored because it must never prevent startup. */
-export async function loadThreadState(statePath = getThreadStatePath()): Promise<ThreadState | undefined> {
+export async function loadThreadState(statePath: string): Promise<ThreadState | undefined> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(statePath, "utf8")) as unknown;
@@ -72,7 +72,7 @@ export async function loadThreadState(statePath = getThreadStatePath()): Promise
 const writeQueues = new Map<string, Promise<void>>();
 
 /** Atomic, ordered last-writer-wins persistence for interactive state. */
-export async function saveThreadState(state: ThreadState, statePath = getThreadStatePath()): Promise<void> {
+export async function saveThreadState(state: ThreadState, statePath: string): Promise<void> {
   const queued = (writeQueues.get(statePath) ?? Promise.resolve()).then(
     () => atomicJson(statePath, state, { pretty: true }),
     () => atomicJson(statePath, state, { pretty: true }),

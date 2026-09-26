@@ -229,11 +229,13 @@ Thread reads `~/.thread/config.json` by default and falls back to compatible set
 
 ```text
 --provider/--model or THREAD_PROVIDER/THREAD_MODEL
-→ remembered choice in ~/.thread/state.json
+→ this project's remembered choice in ~/.thread/projects/<project-id>/state.json
 → model in ~/.thread/config.json
 ```
 
-`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Main-model, thinking-level, and secondary-agent choices are remembered in `~/.thread/state.json`.
+`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Each project remembers its main model, thinking level, and secondary-agent model/enabled choices in `~/.thread/projects/<project-id>/state.json`. The project is identified by its root directory (`--root`, or the startup directory), so changing a choice in one project does not affect another. Thinking levels use the project's remembered preference, then the configured default.
+
+Provider configuration and credentials remain shared. The former `~/.thread/state.json` is no longer read or migrated; until a project saves its own choices, it uses the configured defaults or explicit command-line selections.
 
 Git commits created or amended by Thread include `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>` by default. This keeps the user's configured Git author intact while linking Thread's GitHub account as a co-author. To disable or replace the trailer, set `attribution.commit` in `~/.thread/config.json`; an empty string disables it.
 
@@ -242,6 +244,7 @@ Project state lives outside the workspace:
 ```text
 ~/.thread/projects/<project-id>/
 ├── project.json
+├── state.json
 ├── session-tree/{tree.json,events.jsonl}
 ├── file-history/blobs/
 ├── session-search/

@@ -225,11 +225,13 @@ Thread 默认读取 `~/.thread/config.json`；该文件不存在时，会回退�
 
 ```text
 --provider/--model 或 THREAD_PROVIDER/THREAD_MODEL
-→ ~/.thread/state.json 中记住的选择
+→ ~/.thread/projects/<project-id>/state.json 中当前项目记住的选择
 → ~/.thread/config.json 中的 model
 ```
 
-`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。主模型、thinking level 和次级 Agent 选择会保存在 `~/.thread/state.json`。
+`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。每个项目的主模型、thinking level，以及次级 Agent 的模型和启停选择，分别保存在 `~/.thread/projects/<project-id>/state.json`。项目由根目录确定（`--root` 指定的目录，或启动目录），在一个项目中切换不会改变另一个项目的选择。推理档位优先使用当前项目记住的值，没有记录时使用配置默认值。
+
+提供方配置和登录凭据仍然跨项目共享。旧的 `~/.thread/state.json` 不再读取或迁移；项目尚未保存自己的选择时，使用配置默认值或显式命令行选择。
 
 Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>`。用户原有的 Git author 保持不变，GitHub 会把 Thread 识别为共同作者。可通过 `~/.thread/config.json` 中的 `attribution.commit` 替换这段 trailer；设为空字符串即可关闭。
 
@@ -238,6 +240,7 @@ Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <32
 ```text
 ~/.thread/projects/<project-id>/
 ├── project.json
+├── state.json
 ├── session-tree/{tree.json,events.jsonl}
 ├── file-history/blobs/
 ├── session-search/

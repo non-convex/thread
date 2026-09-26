@@ -60,6 +60,10 @@ async function answer(model: ModelClient, customTool: AgentTool) {
 
 coding 应用的默认配置统一由 `ThreadApp.open()` 装配：完整基础工具、默认 Skill 目录、产品提示词、Recall、全局记忆和文件 checkpoint。CLI 和直接使用 coding 应用的调用者共享这份配置；`ThreadRuntime.open()` 的最小默认值保持独立。
 
+CLI 在启动模型前先按 `rootPath` 解析项目身份，再读取该项目数据目录中的 `state.json`。交互中选择的主模型、推理档位，以及 Worker / Dreamer 的模型和启停状态只写回这一文件，不会覆盖其他项目。主模型优先级为命令行或环境变量、当前项目记录、全局配置；推理档位优先用项目记录，再用配置默认值。旧的全局 `~/.thread/state.json` 不再读取或迁移。配置和凭据仍然共享；`logout` 撤销共享凭据，但只清理启动目录所对应项目的模型选择，不改写其他项目的偏好文件。
+
+嵌入宿主仍通过 `state` 和 `onStateChange` 自行管理偏好持久化。应用入口导出的 `getThreadStatePath(project)` 根据显式传入的 `project.statePath` 返回偏好文件位置；`loadThreadState(statePath)` 和 `saveThreadState(state, statePath)` 均要求明确提供文件路径，不再默认访问全局文件。
+
 定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一个独立会话，指定则固定到已有会话；用 `listSchedules()`、`updateSchedule(id, { prompt }, { signal? })`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 可用 `update_schedule({ id, prompt })` 修改后续提示词；`/schedule` 没有编辑子命令。
 
 创建时立即将 `initialPrompt` 置为待执行，runtime 空闲后发送；如果正在执行创建任务的那轮对话，会先等当前轮次结束，不等下一个定时时刻。消息在执行开始时写入会话历史。之后按 `schedule` 发送 `prompt`，包括 `at` 指定时间的那次后续消息。省略 `initialPrompt` 时，初始化也使用 `prompt`；如果实际动作必须等到未来，应明确提供仅做准备的初始指令。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。

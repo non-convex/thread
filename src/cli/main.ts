@@ -8,7 +8,8 @@ import { WORKER_PROFILE_ID } from "../core/agent-task/profile.js";
 import { DREAMER_PROFILE_ID } from "../core/dreamer/profile.js";
 import { ThreadCredentialStore } from "../core/auth/credential-store.js";
 import { loadThreadConfig } from "../app/config/thread-config.js";
-import { loadThreadState, resolveMainModelSelection, saveThreadState } from "../app/config/thread-state.js";
+import { getThreadStatePath, loadThreadState, resolveMainModelSelection, saveThreadState } from "../app/config/thread-state.js";
+import { ProjectService } from "../core/project/service.js";
 import { runPlainCli } from "../ui/plain/runner.js";
 import type { TerminalMode } from "../ui/terminal/app.js";
 import { settlesWithin } from "../core/utils/async.js";
@@ -98,7 +99,7 @@ Usage: thread [--root <project-directory>] [--config <file>]
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 --cache-diagnostics appends content-free provider-prefix diagnostics as JSONL (opt-in).
 Default config: ~/.thread/config.json
-Remembered main model, thinking, and agent choices: ~/.thread/state.json (delete to reset)
+Remembered main model, thinking, and agent choices: ~/.thread/projects/<project-id>/state.json (delete to reset this project)
 Subscription credentials: ~/.thread/auth.json
 Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
@@ -123,7 +124,8 @@ async function main(): Promise<void> {
     if (command.type === "login") await loginProvider(catalog, command.providerId);
     else if (command.type === "logout") {
       await logoutProvider(catalog, command.providerId);
-      const remembered = await loadThreadState();
+      const statePath = getThreadStatePath(await ProjectService.resolve(process.cwd()));
+      const remembered = await loadThreadState(statePath);
       if (remembered) {
         const agents = structuredClone(remembered.agents ?? {});
         for (const id of [WORKER_PROFILE_ID, DREAMER_PROFILE_ID] as const) {
@@ -134,7 +136,7 @@ async function main(): Promise<void> {
           ...(remembered.model?.provider === command.providerId ? {} : remembered.model ? { model: remembered.model } : {}),
           ...(remembered.thinkingLevel ? { thinkingLevel: remembered.thinkingLevel } : {}),
           ...(Object.keys(agents).length > 0 ? { agents } : {}),
-        });
+        }, statePath);
       }
     }
     else await showAuthStatus(catalog);
@@ -157,10 +159,12 @@ async function main(): Promise<void> {
     enabledProviderIds,
     modelOverrides: loadedConfig?.config.modelOverrides ?? {},
   });
-  // An explicit --provider/--model pair outranks the remembered choice, which in
-  // turn outranks the configured default. parseArgs already guarantees the CLI
-  // pair is either complete or absent.
-  const state = await loadThreadState();
+  // Resolve the same project identity used by the runtime before loading its preferences.
+  const project = await ProjectService.resolve(options.rootPath);
+  const statePath = getThreadStatePath(project);
+  // An explicit --provider/--model pair outranks this project's remembered choice,
+  // which in turn outranks the configured default. parseArgs guarantees a complete pair.
+  const state = await loadThreadState(statePath);
   const selection = resolveMainModelSelection({
     ...(options.provider && options.model ? { cli: { provider: options.provider, id: options.model } } : {}),
     state,
@@ -237,7 +241,7 @@ async function main(): Promise<void> {
   }
   let stateSave: Promise<void> = Promise.resolve();
   const app = await ThreadApp.open({
-    rootPath: options.rootPath,
+    rootPath: project.rootPath,
     ...(loadedConfig?.config.search ? { search: loadedConfig.config.search } : {}),
     ...(loadedConfig?.config.attribution ? { commitAttribution: loadedConfig.config.attribution.commit } : {}),
     ...(model ? { model } : {}),
@@ -278,7 +282,7 @@ async function main(): Promise<void> {
     onStateChange: (nextState) => {
       // Preference writes stay non-blocking during the session, but the latest
       // queued write joins graceful shutdown before the CLI forces process exit.
-      stateSave = stateSave.then(() => saveThreadState(nextState)).catch(() => undefined);
+      stateSave = stateSave.then(() => saveThreadState(nextState, statePath)).catch(() => undefined);
     },
   });
   let closeCacheDiagnostics: (() => Promise<void>) | undefined;
