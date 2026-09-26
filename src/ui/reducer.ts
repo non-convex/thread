@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { AGENT_TASK_TOOL_NAMES } from "../core/agent-task/model.js";
+import { dreamerStatusLines } from "../app/commands/agents.js";
 import type { UiEvent } from "./events.js";
 import type { AgentTaskCard, LiveTurn, UiState } from "./state.js";
 import { endStreaming, streamBlocks } from "./transcript-stream.js";
@@ -28,6 +29,12 @@ function runningWorkers(state: UiState): number {
 
 export function reduceUiEvent(state: UiState, event: UiEvent): void {
   switch (event.type) {
+    case "dreamer_status":
+      if (state.screen.type === "agent_settings" && state.screen.agentId === "dreamer") {
+        state.screen.enabled = event.status.enabled;
+        state.screen.details = [...(state.screen.details?.slice(0, 1) ?? []), ...dreamerStatusLines(event.status)];
+      }
+      return;
     case "agent_task_created":
       if (state.liveTurn) state.liveTurn = { ...state.liveTurn, blocks: [...endStreaming(state.liveTurn.blocks), {
         id: `agent-task:${event.summary.taskId}`, kind: "agent_task", content: "",

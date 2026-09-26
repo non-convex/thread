@@ -1,10 +1,25 @@
 import type { ModelCatalog } from "../../core/agent/model-catalog.js";
+import type { DreamerStatus } from "../../core/dreamer/scheduler.js";
 import type { ThreadRuntime } from "../../core/runtime/thread-runtime.js";
 import { ephemeral, viewResult, type CommandResult } from "./types.js";
 
 type AgentId = "main" | "worker" | "dreamer";
 type Scope = "configured" | "all";
 const labels = { main: "Main", worker: "Worker", dreamer: "Dreamer" };
+
+export function dreamerStatusLines(status: DreamerStatus | undefined): string[] {
+  if (!status) return ["Global memory is not configured."];
+  return [
+    `Review: ${status.phase} · ${status.pendingTurns} pending · ${status.reviewedTurns} reviewed`,
+    ...(status.partialTurnId ? ["A long turn is partially reviewed; its remaining text is saved."] : []),
+    `Last successful review: ${status.lastReviewedAt === undefined ? "none" : new Date(status.lastReviewedAt).toLocaleString()}`,
+    ...(status.lastResult ? [`Result: ${{ updated: "memory updated", unchanged: "no memory change needed", observed: "observations saved; later history is still pending", read_only: "older evidence reviewed without changing memory" }[status.lastResult]}`] : []),
+    ...(status.nextReviewAt === undefined ? [] : [`Next eligible review: ${new Date(status.nextReviewAt).toLocaleString()}`]),
+    ...(status.phase === "disabled" && status.pendingTurns ? ["Pending reviews will resume when Dreamer is enabled."] : []),
+    ...(status.phase === "blocked" ? ["Resolve the error, then choose On or another model to retry."] : []),
+    ...(status.lastError ? [`Last error: ${status.lastError}`] : []),
+  ];
+}
 
 /** /model and /agent share selection, listing and enable/disable behavior. */
 export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | undefined, args: string[]): CommandResult {
@@ -20,11 +35,12 @@ export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | und
   if (!args.length) {
     const agents = (Object.keys(states) as AgentId[]).map((id) => ({
       id, label: labels[id], enabled: states[id].enabled,
-      detail: modelName(id) + (id === "dreamer" && runtime.dreamerLastError ? ` · error: ${runtime.dreamerLastError}` : ""),
+      detail: modelName(id) + (id === "dreamer" && runtime.dreamerStatus
+        ? ` · ${runtime.dreamerStatus.phase} · ${runtime.dreamerStatus.pendingTurns} pending` : ""),
     }));
     const content = [
       ...agents.map(({ id, enabled }) => `${id}: ${enabled ? "on" : "off"} · ${modelName(id)}`),
-      ...(runtime.dreamerLastError ? [`dreamer last error: ${runtime.dreamerLastError}`] : []),
+      ...dreamerStatusLines(runtime.dreamerStatus),
       ...runtime.agentProfileDiagnostics.map((item) => `${item.profileId} ${item.level}: ${item.message}`),
     ].join("\n");
     return viewResult(content, { type: "agent_picker", agents });
@@ -72,8 +88,9 @@ export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | und
     const content = id === "worker"
       ? enabled ? `Worker: On\nWorker model: ${modelName(id)}` : `Worker: Off${model ? `\nLast worker model: ${modelName(id)}` : ""}`
       : [`Dreamer: ${enabled ? "On" : "Off"}`, `Dreamer model: ${modelName(id)}`,
-          ...(runtime.dreamerLastError ? [`Last error: ${runtime.dreamerLastError}`] : [])].join("\n");
-    return viewResult(content, { type: "agent_settings", agentId: id, label, enabled });
+          ...dreamerStatusLines(runtime.dreamerStatus)].join("\n");
+    return viewResult(content, { type: "agent_settings", agentId: id, label, enabled,
+      ...(id === "dreamer" ? { details: [`Model: ${modelName(id)}`, ...dreamerStatusLines(runtime.dreamerStatus)] } : {}) });
   }
   if ((action === "on" || action === "off") && id !== "main" && !rest.length) {
     if (action === "on") return model ? select(model.provider, model.id) : picker();

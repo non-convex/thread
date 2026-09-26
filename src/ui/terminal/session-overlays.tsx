@@ -18,7 +18,7 @@ export function overlayHeight(screen: UiScreen): number {
     case "command_picker": rows = Math.max(1, Math.min(COMMAND_OVERLAY_MAX_ITEMS, screen.items.length) * 2); break;
     case "model_picker": rows = 2 + Math.max(1, Math.min(MODEL_OVERLAY_MAX_ROWS, filteredModels(screen).length)); break;
     case "agent_picker": rows = screen.agents.length; break;
-    case "agent_settings": rows = 3; break;
+    case "agent_settings": rows = 3 + (screen.details?.length ?? 0); break;
     case "rewind": rows = Math.min(REWIND_OVERLAY_MAX_ROWS, screen.items.length) + Number(screen.confirm); break;
     // Question line, then either the free-text row or the options and their hint.
     case "ask": return 3 + (screen.customText !== undefined ? 1

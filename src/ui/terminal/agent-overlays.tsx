@@ -59,12 +59,15 @@ export function AgentPickerOverlay(props: OverlayProps<AgentPickerScreen>) {
 
 export function AgentSettingsOverlay(props: Omit<OverlayProps<AgentSettingsScreen>, "navigated">) {
   const options = () => [
-    { label: "Off", description: `Disable ${props.screen().label}` },
+    { label: "Off", description: props.screen().agentId === "dreamer" ? "Pause review and keep pending turns" : `Disable ${props.screen().label}` },
     { label: "On", description: "Use the last model, or choose one if none is set" },
     { label: "Choose model", description: `Select a model and enable ${props.screen().label}` },
   ];
   return <Panel width={props.contentWidth()} resources={props.resources} title={props.screen().label} icon={"\u2699\uFE0E"}
     hint="↑/↓ · ⏎ select · esc" busy={props.screen().busy ? "updating agent…" : undefined} error={props.screen().error}>
+    <For each={props.screen().details ?? []}>{(line) =>
+      <Line width={props.contentWidth() - 2} fg={props.resources.theme.muted}>{line}</Line>
+    }</For>
     <For each={options()}>{(option, index) =>
       <ChoiceRow resources={props.resources} width={props.contentWidth() - 2} selected={index() === props.selected()}
         current={index() < 2 && props.screen().enabled === (index() === 1)} label={option.label} labelWidth={14} detail={option.description} />

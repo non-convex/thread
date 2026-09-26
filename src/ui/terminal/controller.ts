@@ -330,7 +330,12 @@ export class ThreadTuiController {
   }
 
   private receiveRuntimeEvent(event: RuntimeEvent): void {
-    if (this.stopped || this.disposed || event.sessionId !== this.app.selectedSessionId) return;
+    if (this.stopped || this.disposed) return;
+    if (event.type === "dreamer_status") {
+      this.batcher.push(event);
+      return;
+    }
+    if (event.sessionId !== this.app.selectedSessionId) return;
     if (event.type === "model_call_started" || event.type === "model_call_finished" ||
         event.type === "model_attempt_started" || event.type === "model_attempt_finished" ||
         ((event.type === "agent_run_started" || event.type === "agent_run_finished") && !event.taskId)) return;

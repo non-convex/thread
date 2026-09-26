@@ -20,6 +20,11 @@ export interface WorkerConfig {
 export interface DreamerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;
+  idleTurns?: number;
+  idleMinutes?: number;
+  maxWaitMinutes?: number;
+  maxSteps?: number;
+  maxRuntimeMinutes?: number;
 }
 
 export interface AttributionConfig {

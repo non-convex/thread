@@ -39,7 +39,7 @@ export type EphemeralView =
       scope: "configured" | "all";
       filter?: string;
     }
-  | { type: "agent_settings"; agentId: string; label: string; enabled: boolean }
+  | { type: "agent_settings"; agentId: string; label: string; enabled: boolean; details?: string[] }
   | { type: "agent_picker"; agents: AgentPickerItem[] }
   | { type: "rewind"; items: HistoryViewItem[] };
 

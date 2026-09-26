@@ -199,6 +199,11 @@ function parseDreamer(value: unknown, label: string): DreamerConfig {
     thinkingLevel: input.thinkingLevel === undefined
       ? "high"
       : thinkingLevel(input.thinkingLevel, `${label}.thinkingLevel`),
+    ...(input.idleTurns === undefined ? {} : { idleTurns: positiveInteger(input.idleTurns, `${label}.idleTurns`) }),
+    ...(input.idleMinutes === undefined ? {} : { idleMinutes: positiveInteger(input.idleMinutes, `${label}.idleMinutes`) }),
+    ...(input.maxWaitMinutes === undefined ? {} : { maxWaitMinutes: positiveInteger(input.maxWaitMinutes, `${label}.maxWaitMinutes`) }),
+    ...(input.maxSteps === undefined ? {} : { maxSteps: positiveInteger(input.maxSteps, `${label}.maxSteps`) }),
+    ...(input.maxRuntimeMinutes === undefined ? {} : { maxRuntimeMinutes: positiveInteger(input.maxRuntimeMinutes, `${label}.maxRuntimeMinutes`) }),
   };
 }
 
