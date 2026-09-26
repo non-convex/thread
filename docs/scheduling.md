@@ -1,13 +1,17 @@
 # Scheduled tasks
 
-A schedule asks Thread to send an ordinary user turn to a fixed Session at a future time. In the coding app, ask the main agent to create one (for example, “Every morning, check the build and summarize any failures”). The agent can use `schedule_task`; it can also manage tasks with `list_schedules`, `pause_schedule`, `resume_schedule`, and `delete_schedule`. For model-free management, use `/schedule` or `/schedule list`, `/schedule pause <id>`, `/schedule resume <id>`, and `/schedule delete <id>`. In the TUI, the list is a picker: select a task and press Enter to open its bound Session. You can also use `/schedule open <id>` directly, including in plain mode. Creation is done by asking the agent or using the runtime API, not a slash command.
+A schedule asks Thread to initialize a task in a fixed Session immediately, then send ordinary user turns at the configured times. In the coding app, ask the main agent to create one (for example, “Every morning, check the build and summarize any failures”). The agent can use `schedule_task`; it can also manage tasks with `list_schedules`, `pause_schedule`, `resume_schedule`, and `delete_schedule`. For model-free management, use `/schedule` or `/schedule list`, `/schedule pause <id>`, `/schedule resume <id>`, and `/schedule delete <id>`. In the TUI, the list is a picker: select a task and press Enter to open its bound Session. You can also use `/schedule open <id>` directly, including in plain mode. Creation is done by asking the agent or using the runtime API, not a slash command.
 
 ## Sessions and instructions
 
-By default, `schedule_task` uses `target: "new"`: creation makes **one empty Session**, reused for every wakeup. It does not copy the conversation in which the request was made. Give `initialPrompt` all the background, scope, and instructions needed for its first run. The shorter `prompt` is used for later runs; if `initialPrompt` is omitted, `prompt` is used for both. For example:
+By default, `schedule_task` uses `target: "new"`: creation makes **one independent Session**, reused for every wakeup. It does not copy the conversation in which the request was made. Creation queues `initialPrompt` immediately instead of waiting for the first scheduled time. Give it all the background, scope, and instructions for what the agent should do now. The shorter `prompt` is used at the configured times; if `initialPrompt` is omitted, `prompt` runs both immediately and at those times.
+
+The runtime executes one turn at a time. If an agent creates a task during a turn, initialization waits for that turn to finish, then runs on the scheduler's next scan (normally within one second). Creation does not wait for the initial model response. The message appears in the Session history when execution starts, so the Session can still appear empty while the runtime is busy or has no configured model.
+
+If an action must wait until a future time, make the initial instructions preparation-only. For example:
 
 ```text
-initialPrompt: "Each morning, inspect the build status in this project. Report failing jobs and their evidence; do not change files. Stop and ask for guidance if the build system is unavailable."
+initialPrompt: "You will inspect the build status each morning. Now identify the build service and access requirements, without running the scheduled check. Later, report failing jobs and their evidence; do not change files. Ask for guidance if the build system is unavailable."
 prompt:        "Check the latest build again; report new or remaining failures."
 ```
 
@@ -19,9 +23,11 @@ You can open the bound Session while the task is running, through `/schedule` or
 
 ## Times and lifecycle
 
-Choose one time rule: `at` is a future ISO date-time with an explicit `Z` or UTC offset; `every` uses `minutes >= 1` anchored to creation time; `cron` is a five-field expression with an IANA `timezone` (evaluated with Croner). A new task must have a future occurrence. All execution remains serial across the project: if Thread is busy or closed, missed repeated occurrences are merged into one pending wakeup, run when execution becomes available, then advanced to a future time rather than replayed one by one. A one-time task that becomes overdue while Thread is closed runs once after reopening.
+Choose one follow-up time rule: `at` is a future ISO date-time with an explicit `Z` or UTC offset; `every` uses `minutes >= 1` anchored to creation time; `cron` is a five-field expression with an IANA `timezone` (evaluated with Croner). A new task must have a future occurrence. Initialization is additional to this rule: an `at` task runs its initial instructions now and its follow-up once at the specified time.
 
-Plans persist across restarts, but **nothing fires while the Thread process is stopped**; there is no daemon. Pausing keeps the plan. Resuming a recurring task recalculates its next future occurrence, rather than replaying paused intervals; a one-time task already admitted cannot be resumed. Pausing or deleting does not stop a turn already running—use Esc or `interrupt(sessionId)` to cancel it. Deleting a task leaves its Session and turn history intact.
+All execution remains serial across the project. A delayed initial message remains pending until execution becomes available. After initialization, recurring tasks advance to the next future occurrence without replaying intervals missed before initialization; an overdue `at` follow-up stays due and runs next. Later missed repeated occurrences are merged into one pending wakeup, run when execution becomes available, then advanced to a future time rather than replayed one by one. A one-time task that becomes overdue while Thread is closed runs once after reopening.
+
+Plans persist across restarts, but **nothing fires while the Thread process is stopped**; there is no daemon. Pausing keeps the plan. If initialization has not started, resuming makes it due immediately. Otherwise, resuming a recurring task recalculates its next future occurrence, rather than replaying paused intervals. An `at` task can resume after initialization until its scheduled follow-up has been admitted; an overdue, unconsumed follow-up runs once. Pausing or deleting does not stop a turn already running—use Esc or `interrupt(sessionId)` to cancel it. Deleting a task leaves its Session and turn history intact.
 
 A wakeup's user message, its consumed occurrence, and `Turn.scheduled` provenance (`scheduleId`, `scheduledAt`, `phase`) are recorded together when a turn starts. Rewind does not undo plans or replay consumed wakeups. After a crash, unfinished turns are sealed as interrupted under normal recovery rules, not retried for side effects. Scheduling does not guarantee exactly-once **completion**.
 
@@ -38,7 +44,7 @@ const keepAlive = setInterval(() => {}, 60_000);
 try {
   const task = await runtime.createSchedule({
     name: "Build check",
-    initialPrompt: "Inspect this project's build status each morning; report failures with evidence. Do not change files.",
+    initialPrompt: "Prepare for this project's morning build checks: identify the build service and access requirements, without running a check yet. Later report failures with evidence. Do not change files.",
     prompt: "Check the latest build and report new or remaining failures.",
     schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
     // Omit sessionId for one new dedicated Session; pass an existing ID to bind it instead.

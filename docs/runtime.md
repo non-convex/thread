@@ -60,7 +60,9 @@ async function answer(model: ModelClient, customTool: AgentTool) {
 
 coding 应用的默认配置统一由 `ThreadApp.open()` 装配：完整基础工具、默认 Skill 目录、产品提示词、Recall、全局记忆和文件 checkpoint。CLI 和直接使用 coding 应用的调用者共享这份配置；`ThreadRuntime.open()` 的最小默认值保持独立。
 
-定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一次独立空会话，指定则固定到已有会话；用 `listSchedules()`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 同时获得任务工具。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。
+定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一个独立会话，指定则固定到已有会话；用 `listSchedules()`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 同时获得任务工具。
+
+创建时立即将 `initialPrompt` 置为待执行，runtime 空闲后发送；如果正在执行创建任务的那轮对话，会先等当前轮次结束，不等下一个定时时刻。消息在执行开始时写入会话历史。之后按 `schedule` 发送 `prompt`，包括 `at` 指定时间的那次后续消息。省略 `initialPrompt` 时，初始化也使用 `prompt`；如果实际动作必须等到未来，应明确提供仅做准备的初始指令。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。
 
 `ThreadApp` 持有公开的 `runtime`，负责斜杠命令、菜单及选中的会话。执行、查询、配置和事件通过 `app.runtime` 访问，没有继承或一组重复的转发方法。应用扩展同样经过 runtime 的工具注册和执行边界；命令通过 `context.runtime` 查询历史，使用 `context.openSession()` 选择会话，不再直接访问可写的 Session Tree。
 

@@ -1,4 +1,4 @@
-/** Calendar times use an explicit timezone; interval schedules stay anchored to creation. */
+/** Follow-up times after immediate initialization; intervals stay anchored to creation. */
 export type ScheduleSpec =
   | { kind: "at"; at: string }
   | { kind: "every"; minutes: number }
@@ -7,10 +7,10 @@ export type ScheduleSpec =
 export interface CreateScheduleInput {
   name: string;
   prompt: string;
-  /** Background and instructions for the first wakeup. Defaults to prompt. */
+  /** Queued immediately at creation; runs once the runtime is idle. Defaults to prompt. */
   initialPrompt?: string;
   schedule: ScheduleSpec;
-  /** Omit to create one new, empty Session. All occurrences keep that same Session. */
+  /** Omit to create one independent Session for initialization and all follow-ups. */
   sessionId?: string;
 }
 
@@ -23,6 +23,7 @@ export interface ScheduledTask {
   sessionId: string;
   createdAt: number;
   enabled: boolean;
+  /** Initially createdAt, then the next occurrence of the follow-up time rule. */
   nextRunAt: number | null;
   lastTurnId?: string;
   /** An admission error pauses the schedule; turn failures live in the normal turn history. */

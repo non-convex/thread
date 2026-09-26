@@ -128,13 +128,12 @@ export class SessionTreeService {
     return structuredClone(session);
   }
 
-  /** A task and its optional dedicated Session are created together, without selecting that Session. */
+  /** Atomically create the task and optional Session, with initialization due immediately. */
   async createSchedule(input: CreateScheduleInput, signal?: AbortSignal): Promise<ScheduledTask> {
     signal?.throwIfAborted();
     const now = Date.now();
     const schedule = normalizeSchedule(input.schedule);
-    const nextRunAt = nextScheduleTime(schedule, now, now);
-    if (nextRunAt === null) throw new Error("Schedule must have a future occurrence");
+    if (nextScheduleTime(schedule, now, now) === null) throw new Error("Schedule must have a future occurrence");
     const session = input.sessionId === undefined
       ? { id: createId("session"), treeId: this.tree.id, createdAt: now }
       : undefined;
@@ -142,7 +141,7 @@ export class SessionTreeService {
       id: createId("schedule"), name: input.name, prompt: input.prompt,
       initialPrompt: input.initialPrompt === undefined ? input.prompt : input.initialPrompt, schedule,
       sessionId: session?.id ?? this.resolveSession(input.sessionId!).id,
-      createdAt: now, enabled: true, nextRunAt,
+      createdAt: now, enabled: true, nextRunAt: now,
     };
     await this.repository.appendBatch(() => {
       signal?.throwIfAborted();
@@ -172,8 +171,10 @@ export class SessionTreeService {
       delete task.lastError;
       if (error !== undefined) task.lastError = error;
       if (enabled && !current.enabled) {
-        if (current.schedule.kind === "at") {
-          if (current.lastTurnId) throw new Error("This one-shot schedule already ran; create a new schedule to run again");
+        if (!current.lastTurnId) {
+          task.nextRunAt = current.createdAt;
+        } else if (current.schedule.kind === "at") {
+          if (current.nextRunAt === null) throw new Error("This one-shot schedule already ran; create a new schedule to run again");
           task.nextRunAt = Date.parse(current.schedule.at);
         } else {
           task.nextRunAt = nextScheduleTime(current.schedule, Date.now(), current.createdAt);
@@ -281,7 +282,11 @@ export class SessionTreeService {
         }
         // Consume once, in the same durable record as the user turn. A crash or rewind
         // never replays this occurrence; its ordinary Turn records the eventual outcome.
-        const nextRunAt = nextScheduleTime(task.schedule, Math.max(Date.now(), wakeup.scheduledAt), task.createdAt);
+        // Initialization does not consume an at rule, even if it became overdue
+        // while initialization was waiting for the runtime to become available.
+        const nextRunAt = task.schedule.kind === "at"
+          ? wakeup.phase === "initial" ? Date.parse(task.schedule.at) : null
+          : nextScheduleTime(task.schedule, Math.max(Date.now(), wakeup.scheduledAt), task.createdAt);
         scheduledTask = { ...task, nextRunAt, enabled: nextRunAt !== null, lastTurnId: turn.id };
         delete scheduledTask.lastError;
       }
