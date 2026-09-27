@@ -188,6 +188,8 @@ CLI 和 `ThreadApp` 自动把配置的 Skill 扫描目录加入可写目录，�
 
 有可供模型调用的 Skill 时，runtime 自动加入 `skill` 工具；无需在 `tools` 中重复声明。系统提示词只包含这些 Skill 的目录和加载说明，正文由工具按需返回。带 `disable-model-invocation: true` 的 Skill 不进入模型目录，也不能由模型的 `skill` 工具加载；宿主仍可使用 `invokeSkill()` 显式调用。`runtime.skills` 和 `runtime.skillDiagnostics` 返回独立副本。
 
+Skill 的完整说明已在当前上下文中且仍适用时，模型应直接复用，不因收到新消息或开始新任务而重复调用 `skill`。缺失说明，或压缩后只剩不完整内容时，再按需加载；目录中的简介和模糊记忆不能代替完整操作说明。这是提示词约定，不新增运行时调用拦截。`skill` 返回 runtime 已加载的正文快照，不会重新读取磁盘；明确知道源文件已更新时，应读取更新后的文件，重新打开应用则会刷新已加载的 Skill。
+
 宿主的 `systemPrompt` 保留原文，`appendSystemPrompt` 用于主 agent 的追加指令；`sharedInstructions` 用于主 agent 和 worker 共用的指令。worker 保留自己的角色提示词，不继承主 agent 的角色；Dreamer 也不继承项目执行指令。核心不查找 `AGENTS.md`，嵌入宿主可自行读取指令并传入 `sharedInstructions`。
 
 加载 Skill 后会追加对应能力说明，核心不会自动加入 coding 角色、文件编辑约定或 Git 提交署名。显式启用 `search`（会话 Recall）、`globalMemoryPath`、交互或 worker 时，还会装配这些能力对应的工具或说明；`search` 与基础工具 `websearch` 是不同功能。

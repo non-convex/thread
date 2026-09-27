@@ -18,7 +18,9 @@ agent-browser skills get core
 
 Thread 默认从 `${THREAD_HOME}/skills` 加载用户级 Skill。当前机器的本机浏览器规则放在 `skills/agent-browser/SKILL.md`，详细流程放在同目录的 `references/local-browser.md`。这些是用户目录中的配置，不随项目 Git 提交或 `/rewind` 恢复，也不会仅因拉取本仓库而自动安装到其他机器。
 
-修改已加载的 Skill 后，需要重启 Thread 才会重新读取其正文。上游命令说明仍从 `agent-browser skills get core` 获取，避免把整份 CLI 手册复制到 Thread 中。
+重启 Thread 会刷新已加载的 Skill 正文；`skill` 工具本身返回 runtime 的加载快照，不会重新读取磁盘。如果明确知道文件刚被修改，当前会话可直接读取更新后的文件。
+
+当前上下文已有完整、适用的 Skill、CLI 指南或参考文档时，应直接复用，不必每个浏览器任务都重复加载。说明缺失、压缩后不完整或确认版本已变化时，再获取需要的内容。上游核心指南从 `agent-browser skills get core` 获取；`--version` 只在版本未知或有更新迹象时检查。这些是按需查询，不是每轮必跑的准备命令。
 
 ## 第一次连接 Chrome
 

@@ -307,10 +307,14 @@ export function formatSkillsSection(skills: readonly Skill[]): string {
   return [
     "## Skills",
     "",
-    "These skills carry task-specific instructions. When a task matches one of the",
-    "descriptions below, call the `skill` tool with that name to load its full",
-    "instructions before proceeding. Paths inside a skill resolve against the",
-    "directory reported when it loads.",
+    "These skills carry task-specific instructions. Use a matching skill's full instructions",
+    "before acting. Reuse complete, still-applicable instructions already in the current",
+    "context; do not reload them just because a new message or task begins. Call `skill`",
+    "only when needed instructions are missing or incomplete, for example after compaction.",
+    "A description or vague recollection does not replace the instructions. If there is",
+    "concrete evidence that the instructions changed, read the updated source: `skill`",
+    "returns the runtime's loaded snapshot, not a fresh read from disk.",
+    "Paths inside a skill resolve against the directory reported when it loads.",
     "",
     "<available_skills>",
     ...visible.flatMap((skill) => [

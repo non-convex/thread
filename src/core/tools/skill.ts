@@ -44,7 +44,7 @@ export function createSkillTool(skills: () => readonly Skill[]): AgentTool<{ nam
   return {
     name: "skill",
     description:
-      "Load the full instructions of a skill listed in the system prompt. Call this when the task matches a skill's description, before doing the work.",
+      "Load a listed skill's full instructions from the runtime's loaded snapshot. Use when a matching task needs instructions missing or incomplete in the current context, including after compaction. Reuse complete, still-applicable instructions already in context instead of reloading for each message or task. For known source changes, read the updated file; this tool does not refresh from disk.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name exactly as listed in available_skills." }),
     }),
