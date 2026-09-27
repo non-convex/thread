@@ -1,5 +1,6 @@
 import type { CacheRetention, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { AttributionConfig, DreamerConfig, WorkerConfig, ThreadConfig } from "./thread-config.js";
+import { parseMcpServers } from "../../core/mcp/client.js";
 import type { CustomModelConfig, CustomProviderConfig, ModelOverrideConfig, ModelSelectionConfig } from "../../core/config/model-config.js";
 
 export function object(value: unknown, label: string): Record<string, unknown> {
@@ -268,6 +269,7 @@ export function parseConfig(value: unknown): { config: ThreadConfig; agentDiagno
       ...(retention ? { cacheRetention: retention } : {}),
       ...(attribution ? { attribution } : {}),
       ...(search ? { search } : {}),
+      ...(input.mcpServers === undefined ? {} : { mcpServers: parseMcpServers(input.mcpServers) }),
       agents,
       modelOverrides,
       providers,

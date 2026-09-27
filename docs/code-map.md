@@ -40,6 +40,8 @@ Tool `execution` has an `effect` and resource claims, but no `execution.mode` or
 
 The runtime protects its actual state directory from built-in file writes. The coding app adds all default project state, credentials and the credential lock to `protectedWritePaths`; hosts can protect more paths explicitly. Preparation and actual writes recheck this boundary, including after waiting for another writer. These checks do not constrain arbitrary shell or custom-tool I/O.
 
+Optional MCP support lives in `core/mcp/`: `client.ts` owns SDK connections and tool discovery, and `tools.ts` adapts remote tools and bounded results to `AgentTool`. The runtime snapshots the MCP catalog at each main-agent turn boundary and owns cancellation and shutdown; Workers and Dreamer do not inherit these tools. User configuration and `/mcp` management stay in the app. Remote file effects bypass the built-in write/checkpoint boundary. See [MCP integration](./mcp.md).
+
 `tools/results.ts` contains the common result constructors and output bounds. Small and streamed file reads share one page collector. Grep's content and file-list modes share pagination metadata and notices. Web response limits, HTML conversion and character pagination live together in `tools/web-content.ts`.
 
 `tools/view-image.ts` reads bounded local image files through the same file-read authorization boundary. `images/prepare.ts` validates, resizes and encodes pixels for both that tool and TUI attachments. Tool results keep display text separate from optional image blocks; the executor places the pixels in model messages and durable history, without duplicating them in presentation metadata.

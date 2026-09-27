@@ -315,6 +315,7 @@ src/ui/                 plain 与全屏终端界面
 - [把剪贴板里的图交给模型](./docs/tui-image-paste.md)
 - [给模型用的 grep](./docs/grep.md)
 - [让 Thread 使用本机浏览器](./docs/browser.md)
+- [接入 MCP 工具](./docs/mcp.md)
 
 ## 使用的外部项目
 

@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { CacheRetention, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getThreadHome } from "../../core/config/home.js";
+import { resolveConfigValue } from "../../core/config/config-value.js";
+import type { McpServers } from "../../core/mcp/client.js";
 import type { CustomProviderConfig, ModelOverrideConfig, ModelSelectionConfig } from "../../core/config/model-config.js";
 import { object, parseConfig, parsePiModelOverrides, parseProvider, thinkingLevel } from "./config-parser.js";
 
@@ -34,6 +36,7 @@ export interface AttributionConfig {
 
 export interface ThreadConfig {
   search?: { semantic: boolean };
+  mcpServers?: McpServers;
   model?: ModelSelectionConfig;
   agents: {
     worker?: WorkerConfig;
@@ -158,7 +161,24 @@ export async function loadThreadConfig(configuredPath?: string): Promise<LoadedT
     throw new Error(`Cannot parse Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    return { path: configPath, source: "thread", ...parseConfig(parsed) };
+    const loaded = parseConfig(parsed);
+    // Only user configuration resolves environment references; the embedded runtime receives literal values.
+    for (const [name, server] of Object.entries(loaded.config.mcpServers ?? {})) {
+      if (server.enabled === false) continue;
+      const field = server.transport === "stdio" ? "env" : "headers";
+      const values = server.transport === "stdio" ? server.env : server.headers;
+      if (!values) continue;
+      const resolved: Record<string, string> = {};
+      for (const [key, value] of Object.entries(values)) {
+        // MCP configuration supports environment substitution, not shell credential commands.
+        const result = value.startsWith("!") ? value : await resolveConfigValue(value, async (name) => process.env[name]);
+        if (result === undefined) throw new Error(`Missing environment variable in mcpServers.${name}.${field}.${key}`);
+        resolved[key] = result;
+      }
+      if (server.transport === "stdio") server.env = resolved;
+      else server.headers = resolved;
+    }
+    return { path: configPath, source: "thread", ...loaded };
   } catch (error) {
     throw new Error(`Invalid Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }

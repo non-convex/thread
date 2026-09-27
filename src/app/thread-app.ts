@@ -13,6 +13,7 @@ import { agentCommand } from "./commands/agents.js";
 import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.js";
 import { routeThreadCommand } from "./commands/registry.js";
 import { scheduleCommand } from "./commands/schedule.js";
+import { mcpCommand } from "./commands/mcp.js";
 import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
@@ -107,6 +108,7 @@ export class ThreadApp {
       thread: (input, options) => this.routeThreadCommand(input, options),
       goal: (action, options) => this.routeGoal(action, options),
       schedule: (args, options) => this.runCommand("schedule", options, () => scheduleCommand(args, this.commandContext(options.signal))),
+      mcp: (args, options) => this.runCommand("mcp", options, () => mcpCommand(args, runtime, options.signal)),
       turn: async (input, options) => {
         if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
         if (options.images?.length && runtime.model.acceptsImages !== true) {

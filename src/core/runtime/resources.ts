@@ -11,6 +11,7 @@ import { SessionTreeService } from "../session-tree/service.js";
 import { loadSkills, type LoadedSkills } from "../skills/loader.js";
 import { canonicalTarget } from "../tools/path-safety.js";
 import type { RuntimeOptionsSnapshot } from "./options.js";
+import { McpClients } from "../mcp/client.js";
 
 export interface RuntimeResources {
   project: Project;
@@ -21,6 +22,7 @@ export interface RuntimeResources {
   recall: SessionRecallService | undefined;
   taskRepository: AgentTaskRepository;
   memory: GlobalMemorySnapshots | undefined;
+  mcp: McpClients | undefined;
   protectedWritePaths: readonly string[];
 }
 
@@ -36,6 +38,7 @@ export async function openRuntimeResources(options: RuntimeOptionsSnapshot): Pro
   let repository: SessionTreeRepository | undefined;
   let taskRepository: AgentTaskRepository | undefined;
   let recall: SessionRecallService | undefined;
+  let mcp: McpClients | undefined;
   try {
     repository = await SessionTreeRepository.open(project);
     const tree = new SessionTreeService(repository);
@@ -49,9 +52,13 @@ export async function openRuntimeResources(options: RuntimeOptionsSnapshot): Pro
     await fileHistory.resumePendingRewind();
     recall = options.search ? new SessionRecallService(tree, options.search) : undefined;
     taskRepository = await AgentTaskRepository.open(project);
-    return { project, repository, tree, fileHistory, skills, recall, taskRepository, memory, protectedWritePaths };
+    if (options.mcpServers && Object.keys(options.mcpServers).length) {
+      mcp = new McpClients(project.rootPath, options.mcpServers);
+      await mcp.open();
+    }
+    return { project, repository, tree, fileHistory, skills, recall, taskRepository, memory, mcp, protectedWritePaths };
   } catch (error) {
-    await Promise.allSettled([recall?.close(), taskRepository?.close(), repository?.close()]);
+    await Promise.allSettled([mcp?.close(), recall?.close(), taskRepository?.close(), repository?.close()]);
     throw error;
   }
 }

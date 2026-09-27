@@ -15,6 +15,7 @@ import { validateToolExecutionPolicy } from "../tools/execution.js";
 import type { AgentTool } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
 import type { HostToolPolicy } from "./policy.js";
+import { parseMcpServers, type McpServers } from "../mcp/client.js";
 
 export interface ThreadRuntimeOptions {
   rootPath: string;
@@ -30,6 +31,8 @@ export interface ThreadRuntimeOptions {
   sharedInstructions?: string;
   /** Selected basic tools and host tools. Omitted: no basic tools. */
   tools?: readonly (BuiltinToolName | AgentTool)[];
+  /** Explicitly trusted MCP servers. Runtime owns these clients; only the main agent receives their tools. */
+  mcpServers?: McpServers;
   cacheRetention?: CacheRetention;
   /** Only declared paths are scanned; loaded skills can also be supplied directly. */
   skills?: SkillPaths | LoadedSkills;
@@ -135,6 +138,7 @@ export function snapshotRuntimeOptions(options: ThreadRuntimeOptions): RuntimeOp
       const tool = typeof selection === "string" ? builtinTool(selection) : selection;
       return snapshotTool(tool);
     }),
+    ...(options.mcpServers ? { mcpServers: parseMcpServers(options.mcpServers) } : {}),
     ...(options.skills ? { skills: structuredClone(options.skills) } : {}),
     ...(options.search ? { search: { ...options.search } } : {}),
     ...(options.writableExternalPaths ? { writableExternalPaths: options.writableExternalPaths.map((item) => path.resolve(item)) } : {}),

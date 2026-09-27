@@ -324,6 +324,7 @@ Further reading:
 - [Pasting clipboard images into the TUI](./docs/tui-image-paste.md) (Chinese)
 - [Designing grep output for an agent's context window](./docs/grep.md) (Chinese)
 - [Local browser access with agent-browser](./docs/browser.md) (Chinese)
+- [Connecting MCP tools](./docs/mcp.md) (Chinese)
 
 ## External projects
 

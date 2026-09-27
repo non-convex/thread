@@ -32,6 +32,7 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
     { name: "new", description: "Create an empty Session from the project Root" },
     { name: "session", description: "List or resume root Sessions" },
     { name: "schedule", description: "Browse schedules and open their Sessions" },
+    { name: "mcp", description: "Inspect MCP servers; reconnect a server while idle" },
     ...(hasSkills ? [{ name: "skill", description: "List or invoke an installed skill" }] : []),
     { name: "thread", description: "Session Tree status, history, Sessions, and search" },
     { name: "rewind", description: fileCheckpoints ? "Undo built-in file edits and rewind the conversation" : "Rewind the conversation; keep workspace files" },

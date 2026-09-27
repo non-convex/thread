@@ -138,6 +138,14 @@ await runtime.clearGoal(sessionId);
 
 `readGoal()` 返回独立快照或 `undefined`。`goal_changed` 事件携带 `sessionId` 和目标快照，清除时为 `null`；状态包括 `active`、`paused`、`blocked`、`completed`，可选 `reason` 说明完成依据或停止原因。宿主用现有实时事件显示各轮内容，并在每次 turn 提交后刷新历史，不能只在整个目标结束时保存最后一轮的界面内容。
 
+## 接入 MCP 工具
+
+`mcpServers` 接受显式配置的 stdio 或 Streamable HTTP 服务器，省略时不连接任何服务。core 接收字面值，不读取用户配置或展开环境变量。每个 runtime 持有自己的客户端，只将发现的工具交给主 agent；Worker 和 Dreamer 不自动继承。调用复用现有参数校验、`toolPolicy`、取消和会话记录。
+
+`runtime.mcpServers` 返回独立的状态快照，包含服务器 ID、transport、状态、工具名和有限诊断，不暴露凭证配置或 SDK 客户端。`await runtime.reconnectMcpServer(name, { signal? })` 在空闲时关闭旧客户端并重新连接；服务不可用时更新失败状态，取消和错误的服务器 ID 则拒绝操作。连接失败不阻止其他工具使用，关闭 runtime 时会收尾调用并关闭自己持有的客户端。
+
+工具目录在每轮入场前刷新，正在执行的轮次保留自己的定义。MCP 工具使用保留前缀 `mcp__` 和保守的 `process` effect，不依据服务器的只读声明提前执行。其文件修改不经过内置文件写入边界，也不自动支持 rewind。配置、结果限制、协议协商和首版范围见 [MCP 接入](./mcp.md)。
+
 ## 选择工具与加载 Skill
 
 `tools` 接受内置工具名称与 `AgentTool` 对象混合配置。内置名称为 `read`、`view_image`、`list`、`grep`、`write`、`edit`、`bash`、`websearch`、`webfetch`；没有声明的基础工具不会自动启用。未知名称或重复名称会报错，不覆盖已有工具。工具保留现有运行要求，例如 `grep` 需要 `rg`，网络工具使用现有的网络访问与搜索提供方配置。

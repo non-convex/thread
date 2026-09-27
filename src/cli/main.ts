@@ -107,6 +107,7 @@ Inside the prompt use /new to create an empty root Session, /session to resume o
 /model to select the main model, /agent to configure background agents, /clear, /compact,
 /goal <objective> to work across turns (status, pause, resume, clear),
 /schedule to view or manage timed tasks (list, open, pause, resume, delete),
+/mcp to inspect configured MCP servers, /mcp reconnect <server> to reconnect while idle,
 /thread for Session Tree history/search, /rewind <turn-id>, or /exit.
 Ask the agent to create scheduled tasks; they run only while Thread is open.
 Use /schedule or /session to view a task's Session, including while it is running.
@@ -242,6 +243,7 @@ async function main(): Promise<void> {
   let stateSave: Promise<void> = Promise.resolve();
   const app = await ThreadApp.open({
     rootPath: project.rootPath,
+    ...(loadedConfig?.config.mcpServers ? { mcpServers: loadedConfig.config.mcpServers } : {}),
     ...(loadedConfig?.config.search ? { search: loadedConfig.config.search } : {}),
     ...(loadedConfig?.config.attribution ? { commitAttribution: loadedConfig.config.attribution.commit } : {}),
     ...(model ? { model } : {}),
@@ -287,6 +289,9 @@ async function main(): Promise<void> {
   });
   let closeCacheDiagnostics: (() => Promise<void>) | undefined;
   try {
+    for (const server of app.runtime.mcpServers) {
+      if (server.status === "failed") errorOutput.write(`MCP ${server.name}: ${server.error ?? "connection failed"}. Use /mcp for details.\n`);
+    }
     if (options.cacheDiagnosticsPath) {
       const logPath = resolve(options.cacheDiagnosticsPath);
       closeCacheDiagnostics = await openCacheDiagnostics(app.runtime, logPath);
