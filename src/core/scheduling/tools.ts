@@ -83,20 +83,25 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     },
   };
 
-  const update: AgentTool<{ id: string; prompt: string }> = {
+  const update: AgentTool<{ id: string; prompt?: string; schedule?: ScheduleSpec }> = {
     name: "update_schedule",
-    description: "Replace a task's follow-up prompt without recreating its Session or changing its schedule, next wakeup, or enabled state. " +
-      "Use list_schedules to find the id. Keep prompt to a brief wakeup cue; rely on the Session's retained context. " +
-      "Initial instructions and already-prepared or running turns are unchanged. Updating does not resume a paused or completed task.",
+    description: "Update a task's follow-up prompt and/or time rule while preserving its id, bound Session, history, initial instructions, and enabled state. " +
+      "Supply prompt, schedule, or both; use list_schedules to find the id. Keep prompt brief and rely on retained Session context. " +
+      "Prompt-only updates preserve timing. Providing schedule requires a future occurrence and recalculates the next follow-up after the update; every stays anchored to task creation. " +
+      "A pending initial message stays due. Already-running turns are unaffected. Updating does not resume a paused or completed task; use resume_schedule afterward if needed.",
     parameters: Type.Object({
       id: Type.String({ minLength: 1, description: "Task id or unique prefix from list_schedules." }),
-      prompt: Type.String({ minLength: 1, maxLength: 32_000, description: "Replacement brief cue for future wakeups, e.g. 'Wake up and continue.' Do not repeat the task setup." }),
+      prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Replacement brief cue for future wakeups, e.g. 'Wake up and continue.' Omit to keep the current cue." })),
+      schedule: Type.Optional(scheduleSchema),
     }),
     execution: mutation,
     async execute(args, context) {
       try {
         requireMain(context);
-        return ok(JSON.stringify(await host.updateSchedule(args.id, { prompt: args.prompt }, { signal: context.signal }), null, 2));
+        return ok(JSON.stringify(await host.updateSchedule(args.id, {
+          ...(args.prompt !== undefined ? { prompt: args.prompt } : {}),
+          ...(args.schedule !== undefined ? { schedule: args.schedule } : {}),
+        }, { signal: context.signal }), null, 2));
       } catch (error) { return fail(error); }
     },
   };
@@ -116,7 +121,7 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
 
   const resume: AgentTool<{ id: string }> = {
     name: "resume_schedule",
-    description: "Resume a paused task. A pending initial message becomes due immediately. After initialization, recurring tasks restart at their next future occurrence; an unconsumed overdue one-shot follow-up runs once. A consumed one-shot cannot be resumed.",
+    description: "Resume a paused task. A pending initial message becomes due immediately. After initialization, recurring tasks restart at their next future occurrence; an unconsumed overdue one-shot follow-up runs once. A consumed one-shot cannot be resumed until its time rule is updated.",
     parameters: Type.Object({ id: Type.String() }),
     execution: mutation,
     async execute(args, context) {

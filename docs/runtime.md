@@ -64,19 +64,22 @@ CLI 在启动模型前先按 `rootPath` 解析项目身份，再读取该项目�
 
 嵌入宿主仍通过 `state` 和 `onStateChange` 自行管理偏好持久化。应用入口导出的 `getThreadStatePath(project)` 根据显式传入的 `project.statePath` 返回偏好文件位置；`loadThreadState(statePath)` 和 `saveThreadState(state, statePath)` 均要求明确提供文件路径，不再默认访问全局文件。
 
-定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一个独立会话，指定则固定到已有会话；用 `listSchedules()`、`updateSchedule(id, { prompt }, { signal? })`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 可用 `update_schedule({ id, prompt })` 修改后续提示词；`/schedule` 没有编辑子命令。
+定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一个独立会话，指定则固定到已有会话；用 `listSchedules()`、`updateSchedule(id, { prompt?, schedule? }, { signal? })`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 可用 `update_schedule` 修改后续提示词、唤醒规则或同时修改两者，至少提供一个字段；`/schedule` 没有编辑子命令。
 
 创建时立即将 `initialPrompt` 置为待执行，runtime 空闲后发送；如果正在执行创建任务的那轮对话，会先等当前轮次结束，不等下一个定时时刻。消息在执行开始时写入会话历史。之后按 `schedule` 发送 `prompt`，包括 `at` 指定时间的那次后续消息。省略 `initialPrompt` 时，初始化也使用 `prompt`；如果实际动作必须等到未来，应明确提供仅做准备的初始指令。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。
 
-例如，已有任务完成准备工作后，只需替换简短的唤醒提示，不必重建任务或重复初始指令：
+例如，把已有任务的唤醒间隔改为 50 分钟，同时缩短提示，不必重建任务或重复初始指令；也可省略其中一个字段：
 
 ```ts
-await runtime.updateSchedule(task.id, { prompt: "醒来，继续。" });
+await runtime.updateSchedule(task.id, {
+  prompt: "醒来，继续。",
+  schedule: { kind: "every", minutes: 50 },
+});
 ```
 
-更新仅改变后续 `prompt`，保留任务 ID、绑定的 Session 与历史、`initialPrompt`、时间规则、`nextRunAt`、启用/暂停状态以及最近运行/错误记录；不会重新初始化、恢复或立即执行任务。暂停或已完成的任务也能更新，但不会因此重新激活。
+更新保留任务 ID、绑定的 Session 与历史、`initialPrompt`、创建时间、启用状态以及最近运行/错误记录。只改 `prompt` 时，时间规则和 `nextRunAt` 不变。提供 `schedule` 时必须存在未来执行时刻；已开始初始化的任务按新规则计算更新之后的下一次唤醒，替换旧的待执行后续唤醒，不补发旧规则的积压。`every` 仍以原创建时间为基准，例如 10:00 创建、10:25 改为每 50 分钟，下一次是 10:50。首次消息尚未开始时，原初始化待执行时间不变，之后才使用新规则；更新不会再次发送初始化消息。
 
-执行中可更新元数据；已经准备好消息或正在执行的唤醒仍使用原文，之后的唤醒使用新提示。提示词宜简短，依靠 Session 上下文延续工作。
+暂停或已完成的任务不会因为更新而重新启用。已完成的一次性任务可以先改成有未来时刻的新规则，再显式恢复。执行中的轮次不会被中断；已经准备好的消息保留原文，但若时间规则更新使尚未入场的后续唤醒失效，会在入场前取消旧唤醒并等待新时间。提示词宜简短，依靠 Session 上下文延续工作。
 
 `ThreadApp` 持有公开的 `runtime`，负责斜杠命令、菜单及选中的会话。执行、查询、配置和事件通过 `app.runtime` 访问，没有继承或一组重复的转发方法。应用扩展同样经过 runtime 的工具注册和执行边界；命令通过 `context.runtime` 查询历史，使用 `context.openSession()` 选择会话，不再直接访问可写的 Session Tree。
 

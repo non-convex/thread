@@ -15,10 +15,12 @@ export interface CreateScheduleInput {
   sessionId?: string;
 }
 
-/** Update future wakeup text without changing the task's identity or scheduling state. */
+/** Update future wakeups without changing identity or enabled state. Supply at least one field. */
 export interface UpdateScheduleInput {
-  /** Brief wakeup cue; initial instructions and already-prepared turns remain unchanged. */
-  prompt: string;
+  /** Brief wakeup cue; initial instructions and already-prepared messages remain unchanged. */
+  prompt?: string;
+  /** Recompute the next follow-up after the update; every stays anchored to task creation. */
+  schedule?: ScheduleSpec;
 }
 
 export interface ScheduledTask {

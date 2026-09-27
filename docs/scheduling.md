@@ -21,11 +21,24 @@ To continue **this conversation** instead, ask the main agent to schedule with `
 
 A dedicated Session inherits the application's configured model instructions and tools and shares the project workspace; it does **not** inherit the creator's chat history or provide a sandbox. A background wakeup does not switch the coding app's selected Session.
 
-To replace the follow-up cue, the agent can call `update_schedule({ id, prompt })`. The `id` accepts an existing task ID or a unique prefix; `prompt` must be nonempty and at most 32,000 characters. Keep it brief and rely on the bound Session's context instead of repeating the setup.
+To update future wakeups, the agent can call `update_schedule({ id, prompt?, schedule? })`. Supply at least one of `prompt` or `schedule`; both can change in the same update. The `id` accepts an existing task ID or a unique prefix. A supplied `prompt` must be nonempty and at most 32,000 characters; keep it brief and rely on the bound Session's context instead of repeating the setup.
 
-The update changes only `prompt`: the task ID, bound Session and history, `initialPrompt`, time rule, `nextRunAt`, enabled/paused state, and last run/error remain unchanged. It does not initialize or recreate the task, resume it, or trigger an immediate run. Paused or completed tasks can be updated without reactivation.
+For example, change an hourly task to every 50 minutes without losing its Session:
 
-Updates are allowed during execution; a wakeup whose message has already been prepared or whose turn has started keeps its old text, while subsequent wakeups use the new cue.
+```json
+{
+  "id": "<existing-task-id>",
+  "schedule": { "kind": "every", "minutes": 50 }
+}
+```
+
+Updates preserve the task ID, bound Session and history, `initialPrompt`, creation time, enabled state, and last run/error. A prompt-only update also preserves the time rule and `nextRunAt`.
+
+Providing `schedule` requires a future occurrence, using the same validation as creation. Once initialization has started, the update replaces `nextRunAt` with the new rule's next occurrence strictly after the update. The previous pending follow-up is replaced, not replayed. `every` stays anchored to the original creation time: if a task was created at 10:00 and changed to every 50 minutes at 10:25, its next follow-up is at 10:50, not 11:15. If initialization has not started, its existing pending slot remains unchanged; the new rule applies to the follow-ups. Updating never queues another initial message.
+
+Paused or completed tasks remain disabled. To use a completed one-shot again, give it a new future time rule and then resume it. Merely changing its prompt does not make its consumed occurrence available again.
+
+Updates are allowed during execution. Already-running turns are not interrupted, and messages already prepared retain their text. If a time-rule update replaces a follow-up that was prepared but not yet admitted, admission rejects the obsolete occurrence; the scheduler uses the new time instead.
 
 You can open the bound Session while the task is running, through `/schedule` or the regular `/session` picker. The TUI shows its history and current text, thinking, tools, and workers. It keeps receiving the running turn's events while you view another Session, so switching back retains the live content already received. Viewing a Session does not interrupt or redirect the running agent; starting another agent turn still waits for the project to become idle.
 
@@ -35,7 +48,7 @@ Choose one follow-up time rule: `at` is a future ISO date-time with an explicit 
 
 All execution remains serial across the project. A delayed initial message remains pending until execution becomes available. After initialization, recurring tasks advance to the next future occurrence without replaying intervals missed before initialization; an overdue `at` follow-up stays due and runs next. Later missed repeated occurrences are merged into one pending wakeup, run when execution becomes available, then advanced to a future time rather than replayed one by one. A one-time task that becomes overdue while Thread is closed runs once after reopening.
 
-Plans persist across restarts, but **nothing fires while the Thread process is stopped**; there is no daemon. Pausing keeps the plan. If initialization has not started, resuming makes it due immediately. Otherwise, resuming a recurring task recalculates its next future occurrence, rather than replaying paused intervals. An `at` task can resume after initialization until its scheduled follow-up has been admitted; an overdue, unconsumed follow-up runs once. Pausing or deleting does not stop a turn already running—use Esc or `interrupt(sessionId)` to cancel it. Deleting a task leaves its Session and turn history intact.
+Plans persist across restarts, but **nothing fires while the Thread process is stopped**; there is no daemon. Pausing keeps the plan. If initialization has not started, resuming makes it due immediately. Otherwise, resuming a recurring task recalculates its next future occurrence, rather than replaying paused intervals. An `at` task can resume after initialization until its scheduled follow-up has been admitted; an overdue, unconsumed follow-up runs once. After that occurrence is consumed, resuming requires a time-rule update with a future occurrence. Pausing or deleting does not stop a turn already running—use Esc or `interrupt(sessionId)` to cancel it. Deleting a task leaves its Session and turn history intact.
 
 A wakeup's user message, its consumed occurrence, and `Turn.scheduled` provenance (`scheduleId`, `scheduledAt`, `phase`) are recorded together when a turn starts. Rewind does not undo plans or replay consumed wakeups. After a crash, unfinished turns are sealed as interrupted under normal recovery rules, not retried for side effects. Scheduling does not guarantee exactly-once **completion**.
 
@@ -58,8 +71,11 @@ try {
     // Omit sessionId for one new dedicated Session; pass an existing ID to bind it instead.
   });
   console.log(task.id, task.sessionId);
-  // Replace future follow-up text; the preparation and Session context remain intact.
-  await runtime.updateSchedule(task.id, { prompt: "Wake up and continue." });
+  // Replace text and timing together; the preparation and Session context remain intact.
+  await runtime.updateSchedule(task.id, {
+    prompt: "Wake up and continue.",
+    schedule: { kind: "every", minutes: 50 },
+  });
   await new Promise<void>((resolve) => process.once("SIGINT", () => resolve()));
 } finally {
   clearInterval(keepAlive);
@@ -67,4 +83,4 @@ try {
 }
 ```
 
-Use `runtime.listSchedules()`, `runtime.updateSchedule(id, { prompt }, { signal? })`, `runtime.setScheduleEnabled(id, false | true)`, and `runtime.deleteSchedule(id)` for management. `UpdateScheduleInput` requires `prompt: string`; the optional third argument accepts an `AbortSignal` as `signal`. `runtime.schedulingEnabled` reports availability; `runtime.busy` and `runtime.activeSessionId` report execution state, with the latter naming only the current execution target, not the UI-selected Session.
+Use `runtime.listSchedules()`, `runtime.updateSchedule(id, { prompt?, schedule? }, { signal? })`, `runtime.setScheduleEnabled(id, false | true)`, and `runtime.deleteSchedule(id)` for management. `UpdateScheduleInput` accepts `prompt?: string` and `schedule?: ScheduleSpec`; at least one must be supplied, and an empty update is rejected. The optional third argument accepts an `AbortSignal` as `signal`. `runtime.schedulingEnabled` reports availability; `runtime.busy` and `runtime.activeSessionId` report execution state, with the latter naming only the current execution target, not the UI-selected Session.

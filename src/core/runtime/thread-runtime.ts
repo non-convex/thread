@@ -271,7 +271,7 @@ export class ThreadRuntime {
     }).sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  /** Replace the follow-up cue without rescheduling or changing a prepared/running turn. */
+  /** Update the cue and/or future timing while retaining the Session and enabled state. */
   updateSchedule(id: string, input: UpdateScheduleInput, options: { signal?: AbortSignal } = {}): Promise<ScheduledTask> {
     const snapshot = structuredClone(input);
     return this.updateState((signal) => {

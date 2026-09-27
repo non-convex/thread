@@ -165,14 +165,24 @@ export class SessionTreeService {
   async updateSchedule(id: string, input: UpdateScheduleInput, signal?: AbortSignal): Promise<ScheduledTask> {
     signal?.throwIfAborted();
     const prompt = input.prompt;
-    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 32_000) {
+    const schedule = input.schedule === undefined ? undefined : normalizeSchedule(input.schedule);
+    if (prompt === undefined && schedule === undefined) throw new Error("Provide at least one of prompt or schedule");
+    if (prompt !== undefined && (typeof prompt !== "string" || !prompt.trim() || prompt.length > 32_000)) {
       throw new Error("prompt must contain between 1 and 32000 characters and cannot be blank");
     }
     let task: ScheduledTask;
-    await this.repository.append(() => {
+    await this.repository.append((_sequence, now) => {
       signal?.throwIfAborted();
       const current = this.resolveSchedule(id);
-      task = { ...current, prompt };
+      task = { ...current, ...(prompt !== undefined ? { prompt } : {}) };
+      if (schedule !== undefined) {
+        const nextRunAt = nextScheduleTime(schedule, now, current.createdAt);
+        if (nextRunAt === null) throw new Error("Schedule must have a future occurrence");
+        task.schedule = schedule;
+        // An unadmitted initial message keeps its pending slot. Otherwise replacing
+        // nextRunAt also invalidates an old follow-up still waiting for admission.
+        if (current.lastTurnId) task.nextRunAt = nextRunAt;
+      }
       this.projection.validateScheduleChange(task);
       return { type: "schedule_changed", task };
     }, true);
@@ -191,7 +201,7 @@ export class SessionTreeService {
         if (!current.lastTurnId) {
           task.nextRunAt = current.createdAt;
         } else if (current.schedule.kind === "at") {
-          if (current.nextRunAt === null) throw new Error("This one-shot schedule already ran; create a new schedule to run again");
+          if (current.nextRunAt === null) throw new Error("This one-shot schedule already ran; update its time rule before resuming");
           task.nextRunAt = Date.parse(current.schedule.at);
         } else {
           task.nextRunAt = nextScheduleTime(current.schedule, Date.now(), current.createdAt);
