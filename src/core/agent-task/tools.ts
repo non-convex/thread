@@ -26,7 +26,7 @@ const scopeSchema = Type.Object({
 const specSchema = Type.Object({
   title: Type.String(),
   objective: Type.String({ description: "The concrete task to implement, investigate, search, review, or otherwise complete." }),
-  guidance: Type.Array(Type.String(), { minItems: 1, description: "Relevant background, known files or sources, agreed interfaces and decisions, current user constraints, and the expected result. The worker cannot see the main conversation." }),
+  guidance: Type.Array(Type.String(), { minItems: 1, description: "A self-contained brief: relevant background, known files or sources, prior findings, user constraints (including testing limits), required operating instructions, and the expected result. For implementation, include the chosen design while leaving local details to the worker; for investigation, directions are suggestions. For required Skills, provide absolute SKILL.md paths and require reading them before related work. The worker does not inherit the main conversation or loaded Skills." }),
   acceptanceCriteria: Type.Array(Type.String(), { minItems: 1, description: "Conditions for a satisfactory result. For investigations, specify what must be answered and what evidence is sufficient." }),
   tools: Type.Array(Type.Union(BUILTIN_TOOL_NAMES.map((name) => Type.Literal(name))), {
     uniqueItems: true,
