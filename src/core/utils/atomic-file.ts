@@ -12,6 +12,8 @@ async function copyWindowsAccess(source: string, temporary: string, signal?: Abo
   // ownership or audit privileges. Do this before writing sensitive content.
   await runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", [
     "$ErrorActionPreference = 'Stop'",
+    // A host's PSModulePath can contain PowerShell 7 modules that Windows PowerShell cannot load.
+    "Import-Module \"$PSHOME\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1\"",
     "if (Test-Path -LiteralPath $env:THREAD_ATOMIC_SOURCE) {",
     "  $section = [System.Security.AccessControl.AccessControlSections]::Access",
     "  $sourceAcl = Get-Acl -LiteralPath $env:THREAD_ATOMIC_SOURCE",
