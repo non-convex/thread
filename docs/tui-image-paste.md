@@ -237,7 +237,7 @@ Session Tree 里的原图没有改变。以后再换回视觉模型，原图仍�
 
 判断命令时不能只看第一个字符是不是 `/`。Thread 允许 `/usr/bin` 这种路径进入模型。只有第一个 token 是单段 slash 名字时，才按命令处理。
 
-这和 `InputRouter` 的规则保持一致。
+这和 `parseInput` 的规则保持一致。
 
 ---
 

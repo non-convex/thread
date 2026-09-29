@@ -9,8 +9,7 @@ import { messagesForModel } from "../../session-tree/user-content.js";
 import { projectedContextMessages, type BuiltContext } from "../builder.js";
 import { contextBudget } from "../budget.js";
 import { generateHistorySummary } from "./history-summary.js";
-import { minimumUsefulSavings } from "./policy.js";
-import { prepareCompaction } from "./prepare.js";
+import { minimumUsefulSavings, prepareCompaction } from "./plan.js";
 import { generateProgressSummary } from "./progress-summary.js";
 import { collectProgressBackground, historySummaryContext, progressSummaryContext, replacementContext } from "./slice.js";
 

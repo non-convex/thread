@@ -4,7 +4,6 @@ import { abortedToolResult, INTERRUPTED_TOOL_RESULT } from "../session-tree/conv
 import { safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import { ToolCallExecutor, type PreparedToolCall } from "./tool-call-executor.js";
-import { ToolScheduler } from "./tool-scheduler.js";
 import type { ToolLoopGuard } from "./tool-loop-guard.js";
 
 export interface IndexedToolCall {
@@ -12,17 +11,44 @@ export interface IndexedToolCall {
   call: ToolCall;
 }
 
+function waitForRelease(signal: AbortSignal, release: Promise<void>): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    release.then(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
+
+/** Launch state for one attempt; a model retry replaces it. */
+class LaunchState {
+  readonly controller = new AbortController();
+  readonly signal: AbortSignal;
+  readonly results = new Map<string, Promise<Message>>();
+  release!: () => void;
+  readonly released = new Promise<void>((resolve) => { this.release = resolve; });
+
+  constructor(parent: AbortSignal) {
+    this.signal = AbortSignal.any([parent, this.controller.signal]);
+  }
+}
+
 /**
  * Coordinates every tool call emitted by one assistant message.
  *
  * Stream callbacks enter through observe(). Preflight is serialized to preserve
  * extension and durable-log order; eligible read effects are then launched
- * immediately. The batch imposes no tool-to-tool ordering. reconcile() binds
- * the streamed facts to the final assistant message. Result messages are returned
- * in final assistant source order, with completion events emitted as tools finish.
+ * immediately. Other effects wait only for releaseResponse(), called after the
+ * complete assistant message is durable. The batch imposes no tool-to-tool
+ * ordering. reconcile() binds the streamed facts to the final assistant message.
+ * Result messages are returned in final assistant source order, with completion
+ * events emitted as tools finish.
  */
 export class ToolExecutionBatch {
-  private scheduler: ToolScheduler<Message>;
+  private launch: LaunchState;
   private readonly queued = new Map<string, { name: string; assistantEntryId: string }>();
   private readonly prepared = new Map<string, PreparedToolCall>();
   private prepareTail: Promise<void> = Promise.resolve();
@@ -39,7 +65,7 @@ export class ToolExecutionBatch {
       ui?: ExecutionEventSink;
     },
   ) {
-    this.scheduler = new ToolScheduler<Message>(input.signal);
+    this.launch = new LaunchState(input.signal);
   }
 
   observe(call: ToolCall, contentIndex: number): Promise<void> {
@@ -75,11 +101,15 @@ export class ToolExecutionBatch {
         signal: this.input.signal,
       });
       this.prepared.set(stableCall.id, prepared);
-      this.scheduler.schedule({
-        id: stableCall.id,
-        eager: prepared.policy.effect === "read",
-        run: (signal) => this.input.runner.execute(prepared, signal, this.input.ui),
+      const launch = this.launch;
+      const result = Promise.resolve().then(async () => {
+        if (prepared.policy.effect !== "read") await waitForRelease(launch.signal, launch.released);
+        launch.signal.throwIfAborted();
+        return this.input.runner.execute(prepared, launch.signal, this.input.ui);
       });
+      // A call may finish before ordered results are requested; never leave its rejection unhandled.
+      void result.catch(() => undefined);
+      launch.results.set(stableCall.id, result);
     });
     this.prepareTail = operation.then(() => undefined);
     return operation;
@@ -111,14 +141,14 @@ export class ToolExecutionBatch {
   /** Release write/process/interactive calls after the complete assistant message is durable. */
   releaseResponse(): void {
     if (!this.finalized) throw new Error("Tool batch must be reconciled before execution is released");
-    this.scheduler.releaseResponse();
+    this.launch.release();
   }
 
   async orderedResults(): Promise<Message[]> {
     if (!this.finalized) throw new Error("Tool batch has not been reconciled");
     const results: Message[] = [];
     for (const prepared of this.finalized) {
-      const result = this.scheduler.result(prepared.call.id);
+      const result = this.launch.results.get(prepared.call.id);
       if (!result) throw new Error(`Tool call was not scheduled: ${prepared.call.id}`);
       // Deliberately await in source order. The underlying tasks remain concurrent.
       results.push(await result);
@@ -139,7 +169,7 @@ export class ToolExecutionBatch {
     await this.prepareTail;
     await this.cancel(reason);
     this.input.assistantEntryId = nextAssistantEntryId;
-    this.scheduler = new ToolScheduler<Message>(this.input.signal);
+    this.launch = new LaunchState(this.input.signal);
     this.prepared.clear();
     this.finalized = undefined;
     this.lastStreamContentIndex = -1;
@@ -148,7 +178,10 @@ export class ToolExecutionBatch {
 
   async cancel(reason?: unknown): Promise<void> {
     await this.prepareTail.catch(() => undefined);
-    await this.scheduler.cancel(reason);
+    const launch = this.launch;
+    if (!launch.controller.signal.aborted) launch.controller.abort(reason ?? new Error("Tool batch cancelled"));
+    launch.release();
+    await Promise.allSettled(launch.results.values());
     for (const [id, call] of this.queued) {
       if (this.prepared.get(id)?.finished) continue;
       const content = reason instanceof Error && reason.name !== "AbortError" ? reason.message : INTERRUPTED_TOOL_RESULT;
@@ -170,7 +203,7 @@ export class ToolExecutionBatch {
       : INTERRUPTED_TOOL_RESULT;
     const results: Message[] = [];
     for (const prepared of this.finalized ?? [...this.prepared.values()]) {
-      const pending = this.scheduler.result(prepared.call.id);
+      const pending = this.launch.results.get(prepared.call.id);
       if (pending) {
         try {
           results.push(await pending);

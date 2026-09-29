@@ -11,7 +11,6 @@ import { loadThreadConfig } from "../app/config/thread-config.js";
 import { getThreadStatePath, loadThreadState, resolveMainModelSelection, saveThreadState } from "../app/config/thread-state.js";
 import { ProjectService } from "../core/project/service.js";
 import { runPlainCli } from "../ui/plain/runner.js";
-import type { TerminalMode } from "../ui/terminal/app.js";
 import { settlesWithin } from "../core/utils/async.js";
 import { loginProvider, logoutProvider, showAuthStatus } from "./subscription-auth.js";
 import { openCacheDiagnostics } from "./cache-diagnostics.js";
@@ -23,7 +22,7 @@ interface CliOptions {
   configPath: string | undefined;
   cacheDiagnosticsPath: string | undefined;
   extensions: string[];
-  tui: TerminalMode | "plain";
+  tui: "fullscreen" | "plain";
   help: boolean;
 }
 
@@ -303,7 +302,7 @@ async function main(): Promise<void> {
       });
     } else {
       if (!terminalModule) throw new Error("Interactive terminal module was not loaded");
-      await new terminalModule.ThreadTerminalApp(app, { mode: "fullscreen" }).run();
+      await new terminalModule.ThreadTerminalApp(app).run();
     }
   } finally {
     const appClosed = app.close().finally(async () => {

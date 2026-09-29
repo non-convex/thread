@@ -3,8 +3,10 @@ import type { ExecutionEventSink } from "../../runtime/events.js";
 
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../../agent/model-client.js";
-import { COMPACTION_HISTORY_MAX_OUTPUT_TOKENS } from "./policy.js";
 import { currentTimeAnchor, requestSummary } from "./summary-call.js";
+
+/** Requested output cap; includes headroom over the planned 4000-token document. */
+const HISTORY_MAX_OUTPUT_TOKENS = 6_000;
 
 const HISTORY_INSTRUCTION = [
   "Create a concise project-state document from the earlier conversation so a coding agent can continue the work.",
@@ -53,7 +55,7 @@ export function generateHistorySummary(options: {
     purpose: "history_summary",
     context: options.context,
     signal: options.signal,
-    maxTokens: Math.min(COMPACTION_HISTORY_MAX_OUTPUT_TOKENS, options.model.maxOutputTokens),
+    maxTokens: Math.min(HISTORY_MAX_OUTPUT_TOKENS, options.model.maxOutputTokens),
     label: "History summary",
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
   });

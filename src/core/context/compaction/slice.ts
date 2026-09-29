@@ -4,9 +4,11 @@ import type { Context, Message } from "@earendil-works/pi-ai";
 import type { BuiltContext } from "../builder.js";
 import type { RetainedTurn } from "../../session-tree/model.js";
 import { historySummaryInstruction } from "./history-summary.js";
-import { COMPACTION_PROGRESS_PRIOR_TURNS } from "./policy.js";
 import { PROGRESS_SUMMARY_SYSTEM_PROMPT } from "./progress-summary.js";
 import type { CompactableUnit } from "./units.js";
+
+/** Earlier user turns kept as progress-summary background, walking back from the cut. */
+const COMPACTION_PROGRESS_PRIOR_TURNS = 3;
 
 export interface ProgressBackground {
   /** Previous cumulative project-state document, included when the walk hits it. */

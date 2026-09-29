@@ -14,10 +14,11 @@ import { buildRewindItems, registerBuiltinCommands } from "./commands/builtins.j
 import { routeThreadCommand } from "./commands/registry.js";
 import { scheduleCommand } from "./commands/schedule.js";
 import { mcpCommand } from "./commands/mcp.js";
-import { CommandRegistry, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
+import { CommandRegistry, clearDisplayResult, ephemeral, viewResult, type CommandResult } from "./commands/types.js";
+import { parseCommandLine } from "./commands/parser.js";
 import { createExtensionAPI, type ExtensionAPI } from "./extensions/api.js";
 import { loadExtension, type ExtensionDisposer } from "./extensions/loader.js";
-import { InputRouter, parseInput, type GoalInputAction, type InputOptions, type InputResult, type RoutedInput } from "./input-router.js";
+import { parseInput, type GoalInputAction, type InputOptions, type InputResult, type RoutedInput } from "./input-router.js";
 import type { SessionGoal } from "../core/session-tree/model.js";
 import { loadProjectInstructions } from "./project-instructions.js";
 import { COMMUNICATION_STYLE_PROMPT, DEFAULT_COMMIT_ATTRIBUTION, DEFAULT_SYSTEM_PROMPT, formatCommitAttributionPrompt } from "./system-prompt.js";
@@ -45,28 +46,77 @@ export class ThreadApp {
   readonly commands = new CommandRegistry();
   readonly extensionApi: ExtensionAPI;
   selectedSessionId: string;
-  private readonly inputRouter: InputRouter;
+  private readonly skillPaths: readonly string[];
   private readonly inputOperations = new Map<Promise<InputResult>, AbortController>();
   private readonly extensionDisposers: ExtensionDisposer[] = [];
   private extensionLoading: Promise<void> = Promise.resolve();
   private appClosing: Promise<void> | undefined;
 
-  private constructor(readonly runtime: ThreadRuntime, catalog: ModelCatalog | undefined, skillPaths: readonly string[]) {
+  private constructor(readonly runtime: ThreadRuntime, private readonly catalog: ModelCatalog | undefined, skillPaths: readonly string[]) {
     this.selectedSessionId = runtime.initialSessionId;
     registerBuiltinCommands(this.commands);
     this.extensionApi = createExtensionAPI(runtime, this.commands);
-    const paths = skillPaths.map((directory) => path.resolve(runtime.rootPath, directory));
-    this.inputRouter = new InputRouter({
-      newSession: (options) => this.runCommand("new", options, async () => {
-        const session = await runtime.createSession(options);
-        this.selectedSessionId = session.id;
-        const warnings = runtime.agentProfileDiagnostics.filter((item) => item.profileId === "main").map((item) => `Warning: ${item.message}`);
-        return ephemeral([`Created empty Session ${session.id} from Root; workspace unchanged`, ...warnings].join("\n"), true);
-      }),
-      agent: async (args) => ({ kind: "command", result: agentCommand(runtime, catalog, args) }),
-      model: async (args) => ({ kind: "command", result: agentCommand(runtime, catalog, ["main", "model", ...args]) }),
-      skill: async (name, extra, options) => {
+    this.skillPaths = skillPaths.map((directory) => path.resolve(runtime.rootPath, directory));
+  }
+
+  private async route({ input, command, rest, goal }: RoutedInput, options: InputOptions): Promise<InputResult> {
+    const runtime = this.runtime;
+    const usage = () => { if (rest) throw new Error(`Usage: /${command}`); };
+    switch (command) {
+      case undefined:
+      case "exit":
+        if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
+        if (options.images?.length && runtime.model.acceptsImages !== true) {
+          throw new Error("Current model does not accept images. Use /model to pick a vision model.");
+        }
+        return { kind: "turn", result: await runtime.prompt(this.selectedSessionId, input, options) };
+      case "goal": return this.routeGoal(goal!, options);
+      case "schedule": return this.runCommand("schedule", options, () => scheduleCommand(parseCommandLine(rest), this.commandContext(options.signal)));
+      case "mcp": return this.runCommand("mcp", options, () => mcpCommand(parseCommandLine(rest), runtime, options.signal));
+      case "clear": usage(); return { kind: "command", result: clearDisplayResult() };
+      case "new":
+        usage();
+        return this.runCommand("new", options, async () => {
+          const session = await runtime.createSession(options);
+          this.selectedSessionId = session.id;
+          const warnings = runtime.agentProfileDiagnostics.filter((item) => item.profileId === "main").map((item) => `Warning: ${item.message}`);
+          return ephemeral([`Created empty Session ${session.id} from Root; workspace unchanged`, ...warnings].join("\n"), true);
+        });
+      case "compact":
+        usage();
+        if (!runtime.model) throw new Error("/compact requires a configured model");
+        return this.runCommand("compact", options, async () => {
+          const result = await runtime.compact(this.selectedSessionId, options);
+          return ephemeral(result.compacted
+            ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
+            : "Nothing can be compacted with a meaningful estimated token reduction", result.compacted);
+        });
+      case "agent": return { kind: "command", result: agentCommand(runtime, this.catalog, parseCommandLine(rest)) };
+      case "model": return { kind: "command", result: agentCommand(runtime, this.catalog, ["main", "model", ...parseCommandLine(rest)]) };
+      case "session": {
+        const args = parseCommandLine(rest);
+        return this.routeThreadCommand(args.length ? `/thread open ${args.join(" ")}` : "/thread sessions", options);
+      }
+      case "thread": return this.routeThreadCommand(input.trim(), options);
+      case "rewind": {
+        const args = parseCommandLine(rest);
+        if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
+        if (!args.length) {
+          const items = buildRewindItems(this.commandContext(options.signal));
+          return { kind: "command", result: items.length
+            ? viewResult(runtime.fileCheckpoints
+              ? "Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten."
+              : "Choose a current-path user message. Rewind changes the conversation context and leaves workspace files unchanged.", { type: "rewind", items })
+            : ephemeral("(no user turns on the current live path)") };
+        }
+        const candidate = await runtime.rewind(this.selectedSessionId, args[0]!, options);
+        return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
+      }
+      case "skill": {
+        const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(rest);
+        const name = match?.[1];
         if (!name) {
+          const paths = this.skillPaths;
           const content = [
             ...paths.map((directory) => `Skills directory: ${directory}`),
             runtime.skills.length ? `Loaded skills: ${runtime.skills.length}` : "No skills loaded for this application.",
@@ -80,43 +130,11 @@ export class ThreadApp {
           }) };
         }
         if (!runtime.model) throw new Error("/skill requires a configured model");
-        return { kind: "turn", result: await runtime.invokeSkill(this.selectedSessionId, name, extra, options) };
-      },
-      compact: (options) => {
-        if (!runtime.model) throw new Error("/compact requires a configured model");
-        return this.runCommand("compact", options, async () => {
-          const result = await runtime.compact(this.selectedSessionId, options);
-          return ephemeral(result.compacted
-            ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
-            : "Nothing can be compacted with a meaningful estimated token reduction", result.compacted);
-        });
-      },
-      session: (args, options) => this.routeThreadCommand(args.length ? `/thread open ${args.join(" ")}` : "/thread sessions", options),
-      rewind: async (args, options) => {
-        if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
-        if (!args.length) {
-          const items = buildRewindItems(this.commandContext(options.signal));
-          return { kind: "command", result: items.length
-            ? viewResult(runtime.fileCheckpoints
-              ? "Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten."
-              : "Choose a current-path user message. Rewind changes the conversation context and leaves workspace files unchanged.", { type: "rewind", items })
-            : ephemeral("(no user turns on the current live path)") };
-        }
-        const candidate = await runtime.rewind(this.selectedSessionId, args[0]!, options);
-        return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
-      },
-      thread: (input, options) => this.routeThreadCommand(input, options),
-      goal: (action, options) => this.routeGoal(action, options),
-      schedule: (args, options) => this.runCommand("schedule", options, () => scheduleCommand(args, this.commandContext(options.signal))),
-      mcp: (args, options) => this.runCommand("mcp", options, () => mcpCommand(args, runtime, options.signal)),
-      turn: async (input, options) => {
-        if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
-        if (options.images?.length && runtime.model.acceptsImages !== true) {
-          throw new Error("Current model does not accept images. Use /model to pick a vision model.");
-        }
-        return { kind: "turn", result: await runtime.prompt(this.selectedSessionId, input, options) };
-      },
-    });
+        return { kind: "turn", result: await runtime.invokeSkill(this.selectedSessionId, name, match?.[2]?.trim() || undefined, options) };
+      }
+      default:
+        throw new Error(`Unknown command: /${command}`);
+    }
   }
 
   static async open(options: ThreadAppOptions): Promise<ThreadApp> {
@@ -192,7 +210,7 @@ Use schedule_task when the user requests recurring or future work; use list_sche
     const signal = AbortSignal.any([options.signal, controller.signal]);
     const done = Promise.resolve().then(() => {
       signal.throwIfAborted();
-      return this.inputRouter.route(route, { ...options, signal });
+      return this.route(route, { ...options, signal });
     }).finally(() => { this.inputOperations.delete(done); });
     this.inputOperations.set(done, controller);
     void done.catch(() => undefined);

@@ -4,12 +4,6 @@ import { settlesWithin } from "../../core/utils/async.js";
 import { ThreadTuiController } from "./controller.js";
 import { mountThreadView } from "./view.js";
 
-export type TerminalMode = "fullscreen";
-
-export interface TerminalAppOptions {
-  mode?: TerminalMode;
-}
-
 const TERMINAL_RESOURCE_SHUTDOWN_GRACE_MS = 1_000;
 
 /**
@@ -21,10 +15,7 @@ export class ThreadTerminalApp {
   private readonly controller: ThreadTuiController;
   private readonly signalHandlers = new Map<NodeJS.Signals, () => void>();
 
-  constructor(
-    app: ThreadApp,
-    _options: TerminalAppOptions = {},
-  ) {
+  constructor(app: ThreadApp) {
     this.controller = new ThreadTuiController(app);
   }
 

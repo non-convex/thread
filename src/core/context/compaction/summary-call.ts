@@ -4,7 +4,9 @@ import type { ExecutionEventSink } from "../../runtime/events.js";
 
 import { contentText, type Context, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../../agent/model-client.js";
-import { COMPACTION_SUMMARY_ATTEMPTS } from "./policy.js";
+
+/** Silent retry attempts for each summary call before compaction fails. */
+const COMPACTION_SUMMARY_ATTEMPTS = 3;
 
 /** Retry unusable summaries silently; exhaustion fails compaction without discarding history. */
 export async function requestSummary(options: {

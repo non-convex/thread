@@ -3,8 +3,10 @@ import type { ExecutionEventSink } from "../../runtime/events.js";
 
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../../agent/model-client.js";
-import { COMPACTION_PROGRESS_MAX_OUTPUT_TOKENS } from "./policy.js";
 import { requestSummary } from "./summary-call.js";
+
+/** Requested output cap; includes headroom over the planned 1000-token checkpoint. */
+const PROGRESS_MAX_OUTPUT_TOKENS = 2_000;
 
 export const PROGRESS_SUMMARY_SYSTEM_PROMPT = [
   "You are a context-compaction summarizer. Create a continuation checkpoint for a coding agent whose turn is being shortened.",
@@ -66,7 +68,7 @@ export function generateProgressSummary(options: {
       ],
     },
     signal: options.signal,
-    maxTokens: Math.min(COMPACTION_PROGRESS_MAX_OUTPUT_TOKENS, options.model.maxOutputTokens),
+    maxTokens: Math.min(PROGRESS_MAX_OUTPUT_TOKENS, options.model.maxOutputTokens),
     label: "Turn progress summary",
     ...(options.reasoning ? { reasoning: options.reasoning } : {}),
   });

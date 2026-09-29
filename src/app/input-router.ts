@@ -1,7 +1,6 @@
 import type { PromptOptions } from "../core/runtime/options.js";
 import type { TurnResult } from "../core/agent/runner.js";
-import { parseCommandLine } from "./commands/parser.js";
-import { clearDisplayResult, type CommandResult } from "./commands/types.js";
+import type { CommandResult } from "./commands/types.js";
 import type { CommandEventSink } from "./events.js";
 
 export interface InputOptions extends PromptOptions {
@@ -12,21 +11,6 @@ export interface InputOptions extends PromptOptions {
 export type InputResult =
   | { kind: "command"; result: CommandResult }
   | { kind: "turn"; result: TurnResult };
-
-export interface InputRouteHandlers {
-  newSession(options: InputOptions): Promise<InputResult>;
-  agent(args: string[], options: InputOptions): Promise<InputResult>;
-  model(args: string[], options: InputOptions): Promise<InputResult>;
-  skill(name: string | undefined, extra: string | undefined, options: InputOptions): Promise<InputResult>;
-  compact(options: InputOptions): Promise<InputResult>;
-  session(args: string[], options: InputOptions): Promise<InputResult>;
-  rewind(args: string[], options: InputOptions): Promise<InputResult>;
-  thread(input: string, options: InputOptions): Promise<InputResult>;
-  goal(action: GoalInputAction, options: InputOptions): Promise<InputResult>;
-  schedule(args: string[], options: InputOptions): Promise<InputResult>;
-  mcp(args: string[], options: InputOptions): Promise<InputResult>;
-  turn(input: string, options: InputOptions): Promise<InputResult>;
-}
 
 export type GoalInputAction = { readonly type: "status" | "pause" | "resume" | "clear" } | { readonly type: "run"; readonly objective: string };
 
@@ -72,37 +56,4 @@ export function parseInput(input: string): RoutedInput {
   const category: RoutedInput["category"] = navigation || command === "schedule" || (command === "mcp" && !rest) || (goal && (goal.type === "status" || goal.type === "pause" || goal.type === "clear"))
     ? "control" : "work";
   return Object.freeze({ input, command, rest, goal, category });
-}
-
-export class InputRouter {
-  constructor(private readonly handlers: InputRouteHandlers) {}
-
-  route(route: RoutedInput, options: InputOptions): Promise<InputResult> {
-    const { input, command, rest, goal } = route;
-    if (!command || command === "exit") return this.handlers.turn(input, options);
-    switch (command) {
-      case "goal": return this.handlers.goal(goal!, options);
-      case "schedule": return this.handlers.schedule(parseCommandLine(rest), options);
-      case "mcp": return this.handlers.mcp(parseCommandLine(rest), options);
-      case "new":
-      case "compact":
-      case "clear":
-        if (rest) throw new Error(`Usage: /${command}`);
-        if (command === "clear") return Promise.resolve({ kind: "command", result: clearDisplayResult() });
-        return this.handlers[command === "new" ? "newSession" : "compact"](options);
-      case "agent":
-      case "model":
-      case "session":
-      case "rewind":
-        return this.handlers[command](parseCommandLine(rest), options);
-      case "skill": {
-        const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(rest);
-        return this.handlers.skill(match?.[1], match?.[2]?.trim() || undefined, options);
-      }
-      case "thread":
-        return this.handlers.thread(input.trim(), options);
-      default:
-        throw new Error(`Unknown command: /${command}`);
-    }
-  }
 }

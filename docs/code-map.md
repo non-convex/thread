@@ -11,12 +11,12 @@ All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. St
 The execution path is:
 
 ```text
-ThreadApp.handleInput → InputRouter → ThreadRuntime.prompt
+ThreadApp.handleInput → ThreadRuntime.prompt
   → AgentRunner → TurnRunner → AgentStepRunner
-  → ToolExecutionBatch → ToolScheduler → ToolCallExecutor
+  → ToolExecutionBatch → ToolCallExecutor
 ```
 
-These stages have different responsibilities. `AgentRunner` in `core/agent/runner.ts` admits and finishes the durable turn; `core/runtime/create-agent-runner.ts` assembles it from the project runtime's configured services. `TurnRunner` assembles context and handles compaction. `AgentStepRunner` owns one model response. A tool batch reconciles streamed calls with that response, runs preflight in source order, and returns result messages in source order even when calls finish out of order. The scheduler dispatches all calls in an assistant message concurrently without tool-mode barriers or resource-conflict waits: eligible read effects may start during streaming, while write, process and interactive effects wait for the complete durable assistant response. Cancellation and execution-record persistence remain in place. The executor validates and authorizes each invocation before calling the tool. Models must split calls dependent on earlier results, state changes, approvals or conflicting changes across separate steps; listed order does not enforce execution order.
+These stages have different responsibilities. `AgentRunner` in `core/agent/runner.ts` admits and finishes the durable turn; `core/runtime/create-agent-runner.ts` assembles it from the project runtime's configured services. `TurnRunner` assembles context and handles compaction. `AgentStepRunner` owns one model response. A tool batch reconciles streamed calls with that response, runs preflight in source order, and returns result messages in source order even when calls finish out of order. The batch dispatches all calls in an assistant message concurrently without tool-mode barriers or resource-conflict waits: eligible read effects may start during streaming, while write, process and interactive effects wait for the complete durable assistant response. Cancellation and execution-record persistence remain in place. The executor validates and authorizes each invocation before calling the tool. Models must split calls dependent on earlier results, state changes, approvals or conflicting changes across separate steps; listed order does not enforce execution order.
 
 `ThreadRuntime.runGoal()` reuses this path for a bounded sequence of turns inside one foreground operation. `runtime/goal.ts` supplies the goal instructions and the runner-local outcome tool; the Session Tree stores goal changes and per-turn rewind snapshots. The app permits goal status and stop controls while its main input remains active. Ordinary `prompt()` still runs exactly one turn.
 

@@ -1,8 +1,7 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getThreadHome } from "../config/home.js";
 import { stableId } from "../utils/id.js";
-import { discoverProjectRoot } from "./discovery.js";
 import { PROJECT_FORMAT, type Project, type ProjectManifest } from "./model.js";
 
 function normalizedIdentity(rootPath: string): string {
@@ -25,7 +24,11 @@ function parseManifest(value: unknown, manifestPath: string): ProjectManifest {
 
 export class ProjectService {
   static async resolve(rootInput: string, options: { stateDirectory?: string } = {}): Promise<Project> {
-    const rootPath = await discoverProjectRoot(rootInput);
+    const rootPath = path.resolve(rootInput);
+    const info = await stat(rootPath).catch((error: NodeJS.ErrnoException) => {
+      throw error.code === "ENOENT" ? new Error(`Project root does not exist: ${rootPath}`) : error;
+    });
+    if (!info.isDirectory()) throw new Error(`Project root is not a directory: ${rootPath}`);
     const id = stableId("project", normalizedIdentity(rootPath));
     const statePath = options.stateDirectory
       ? path.resolve(options.stateDirectory)
@@ -49,13 +52,7 @@ export class ProjectService {
         throw new Error(`Project manifest identity does not match ${rootPath}`);
       }
     } else {
-      const manifest: ProjectManifest = {
-        format: PROJECT_FORMAT,
-        formatVersion: 2,
-        id,
-        rootPath,
-        createdAt: Date.now(),
-      };
+      const manifest: ProjectManifest = { format: PROJECT_FORMAT, formatVersion: 2, id, rootPath, createdAt: Date.now() };
       const temporary = `${manifestPath}.tmp-${process.pid}`;
       try {
         await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
