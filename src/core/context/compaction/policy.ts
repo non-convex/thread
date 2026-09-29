@@ -1,7 +1,7 @@
 // Compaction policy constants — step-based retention with twin rolling summaries.
 
 /** Total live-context budget the retained window is planned against. */
-export const COMPACTION_TARGET_TOKENS = 20_000;
+export const COMPACTION_TARGET_TOKENS = 25_000;
 /** Reserved for the cumulative cross-turn project-state document. */
 export const COMPACTION_HISTORY_RESERVE_TOKENS = 4_000;
 /** Reserved for the in-turn progress summary of a partially retained turn. */

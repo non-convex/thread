@@ -71,7 +71,7 @@ Thread exercises restraint when adding features and capabilities. An addition ea
 - **Preserve original history.** Compaction shapes later requests; the original interactions remain in the tree for search, recall, and rewind.
 - **Bound execution detail in context.** Workers keep their full execution traces in a separate journal. The main agent receives compact task results and inspects the workspace directly.
 
-`/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and retains more recent content when the roughly 20K-token target budget allows.
+`/compact` requests a manual pass. Automatic compaction runs when context reaches 78% or a provider reports overflow. A pass keeps at least the newest five complete steps and retains more recent content when the roughly 25K-token target budget allows.
 
 Live-path context, on-demand recall, tool-result pagination, and compaction are implemented. Tool result offloading, model awareness of the whole tree, and finer-grained control over what enters context remain planned.
 
