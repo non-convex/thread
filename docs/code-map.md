@@ -6,7 +6,7 @@ Thread has three layers. The runtime owns execution and durable project history.
 
 `src/app/thread-app.ts` opens the runtime, loads extensions and tracks the session selected by the coding app. `input-router.ts` parses a slash command once, and `ThreadApp` dispatches it. Model selection and agent settings share the handlers in `commands/agents.ts`; Session Tree commands remain in `commands/builtins.ts`.
 
-All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. Startup resource acquisition lives in `resources.ts`. The runtime serializes foreground operations, captures the selected model and preferences for each turn, publishes events, and settles owned work before closing.
+All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. Startup resource acquisition lives in `resources.ts`. The runtime admits one operation per Session, permits different Sessions to execute concurrently, captures the selected model and preferences for each turn, publishes events, and settles all owned work before closing. File restoration and project-wide configuration remain exclusive; built-in writes share the existing path coordination boundary.
 
 The execution path is:
 
@@ -20,7 +20,7 @@ These stages have different responsibilities. `AgentRunner` in `core/agent/runne
 
 `ThreadRuntime.runGoal()` reuses this path for a bounded sequence of turns inside one foreground operation. `runtime/goal.ts` supplies the goal instructions and the runner-local outcome tool; the Session Tree stores goal changes and per-turn rewind snapshots. The app permits goal status and stop controls while its main input remains active. Ordinary `prompt()` still runs exactly one turn.
 
-Scheduling is opt-in in `core/runtime/options.ts` and starts in `ThreadRuntime.open()`. `core/scheduling/` validates time rules, provides main-agent tools, and scans for due work only while the process is open. A wakeup enters the same runtime-wide serial execution path as a human turn, targeting its task's fixed Session; the coding app's `/schedule` management command lives in `app/commands/schedule.ts`. See [scheduled tasks](./scheduling.md).
+Scheduling is opt-in in `core/runtime/options.ts` and starts in `ThreadRuntime.open()`. `core/scheduling/` validates time rules, provides main-agent tools, and scans for due work only while the process is open. A wakeup enters the same per-Session execution path as a human turn, targeting its task's fixed Session; a busy Session does not block wakeups in other Sessions. The coding app's `/schedule` management command lives in `app/commands/schedule.ts`. See [scheduled tasks](./scheduling.md).
 
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 
@@ -48,7 +48,7 @@ Optional MCP support lives in `core/mcp/`: `client.ts` owns SDK connections and 
 
 ## From runtime events to the terminal
 
-The TUI controller receives runtime events and batches them through `ui/events.ts`. It retains one in-flight view even when that Session is not selected, so `/schedule` and `/session` can open live work without losing received deltas. `runtime_status` drives execution busy state; selecting a Session only changes the viewing preference and does not redirect execution. Coding command events originate in `app/events.ts` and arrive through `onCommandEvent`; the app never imports UI code. Core uses `onExecutionEvent` internally, and public prompt options forward only the documented fields. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
+The TUI controller receives runtime events and batches them through `ui/events.ts`. It retains a separate in-flight view and question queue for each Session, so `/new`, `/schedule` and `/session` can switch live work without losing received deltas or cancelling execution. Busy state and interruption refer to the selected Session. The app captures the target Session when input is accepted, before asynchronous dispatch. Coding command events originate in `app/events.ts` and arrive through `onCommandEvent`; the app never imports UI code. Core uses `onExecutionEvent` internally, and public prompt options forward only the documented fields. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
 
 `contextSnapshot(sessionId)` supplies messages and usage from one context build. Context construction clones retained content rather than first cloning the complete live-path history. Public history queries still return independent snapshots.
 

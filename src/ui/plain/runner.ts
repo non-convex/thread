@@ -34,41 +34,36 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
   const readline = createInterface({ input, output, terminal: interactive });
   // Keep piped lines queued while an earlier operation is running.
   const lines = interactive ? undefined : readline[Symbol.asyncIterator]();
-  let active: AbortController | undefined;
+  const active = new Map<string, AbortController>();
   const pending = new Set<Promise<void>>();
   const controllers = new Set<AbortController>();
   let explicitExit = false;
   const onSigint = () => {
-    const target = app.runtime.activeSessionId;
-    if (target) void app.runtime.interrupt(target).catch(() => undefined);
-    else active?.abort(new Error("Interrupted by user"));
+    const target = app.selectedSessionId;
+    if (app.runtime.activeSessionIds.includes(target)) void app.runtime.interrupt(target).catch(() => undefined);
+    else active.get(target)?.abort(new Error("Interrupted by user"));
   };
   process.on("SIGINT", onSigint);
   let streamed = false;
-  // Keep only the current execution's received text for opening its Session mid-turn.
-  let runningSessionId = app.runtime.activeSessionId;
-  let runningText = "";
+  // Retain each Session's received text while another Session is selected.
+  const runningText = new Map<string, string>();
   const recoverRunningText = (sessionId: string) => {
     const running = app.runtime.readSession(sessionId).activeTurn;
     return running ? projectTranscript(running.entries, running.tasks)
       .filter((item) => item.kind === "assistant").map((item) => item.content).join("\n") : "";
   };
-  if (runningSessionId) runningText = recoverRunningText(runningSessionId);
+  for (const sessionId of app.runtime.activeSessionIds) runningText.set(sessionId, recoverRunningText(sessionId));
   const taskStatuses = new Map<string, string>();
   const scheduledTurns = new Set<string>();
   const detachRuntime = app.runtime.subscribe((event) => {
     if (event.type === "runtime_status") {
       if (event.busy && event.sessionId) {
-        runningSessionId = event.sessionId;
-        runningText = recoverRunningText(event.sessionId);
-      } else if (!event.busy) {
-        runningSessionId = undefined;
-        runningText = "";
-      }
+        runningText.set(event.sessionId, recoverRunningText(event.sessionId));
+      } else if (!event.busy && event.sessionId) runningText.delete(event.sessionId);
       return;
     }
-    if (event.agentId === "main" && event.type === "assistant_text_delta" && event.sessionId === runningSessionId) {
-      runningText += event.delta;
+    if (event.agentId === "main" && event.type === "assistant_text_delta" && event.sessionId) {
+      runningText.set(event.sessionId, (runningText.get(event.sessionId) ?? "") + event.delta);
     }
     if (event.agentId === "main" && event.type === "turn_preparing" && event.scheduled) {
       if (streamed) { output.write("\n"); streamed = false; }
@@ -127,8 +122,8 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
       if (app.selectedSessionId !== previousSessionId) {
         const goal = app.runtime.readGoal(app.selectedSessionId);
         if (goal) output.write(goalLine(goal));
-        if (app.selectedSessionId === runningSessionId) {
-          output.write(`\n[running Session ${runningSessionId} · received so far]\n${runningText || "(waiting for output)"}\n`);
+        if (runningText.has(app.selectedSessionId)) {
+          output.write(`\n[running Session ${app.selectedSessionId} · received so far]\n${runningText.get(app.selectedSessionId) || "(waiting for output)"}\n`);
         }
       }
       if (result.kind === "turn" && result.result.error) {
@@ -161,12 +156,13 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
         continue;
       }
       const controller = new AbortController();
+      const sessionId = app.selectedSessionId;
       controllers.add(controller);
-      if (!active) active = controller;
+      if (route.category === "work") active.set(sessionId, controller);
       const operation = handleLine(route, controller).finally(() => {
         controllers.delete(controller);
         pending.delete(operation);
-        if (active === controller) active = undefined;
+        if (active.get(sessionId) === controller) active.delete(sessionId);
       });
       pending.add(operation);
       // Interactive input stays available for control commands during any work input.

@@ -116,8 +116,8 @@ export class SessionTreeProjection {
             throw new SessionTreeCorruptionError(`Turn ${turn.id} has invalid scheduled admission`);
           }
         }
-        if (this.runningTurnsBySession.size > 0) {
-          throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn was running`);
+        if (this.runningTurnsBySession.has(turn.sessionId)) {
+          throw new SessionTreeCorruptionError(`Turn ${turn.id} started while another turn in its Session was running`);
         }
         if ((this.liveTips.get(turn.sessionId) ?? null) !== turn.parentTurnId) {
           throw new SessionTreeCorruptionError(`Turn ${turn.id} does not extend its Session live tip`);

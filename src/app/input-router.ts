@@ -52,7 +52,7 @@ export function parseInput(input: string): RoutedInput {
   const goal = command === "goal" ? parseGoalInput(input) : undefined;
   if (goal) Object.freeze(goal);
   const rest = command ? trimmed.slice(command.length + 1).trim() : "";
-  const navigation = command === "session" || (command === "thread" && /^(?:sessions|open)(?:\s|$)/.test(rest));
+  const navigation = command === "new" || command === "session" || (command === "thread" && /^(?:sessions|open)(?:\s|$)/.test(rest));
   const category: RoutedInput["category"] = navigation || command === "schedule" || (command === "mcp" && !rest) || (goal && (goal.type === "status" || goal.type === "pause" || goal.type === "clear"))
     ? "control" : "work";
   return Object.freeze({ input, command, rest, goal, category });

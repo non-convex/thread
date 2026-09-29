@@ -37,7 +37,7 @@ export class AgentRunner {
   }
 
   private async runWithDeadline(input: string, options: RunTurnOptions): Promise<TurnResult> {
-    this.tree.requireIdle();
+    this.tree.requireIdle(options.sessionId);
     options.signal.throwIfAborted();
     const planned = this.tree.planTurn(input, options.images ?? [], options.sessionId, this.fileCheckpoints, options.dreamerReview, options.goal, options.scheduled);
     options = this.withEvents(options, planned.sessionId, planned.id);

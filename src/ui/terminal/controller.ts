@@ -14,6 +14,7 @@ import {
   isFloatingOverlay,
   openEphemeralView,
   type LiveBlock,
+  type AskScreen,
   type UiScreen,
   type UiState,
 } from "../state.js";
@@ -61,17 +62,16 @@ export class ThreadTuiController {
   private readonly listeners = new Set<Listener>();
   private readonly viewHistory: UiScreen[] = [];
   private readonly batcher: UiEventBatcher;
-  private active: AbortController | undefined;
-  /** The single in-flight execution view, independent of the selected Session. */
-  private liveView: UiState | undefined;
-  private runtimeBusy = false;
+  private readonly activeInputs = new Map<string, AbortController>();
+  /** Each running Session retains its deltas while another Session is selected. */
+  private readonly liveViews = new Map<string, UiState>();
   private readonly inputControllers = new Set<AbortController>();
   private historyDirty = true;
   private stopped = false;
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
   private gitGeneration = 0;
-  private readonly ask = new AskService();
+  private readonly questions = new Map<string, { service: AskService; screen?: AskScreen }>();
   private readonly detachAsk: () => void;
   private readonly detachRuntime: () => void;
   private disposed = false;
@@ -83,8 +83,7 @@ export class ThreadTuiController {
     const session = app.runtime.readSession(app.selectedSessionId);
     this.state = createUiState(session.session.id, session.liveTipTurnId, []);
     this.state.goal = app.runtime.readGoal(session.session.id);
-    this.runtimeBusy = app.runtime.busy;
-    if (this.runtimeBusy && app.runtime.activeSessionId) this.recoverLiveView(app.runtime.activeSessionId);
+    for (const sessionId of app.runtime.activeSessionIds) this.recoverLiveView(sessionId);
     this.state.busy = this.runtimeBusy;
     this.meta = {
       rootPath: app.runtime.rootPath,
@@ -101,17 +100,9 @@ export class ThreadTuiController {
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
     this.detachRuntime = app.runtime.subscribe((event) => this.receiveRuntimeEvent(event));
-    this.ask.subscribe((request) => {
-      if (this.stopped || this.disposed) return;
-      if (request) {
-        this.state.screen = { type: "ask", request, questionIndex: 0,
-          chosen: request.questions.map(() => []), answers: [], selected: 0, customText: undefined };
-      } else if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
-      this.notify();
-    });
     this.detachAsk = app.runtime.setAskPresenter({ present: (request, signal) => {
       if (this.stopped || this.disposed) return Promise.reject(new DOMException("Aborted", "AbortError"));
-      return this.ask.present(request, signal);
+      return this.askForSession(request.invocation?.sessionId ?? this.app.selectedSessionId).present(request, signal);
     } });
     this.syncTranscript();
     this.refreshMeta();
@@ -127,6 +118,36 @@ export class ThreadTuiController {
 
   get isStopped(): boolean { return this.stopped; }
 
+  private get active(): AbortController | undefined { return this.activeInputs.get(this.app.selectedSessionId); }
+  private get runtimeBusy(): boolean { return this.app.runtime.sessionBusy(this.app.selectedSessionId); }
+  private get ask(): AskService { return this.askForSession(this.app.selectedSessionId); }
+
+  private askForSession(sessionId: string): AskService {
+    let entry = this.questions.get(sessionId);
+    if (entry) return entry.service;
+    entry = { service: new AskService() };
+    this.questions.set(sessionId, entry);
+    const questions = entry;
+    questions.service.subscribe((request) => {
+      if (this.stopped || this.disposed) return;
+      if (request && questions.screen?.request.id !== request.id) {
+        questions.screen = { type: "ask", request, questionIndex: 0,
+          chosen: request.questions.map(() => []), answers: [], selected: 0, customText: undefined };
+      } else if (!request) delete questions.screen;
+      if (sessionId === this.app.selectedSessionId) {
+        this.showQuestion();
+        this.notify();
+      }
+    });
+    return questions.service;
+  }
+
+  private showQuestion(): void {
+    const screen = this.questions.get(this.app.selectedSessionId)?.screen;
+    if (screen) this.state.screen = screen;
+    else if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -141,7 +162,7 @@ export class ThreadTuiController {
     this.detachRuntime();
     this.batcher.dispose();
     if (this.idleExitTimer) clearTimeout(this.idleExitTimer);
-    this.ask.dispose();
+    for (const questions of this.questions.values()) questions.service.dispose();
     this.detachAsk();
     this.listeners.clear();
   }
@@ -158,8 +179,8 @@ export class ThreadTuiController {
 
   interrupt(): boolean {
     if (this.stopped || this.disposed) return false;
-    const target = this.app.runtime.activeSessionId;
-    if (target) {
+    const target = this.app.selectedSessionId;
+    if (this.app.runtime.activeSessionIds.includes(target)) {
       void this.app.runtime.interrupt(target).catch(() => undefined);
       return true;
     }
@@ -284,7 +305,10 @@ export class ThreadTuiController {
     if ((!input && images.length === 0) || this.stopped || this.disposed) return undefined;
     const route = parseInput(input);
     const foreground = route.category === "work" && !this.active && !this.state.busy;
-    if (!this.app.canHandleInput(route, Boolean(this.active || this.state.busy)) || (!foreground && images.length > 0)) return undefined;
+    if (!this.app.canHandleInput(route, Boolean(this.active || this.state.busy)) || (!foreground && images.length > 0)) {
+      this.note("This Session is running. Use /new or /session to work in another Session.");
+      return undefined;
+    }
     if (input === "/exit") {
       this.requestStop();
       return Promise.resolve(true);
@@ -295,9 +319,10 @@ export class ThreadTuiController {
       return undefined;
     }
     const controller = new AbortController();
+    const sessionId = this.app.selectedSessionId;
     this.inputControllers.add(controller);
     if (foreground) {
-      this.active = controller;
+      this.activeInputs.set(sessionId, controller);
       // Reserve UI input before the router emits turn/command events.
       this.state.busy = true;
       this.state.activity = input.startsWith("/") ? `running ${input.split(/\s/, 1)[0]}` : "preparing";
@@ -307,15 +332,16 @@ export class ThreadTuiController {
       this.state.turnFinishedAt = undefined;
       this.notify("live");
     }
-    return this.finishInput(route, imageBlocks, controller, foreground);
+    return this.finishInput(route, imageBlocks, controller, foreground, sessionId);
   }
 
-  private async finishInput(route: RoutedInput, imageBlocks: ReturnType<typeof composerImageContent>[], controller: AbortController, foreground: boolean): Promise<boolean> {
+  private async finishInput(route: RoutedInput, imageBlocks: ReturnType<typeof composerImageContent>[], controller: AbortController, foreground: boolean, sessionId: string): Promise<boolean> {
     try {
       const result = await this.app.handleInput(route, {
         signal: controller.signal,
         onCommandEvent: (event) => {
-          if (!this.stopped && !this.disposed && (event.type === "command_started" || event.type === "command_finished")) {
+          if (!this.stopped && !this.disposed && foreground && sessionId === this.app.selectedSessionId &&
+              (event.type === "command_started" || event.type === "command_finished")) {
             this.batcher.push(event);
           }
         },
@@ -327,25 +353,24 @@ export class ThreadTuiController {
       const historyChanged = this.syncTranscript();
       this.showLiveView();
       if (historyChanged || (result.kind === "command" && result.result.changedState)) this.refreshMeta();
-      if (result.kind === "command") this.presentCommand(result.result);
+      if (result.kind === "command" && (!foreground || sessionId === this.app.selectedSessionId)) this.presentCommand(result.result);
       return true;
     } catch (error) {
       if (this.stopped || this.disposed) return false;
       this.batcher.flush();
       // A failed input may have persisted messages without reaching turn_finished.
-      if (foreground) this.historyDirty = true;
+      if (foreground && sessionId === this.app.selectedSessionId) this.historyDirty = true;
       this.syncTranscript();
       this.showLiveView();
-      this.state.notice = { level: "error", text: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      this.state.notice = { level: "error", text: sessionId === this.app.selectedSessionId ? message : `Session ${sessionId}: ${message}` };
       return false;
     } finally {
       this.inputControllers.delete(controller);
-      if (this.active === controller) {
-        this.active = undefined;
-      }
+      if (this.activeInputs.get(sessionId) === controller) this.activeInputs.delete(sessionId);
       if (!this.stopped && !this.disposed) {
         if (foreground) {
-          if (this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
+          if (sessionId === this.app.selectedSessionId && this.state.turnStartedAt !== undefined && this.state.turnFinishedAt === undefined) {
             this.state.turnFinishedAt = Date.now();
           }
           this.refreshGit();
@@ -387,19 +412,20 @@ export class ThreadTuiController {
     for (const event of events) {
       try {
         if (event.type === "runtime_status") {
-          this.runtimeBusy = event.busy;
-          if (event.busy && event.sessionId && !this.liveView) {
-            this.liveView = createUiState(event.sessionId, null, []);
-            this.liveView.activity = "preparing";
+          if (event.busy && event.sessionId && !this.liveViews.has(event.sessionId)) {
+            const view = createUiState(event.sessionId, null, []);
+            view.activity = "preparing";
+            this.liveViews.set(event.sessionId, view);
           }
-          if (!event.busy) {
+          if (!event.busy && event.sessionId) {
+            const view = this.liveViews.get(event.sessionId);
             // Admission can end without a turn_started/turn_finished pair.
-            if (this.liveView?.sessionId === this.app.selectedSessionId) {
-              const pending = this.liveView.liveTurn?.id.startsWith("pending:");
-              this.state.turnStartedAt = pending ? undefined : this.liveView.turnStartedAt;
-              this.state.turnFinishedAt = pending ? undefined : this.liveView.turnFinishedAt;
+            if (view && event.sessionId === this.app.selectedSessionId) {
+              const pending = view.liveTurn?.id.startsWith("pending:");
+              this.state.turnStartedAt = pending ? undefined : view.turnStartedAt;
+              this.state.turnFinishedAt = pending ? undefined : view.turnFinishedAt;
             }
-            this.liveView = undefined;
+            this.liveViews.delete(event.sessionId);
           }
         } else if (event.type === "command_started" || event.type === "command_finished") {
           if (!this.runtimeBusy && !this.active) reduceUiEvent(this.state, event);
@@ -412,22 +438,23 @@ export class ThreadTuiController {
         } else if (event.type === "context_updated") {
           if (event.sessionId === this.app.selectedSessionId) this.meta.contextPercent = event.percent;
         } else {
-          if ((event.type === "turn_preparing" || event.type === "turn_started") && !this.liveView) {
-            this.liveView = createUiState(event.sessionId, null, []);
+          if ((event.type === "turn_preparing" || event.type === "turn_started") && !this.liveViews.has(event.sessionId)) {
+            this.liveViews.set(event.sessionId, createUiState(event.sessionId, null, []));
           }
-          if (this.liveView && event.sessionId === this.liveView.sessionId) {
-            reduceUiEvent(this.liveView, event);
+          const view = event.sessionId ? this.liveViews.get(event.sessionId) : undefined;
+          if (view) {
+            reduceUiEvent(view, event);
             if (event.type === "turn_finished") {
-              if (event.sessionId === this.app.selectedSessionId && this.liveView.notice) {
-                this.state.notice = this.liveView.notice;
+              if (event.sessionId === this.app.selectedSessionId && view.notice) {
+                this.state.notice = view.notice;
               } else if (event.sessionId !== this.app.selectedSessionId) {
                 this.state.notice = { level: event.outcome === "failed" ? "error" : "info",
                   text: `Turn ${event.outcome} in Session ${event.sessionId}. Open it with /session ${event.sessionId}.` };
               }
               // The committed turn is now owned by the durable projection. Goal
               // runs can immediately start another turn in this same live view.
-              this.liveView.liveTurn = undefined;
-              this.liveView.activity = "preparing";
+              view.liveTurn = undefined;
+              view.activity = "preparing";
               if (event.sessionId === this.app.selectedSessionId) this.historyDirty = true;
             }
             if (event.type === "compaction_finished" && event.reason === "manual" && event.ok && event.entryId &&
@@ -510,7 +537,7 @@ export class ThreadTuiController {
   }
 
   private recoverLiveView(sessionId: string): void {
-    if (this.liveView?.sessionId === sessionId) return;
+    if (this.liveViews.has(sessionId)) return;
     const view = createUiState(sessionId, null, []);
     const running = this.app.runtime.readSession(sessionId).activeTurn;
     if (running) {
@@ -522,12 +549,12 @@ export class ThreadTuiController {
         blocks: projected.filter((item): item is LiveBlock => item.kind !== "user" && item.kind !== "interrupted") };
       view.activity = "thinking";
     } else view.activity = "preparing";
-    this.liveView = view;
+    this.liveViews.set(sessionId, view);
   }
 
   private showLiveView(): void {
-    const view = this.liveView;
-    if (view && view.sessionId === this.app.selectedSessionId) {
+    const view = this.liveViews.get(this.app.selectedSessionId);
+    if (view) {
       // A navigation snapshot may already contain the committed turn before
       // its turn_finished event reaches this frame. Never render it twice.
       this.state.liveTurn = view.liveTurn?.id === this.state.liveTipTurnId ? undefined : view.liveTurn;
@@ -538,14 +565,7 @@ export class ThreadTuiController {
       if (view.notice) this.state.notice = view.notice;
     } else {
       this.state.liveTurn = undefined;
-      if (this.runtimeBusy && view) {
-        this.state.turnStartedAt = undefined;
-        this.state.turnFinishedAt = undefined;
-        this.state.modelRetryError = undefined;
-      }
-      this.state.activity = this.runtimeBusy && view
-        ? `working in Session ${view.sessionId.slice(0, 12)}`
-        : this.runtimeBusy || this.active ? "preparing" : undefined;
+      this.state.activity = this.runtimeBusy || this.active ? "preparing" : undefined;
     }
   }
 
@@ -568,6 +588,7 @@ export class ThreadTuiController {
       this.state.turnStartedAt = undefined;
       this.state.turnFinishedAt = undefined;
       this.state.modelRetryError = undefined;
+      this.showQuestion();
     }
     this.historyDirty = false;
     return true;

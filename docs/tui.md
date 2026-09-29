@@ -74,7 +74,9 @@
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
-提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记忙碌并清空本次文字（普通 turn 也清空已发送图片），随后仍可编辑下一条草稿；忙碌或输入无效时拒绝且保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 解析的类别统一决定：`/goal`（含 status）、`/goal pause`、`/goal clear`、`/schedule`、`/mcp` 状态查看及会话导航（`/session`、`/thread sessions`、`/thread open`）是运行中可达的控制输入；启动 agent、压缩、回退等仍是工作输入，不插队。`/mcp reconnect <server>` 需要空闲，显示连接状态和工具名使用现有文档页，配置见 [MCP 接入](./mcp.md)。控制输入不重置正在进行的 turn、计时或流式状态；会话导航只改变查看目标，不改变正在执行的会话。
+提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记当前 Session 忙碌并清空本次文字（普通 turn 也清空已发送图片），输入框保持聚焦，仍可编辑下一条草稿。同一 Session 忙碌或输入无效时拒绝工作输入并保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 解析的类别统一决定：`/new`、`/goal`（含 status）、`/goal pause`、`/goal clear`、`/schedule`、`/mcp` 状态查看及会话导航（`/session`、`/thread sessions`、`/thread open`）是运行中可达的控制输入。
+
+`/new` 创建并选中空会话，原会话继续执行；`/session` 只切换查看目标。不同 Session 可同时执行，切回时恢复该会话已收到的流式内容、工具状态和计时。后台会话的完成不会清除当前会话的 busy 或计时，问答请求也按 Session 保存，不抢占其他会话。Esc 和无选区时的 Ctrl+C 只中断当前 Session；切到空闲会话后不会中断后台执行。同一 Session 的启动 agent、压缩等工作输入不插队；恢复文件的 rewind、切换模型／Agent 配置和 `/mcp reconnect <server>` 需要整个 runtime 空闲。MCP 配置见 [MCP 接入](./mcp.md)。
 
 文字可用鼠标拖选，再按 `Ctrl+C` 或 `Alt+C` 复制；输入框通过键盘选中的文字也支持复制。选区存在时，`Ctrl+C` 优先复制，不中断任务、清空输入或退出；`Esc` 先取消选区。没有选区时，`Ctrl+C` 保留原有的中断／清空／退出行为，`Alt+C` 不执行操作。终端若拦截复制快捷键，可用 `Alt+C`。欢迎页和文档页提供复制提示。
 

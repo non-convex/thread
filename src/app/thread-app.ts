@@ -47,7 +47,7 @@ export class ThreadApp {
   readonly extensionApi: ExtensionAPI;
   selectedSessionId: string;
   private readonly skillPaths: readonly string[];
-  private readonly inputOperations = new Map<Promise<InputResult>, AbortController>();
+  private readonly inputOperations = new Map<Promise<InputResult>, { controller: AbortController; sessionId?: string }>();
   private readonly extensionDisposers: ExtensionDisposer[] = [];
   private extensionLoading: Promise<void> = Promise.resolve();
   private appClosing: Promise<void> | undefined;
@@ -59,7 +59,7 @@ export class ThreadApp {
     this.skillPaths = skillPaths.map((directory) => path.resolve(runtime.rootPath, directory));
   }
 
-  private async route({ input, command, rest, goal }: RoutedInput, options: InputOptions): Promise<InputResult> {
+  private async route({ input, command, rest, goal }: RoutedInput, options: InputOptions, sessionId: string): Promise<InputResult> {
     const runtime = this.runtime;
     const usage = () => { if (rest) throw new Error(`Usage: /${command}`); };
     switch (command) {
@@ -69,9 +69,9 @@ export class ThreadApp {
         if (options.images?.length && runtime.model.acceptsImages !== true) {
           throw new Error("Current model does not accept images. Use /model to pick a vision model.");
         }
-        return { kind: "turn", result: await runtime.prompt(this.selectedSessionId, input, options) };
-      case "goal": return this.routeGoal(goal!, options);
-      case "schedule": return this.runCommand("schedule", options, () => scheduleCommand(parseCommandLine(rest), this.commandContext(options.signal)));
+        return { kind: "turn", result: await runtime.prompt(sessionId, input, options) };
+      case "goal": return this.routeGoal(goal!, options, sessionId);
+      case "schedule": return this.runCommand("schedule", options, () => scheduleCommand(parseCommandLine(rest), this.commandContext(options.signal, sessionId)));
       case "mcp": return this.runCommand("mcp", options, () => mcpCommand(parseCommandLine(rest), runtime, options.signal));
       case "clear": usage(); return { kind: "command", result: clearDisplayResult() };
       case "new":
@@ -86,7 +86,7 @@ export class ThreadApp {
         usage();
         if (!runtime.model) throw new Error("/compact requires a configured model");
         return this.runCommand("compact", options, async () => {
-          const result = await runtime.compact(this.selectedSessionId, options);
+          const result = await runtime.compact(sessionId, options);
           return ephemeral(result.compacted
             ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
             : "Nothing can be compacted with a meaningful estimated token reduction", result.compacted);
@@ -95,21 +95,21 @@ export class ThreadApp {
       case "model": return { kind: "command", result: agentCommand(runtime, this.catalog, ["main", "model", ...parseCommandLine(rest)]) };
       case "session": {
         const args = parseCommandLine(rest);
-        return this.routeThreadCommand(args.length ? `/thread open ${args.join(" ")}` : "/thread sessions", options);
+        return this.routeThreadCommand(args.length ? `/thread open ${args.join(" ")}` : "/thread sessions", options, sessionId);
       }
-      case "thread": return this.routeThreadCommand(input.trim(), options);
+      case "thread": return this.routeThreadCommand(input.trim(), options, sessionId);
       case "rewind": {
         const args = parseCommandLine(rest);
         if (args.length > 1) throw new Error("Usage: /rewind [turn-id-or-user-entry-id]");
         if (!args.length) {
-          const items = buildRewindItems(this.commandContext(options.signal));
+          const items = buildRewindItems(this.commandContext(options.signal, sessionId));
           return { kind: "command", result: items.length
             ? viewResult(runtime.fileCheckpoints
               ? "Choose a current-path user message. Rewind restores recorded edit/write changes; bash changes are not tracked. Later changes to recorded files are overwritten."
               : "Choose a current-path user message. Rewind changes the conversation context and leaves workspace files unchanged.", { type: "rewind", items })
             : ephemeral("(no user turns on the current live path)") };
         }
-        const candidate = await runtime.rewind(this.selectedSessionId, args[0]!, options);
+        const candidate = await runtime.rewind(sessionId, args[0]!, options);
         return { kind: "command", result: ephemeral(`Rewound to before ${candidate.turnId}; prior path retained`, true) };
       }
       case "skill": {
@@ -130,7 +130,7 @@ export class ThreadApp {
           }) };
         }
         if (!runtime.model) throw new Error("/skill requires a configured model");
-        return { kind: "turn", result: await runtime.invokeSkill(this.selectedSessionId, name, match?.[2]?.trim() || undefined, options) };
+        return { kind: "turn", result: await runtime.invokeSkill(sessionId, name, match?.[2]?.trim() || undefined, options) };
       }
       default:
         throw new Error(`Unknown command: /${command}`);
@@ -158,7 +158,7 @@ export class ThreadApp {
       appendSystemPrompt: [core.systemPrompt === undefined ? COMMUNICATION_STYLE_PROMPT : "",
         scheduling ? `# Scheduled tasks
 
-Use schedule_task when the user requests recurring or future work; use list_schedules, update_schedule, pause_schedule, resume_schedule, and delete_schedule to manage it. Use update_schedule to change a task's follow-up prompt and/or time rule without recreating its Session. Prompt-only updates preserve timing; a new schedule recalculates the next follow-up, with every intervals still anchored to task creation. Updates preserve enabled/paused state, pending initialization, and already-running turns. Choose the current Session for follow-ups to this conversation, or a new Session to isolate the work (created once and reused on every wakeup). Creation queues the initial user turn immediately; it runs when this runtime is idle, after the current turn. Put the full background, scope, and ongoing instructions in initialPrompt, including what to do now. Sessions retain context across wakeups, so keep prompt to a brief wakeup cue without repeating background, rules, or checklists. If initialPrompt is omitted, prompt is also used for initialization. For actions that must wait, give initialPrompt preparation-only instructions. The time rule applies to follow-ups, including one follow-up for at schedules. Schedules persist, but only execute while Thread is running. The user can open the bound Session from /schedule, including while it is running. Do not use bash sleep as a substitute.` : "",
+Use schedule_task when the user requests recurring or future work; use list_schedules, update_schedule, pause_schedule, resume_schedule, and delete_schedule to manage it. Use update_schedule to change a task's follow-up prompt and/or time rule without recreating its Session. Prompt-only updates preserve timing; a new schedule recalculates the next follow-up, with every intervals still anchored to task creation. Updates preserve enabled/paused state, pending initialization, and already-running turns. Choose the current Session for follow-ups to this conversation, or a new Session to isolate the work (created once and reused on every wakeup). Creation queues the initial user turn immediately; it runs when its bound Session is idle; other Sessions can run concurrently. Put the full background, scope, and ongoing instructions in initialPrompt, including what to do now. Sessions retain context across wakeups, so keep prompt to a brief wakeup cue without repeating background, rules, or checklists. If initialPrompt is omitted, prompt is also used for initialization. For actions that must wait, give initialPrompt preparation-only instructions. The time rule applies to follow-ups, including one follow-up for at schedules. Schedules persist, but only execute while Thread is running. The user can open the bound Session from /schedule, including while it is running. Do not use bash sleep as a substitute.` : "",
         `# Thread data directory\n\nThread data directory: ${threadHome}\nThe built-in edit and write tools may modify files under this directory. Use absolute paths and keep changes scoped to the user's request. Prefer focused reads and edits to avoid exposing credentials. Project state directories, auth.json, and its lock file are protected from built-in writes. Use the owning service to manage runtime state; config.json, skills, and global memory remain editable.`,
         paths.length ? `Skill installation directories are editable with the built-in edit and write tools, including SKILL.md and companion files. Use absolute paths:\n${paths.join("\n")}` : "",
         formatCommitAttributionPrompt(commitAttribution ?? DEFAULT_COMMIT_ATTRIBUTION),
@@ -199,7 +199,8 @@ Use schedule_task when the user requests recurring or future work; use list_sche
   }
 
   canHandleInput(route: RoutedInput, busy = false): boolean {
-    return !this.appClosing && (route.category === "control" || (!busy && !this.runtime.busy && this.inputOperations.size === 0));
+    return !this.appClosing && (route.category === "control" || (!busy && !this.runtime.sessionBusy(this.selectedSessionId)
+      && ![...this.inputOperations.values()].some((operation) => operation.sessionId === this.selectedSessionId)));
   }
 
   handleInput(input: string | RoutedInput, options: InputOptions): Promise<InputResult> {
@@ -207,18 +208,18 @@ Use schedule_task when the user requests recurring or future work; use list_sche
     if (this.appClosing) return Promise.reject(new Error("Thread application is closed or closing"));
     if (!this.canHandleInput(route)) return Promise.reject(new Error("Wait for the active turn or command to finish"));
     const controller = new AbortController();
+    const sessionId = this.selectedSessionId;
     const signal = AbortSignal.any([options.signal, controller.signal]);
     const done = Promise.resolve().then(() => {
       signal.throwIfAborted();
-      return this.route(route, { ...options, signal });
+      return this.route(route, { ...options, signal }, sessionId);
     }).finally(() => { this.inputOperations.delete(done); });
-    this.inputOperations.set(done, controller);
+    this.inputOperations.set(done, { controller, ...(route.category === "work" ? { sessionId } : {}) });
     void done.catch(() => undefined);
     return done;
   }
 
-  private async routeGoal(action: GoalInputAction, options: InputOptions): Promise<InputResult> {
-    const sessionId = this.selectedSessionId;
+  private async routeGoal(action: GoalInputAction, options: InputOptions, sessionId: string): Promise<InputResult> {
     const runtime = this.runtime;
     if (action.type === "run" || action.type === "resume") {
       if (!runtime.model) throw new Error("/goal requires a configured model. Use /model to choose one.");
@@ -249,14 +250,14 @@ Use schedule_task when the user requests recurring or future work; use list_sche
     }
   }
 
-  private commandContext(signal: AbortSignal) {
-    return { rootPath: this.runtime.rootPath, runtime: this.runtime, selectedSessionId: this.selectedSessionId,
+  private commandContext(signal: AbortSignal, sessionId: string) {
+    return { rootPath: this.runtime.rootPath, runtime: this.runtime, selectedSessionId: sessionId,
       skills: this.runtime.skills, skillDiagnostics: this.runtime.skillDiagnostics, signal,
       openSession: (id: string) => this.openSession(id, { signal }) };
   }
 
-  private async routeThreadCommand(input: string, options: { signal: AbortSignal }): Promise<InputResult> {
-    const result = await routeThreadCommand(this.commands, input, this.commandContext(options.signal));
+  private async routeThreadCommand(input: string, options: { signal: AbortSignal }, sessionId: string): Promise<InputResult> {
+    const result = await routeThreadCommand(this.commands, input, this.commandContext(options.signal, sessionId));
     if (!result) throw new Error(`Could not route command: ${input}`);
     return { kind: "command", result };
   }
@@ -277,7 +278,7 @@ Use schedule_task when the user requests recurring or future work; use list_sche
         await Promise.allSettled(this.extensionDisposers.splice(0).map((dispose) => Promise.resolve().then(dispose)));
       }
     });
-    for (const [, controller] of operations) controller.abort(new DOMException("Thread application closed", "AbortError"));
+    for (const [, { controller }] of operations) controller.abort(new DOMException("Thread application closed", "AbortError"));
     return this.appClosing;
   }
 }

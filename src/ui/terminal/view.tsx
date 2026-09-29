@@ -93,7 +93,7 @@ export function ThreadRoot(props: {
       draft.replace(active.composerInput);
       delete active.composerInput;
     }
-    if (!active.busy) draft.editor.focus();
+    draft.editor.focus();
   });
   createEffect(() => {
     const active = screen();

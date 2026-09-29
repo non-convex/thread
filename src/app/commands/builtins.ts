@@ -65,14 +65,14 @@ const sessions: ThreadCommand = {
       return tip ? labels.get(tip) ?? "(no request text)" : "Root (no turns)";
     };
     const lines = summaries.map((session) =>
-      `${session.active ? "*" : " "} ${session.sessionId}${running.has(session.sessionId) ? " running" : ""} · ${name(session)} · turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
+      `${session.active ? "*" : " "} ${session.sessionId}${context.runtime.sessionBusy(session.sessionId) ? " running" : ""} · ${name(session)} · turns=${session.turnCount} created=${new Date(session.createdAt).toISOString()}`
     );
     return viewResult(lines.join("\n"), {
       type: "command_picker",
       title: "Sessions · switch views without interrupting execution",
       items: summaries.map((session) => ({
         label: name(session),
-        description: `${session.sessionId}${running.has(session.sessionId) ? " · running" : ""} · ${new Date(session.createdAt).toLocaleString()} · ${session.turnCount} turns`,
+        description: `${session.sessionId}${context.runtime.sessionBusy(session.sessionId) ? " · running" : ""} · ${new Date(session.createdAt).toLocaleString()} · ${session.turnCount} turns`,
         command: `/session ${session.sessionId}`,
         submit: true,
         current: session.active,

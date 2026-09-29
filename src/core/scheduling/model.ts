@@ -8,7 +8,7 @@ export interface CreateScheduleInput {
   name: string;
   /** Brief wakeup cue; the Session retains the task's background and ongoing instructions. */
   prompt: string;
-  /** Full task setup, queued at creation and run once the runtime is idle. Defaults to prompt. */
+  /** Full task setup, queued at creation and run once the bound Session is idle. Defaults to prompt. */
   initialPrompt?: string;
   schedule: ScheduleSpec;
   /** Omit to create one independent Session for initialization and all follow-ups. */

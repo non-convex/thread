@@ -50,7 +50,7 @@ export interface CommandResult {
 
 export interface ThreadCommandContext {
   rootPath: string;
-  runtime: Pick<ThreadRuntime, "readHistory" | "readSession" | "listSessions" | "rewindCandidates" | "recallEnabled" | "searchHistory" | "schedulingEnabled" | "listSchedules">;
+  runtime: Pick<ThreadRuntime, "readHistory" | "readSession" | "listSessions" | "sessionBusy" | "rewindCandidates" | "recallEnabled" | "searchHistory" | "schedulingEnabled" | "listSchedules">;
   selectedSessionId: string;
   skillDiagnostics?: readonly import("../../core/skills/loader.js").SkillDiagnostic[];
   skills?: readonly import("../../core/skills/loader.js").Skill[];

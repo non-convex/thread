@@ -28,7 +28,7 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     description: "When the user asks to do something at a future time or repeatedly, use this tool to schedule it rather than promising to remember. " +
       "Schedules wake only while Thread is running; missed intervals are merged, not replayed. " +
       "target=new (default) creates one independent Session reused for all wakeups; it does not inherit this chat. " +
-      "Creation queues initialPrompt immediately (defaulting to prompt); it runs as soon as the runtime is idle, after any current turn. " +
+      "Creation queues initialPrompt immediately (defaulting to prompt); it runs as soon as the bound Session is idle, after any current turn in that Session. " +
       "For new Sessions, put the full background, scope, and ongoing instructions in initialPrompt, including what to do now. " +
       "Sessions retain context across wakeups: keep prompt to a brief wakeup cue, without repeating background, rules, or checklists. " +
       "If the requested action must wait, use initialPrompt only for preparation, not early execution. " +
@@ -36,7 +36,7 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 200, description: "Recognizable task name." }),
       prompt: Type.String({ minLength: 1, maxLength: 32_000, description: "Brief cue for scheduled wakeups, e.g. 'Wake up and continue.' Rely on Session context; do not repeat the task setup. Also used at creation if initialPrompt is omitted." }),
-      initialPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Complete background, scope, ongoing instructions, and what to do now. Queued immediately at creation; runs once when the runtime is idle." })),
+      initialPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Complete background, scope, ongoing instructions, and what to do now. Queued immediately at creation; runs once when the bound Session is idle." })),
       schedule: scheduleSchema,
       target: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("new")], { description: "Current invoking Session, or one new independent Session (default)." })),
     }),
@@ -58,7 +58,7 @@ export function createScheduleTools(host: ScheduleHost): AgentTool[] {
           ...(args.initialPrompt !== undefined ? { initialPrompt: args.initialPrompt } : {}),
           ...(sessionId ? { sessionId } : {}),
         }, { signal: context.signal });
-        return ok(JSON.stringify({ task, note: "The initial message is queued now and runs once the runtime is idle, after any current turn. Later messages follow the time rule. Thread must remain running; all wakeups reuse the bound Session." }, null, 2), task);
+        return ok(JSON.stringify({ task, note: "The initial message is queued now and runs once the bound Session is idle, after any current turn in that Session. Later messages follow the time rule. Thread must remain running; all wakeups reuse the bound Session." }, null, 2), task);
       } catch (error) { return fail(error); }
     },
   };

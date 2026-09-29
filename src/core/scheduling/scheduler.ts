@@ -2,7 +2,7 @@ import type { ScheduledTask } from "./model.js";
 
 export class ScheduleScheduler {
   private timer: ReturnType<typeof setInterval> | undefined;
-  private pending: Promise<void> | undefined;
+  private readonly pending = new Map<string, Promise<void>>();
 
   constructor(private readonly hooks: {
     list: () => ScheduledTask[];
@@ -21,38 +21,34 @@ export class ScheduleScheduler {
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    await this.pending;
+    await Promise.all(this.pending.values());
   }
 
   private tick(): void {
-    if (!this.timer || this.pending) return;
-    const run = this.runTick();
-    this.pending = run;
-    // runTick handles errors from list, wake and onError; no rejection escapes the timer callback.
-    void run.then(() => {
-      if (this.pending === run) this.pending = undefined;
-    });
-  }
-
-  private async runTick(): Promise<void> {
-    let id = "";
+    if (!this.timer) return;
     try {
       const now = Date.now();
-      let due: ScheduledTask | undefined;
-      for (const task of this.hooks.list()) {
-        if (task.enabled && task.nextRunAt !== null && task.nextRunAt <= now &&
-          (!due || task.nextRunAt < due.nextRunAt!)) due = task;
+      const due = this.hooks.list().filter((task) => task.enabled && task.nextRunAt !== null && task.nextRunAt <= now)
+        .sort((left, right) => left.nextRunAt! - right.nextRunAt!);
+      for (const task of due) {
+        if (this.pending.has(task.id)) continue;
+        // Each wake reserves its Session synchronously. A busy Session stays due;
+        // it cannot hold up schedules targeting other Sessions.
+        const run = this.wake(task.id).finally(() => { this.pending.delete(task.id); });
+        this.pending.set(task.id, run);
       }
-      if (!due) return;
-      id = due.id;
-      // A busy host may do nothing; the task remains due and is tried again next second.
-      await this.hooks.wake(id);
     } catch (error) {
-      try {
-        await this.hooks.onError(id, error);
-      } catch {
-        // Reporting failures must not become unhandled timer rejections.
-      }
+      void this.reportError("", error);
     }
+  }
+
+  private async wake(id: string): Promise<void> {
+    try { await this.hooks.wake(id); }
+    catch (error) { await this.reportError(id, error); }
+  }
+
+  private async reportError(id: string, error: unknown): Promise<void> {
+    try { await this.hooks.onError(id, error); }
+    catch { /* Reporting failures must not become unhandled timer rejections. */ }
   }
 }

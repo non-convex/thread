@@ -286,11 +286,15 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 
 ## 会话与读取
 
-每次手动执行都显式传入 `sessionId`；定时任务则始终使用创建时绑定的会话。客户端分别保存自己选中的会话，即使另一个客户端创建或读取会话，也不会改变本次执行的目标。一个 runtime 同时只运行一个执行操作；忙时手动执行会被拒绝，定时任务等待可执行时机，不提供同项目跨会话并发。
+每次手动执行都显式传入 `sessionId`；定时任务则始终使用创建时绑定的会话。客户端分别保存自己选中的会话，创建或切换查看会话不会改变已接受请求的执行目标。同一个 runtime 内，不同 Session 可以并发执行；同一 Session 同时只允许一个执行操作，重复提交会被拒绝，定时任务等待该 Session 空闲。主模型客户端按 Session 绑定缓存和连接标识，避免并行会话共用续接连接。
+
+各 Session 共享项目工作区，内置文件写入继续使用同一路径协调和版本检查。恢复文件的 rewind、文件历史清理、MCP 重连及模型／Agent 配置变更仍要求整个 runtime 空闲；不恢复文件的 rewind 只要求目标 Session 空闲。`close()` 会取消并等待所有 Session，`interrupt(sessionId)` 只处理指定 Session。Dreamer 在所有前台执行结束后才重新开始计算空闲等待。
 
 | 操作 | 语义 |
 | --- | --- |
-| `createSession()` | 创建并返回 `ProjectSession` |
+| `createSession()` | 创建并返回 `ProjectSession`，其他 Session 执行中也可调用 |
+| `busy` / `activeSessionIds` | 是否有执行操作，以及所有执行目标的会话 ID 快照；与客户端当前选中的会话无关 |
+| `sessionBusy(sessionId)` | 目标 Session 是否正在执行，或有项目级独占操作阻止它执行 |
 | `listSessions()` | 返回会话 ID、live tip、turn 数和创建时间 |
 | `readSession(sessionId)` | 返回会话、已提交 live path 上的 `turns`、`entries`、`tasks`、`liveTipTurnId`，以及独立的 `activeTurn` |
 | `readHistory()` | 返回整个项目保留的会话、turn、条目和 live tips，包含回退后保留的分支 |
@@ -385,7 +389,7 @@ Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息�
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
 | `dreamer_status` | 后台审阅的待办、分片进度、最近结果和错误；sessionId/turnId 为 null |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
-| `runtime_status` | 执行准入和结算后的 busy 状态，覆盖尚未创建 turn 就失败或取消的操作；不代表界面当前查看的会话 |
+| `runtime_status` | 该执行目标准入和结算后的 busy 状态，按 `sessionId` 区分，覆盖尚未创建 turn 就失败或取消的操作；无目标会话的项目级操作使用 null。不是整个 runtime 或当前查看会话的汇总状态；其他 Session 可继续执行 |
 
 模型观测覆盖主 agent、worker、Dreamer，以及历史摘要和轮内进度摘要；后两者的 purpose 分别为 `history_summary`、`progress_summary`。压缩使用独立 executionId；自动压缩关联当前 turn，手动压缩保留目标 turnId，但不把自己作为已完成轮次的子执行。
 

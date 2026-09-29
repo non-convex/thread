@@ -38,6 +38,7 @@ type AgentEvent = ModelEvent | ToolEvent
 type ExecutionPayload = (
   | AgentEvent
   | { type: "dreamer_status"; status: DreamerStatus }
+  /** Busy for this operation's target, not aggregate runtime activity; a target may be null. */
   | { type: "runtime_status"; busy: boolean }
   | { type: "goal_changed"; sessionId: string; goal: SessionGoal | null }
   | { type: "agent_task_created"; summary: AgentTaskSummary }

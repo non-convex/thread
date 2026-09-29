@@ -108,13 +108,16 @@ export class SessionTreeService {
     await this.interruptRunningTurns();
   }
 
-  async createSession(): Promise<ProjectSession> {
-    this.requireIdle();
+  async createSession(signal?: AbortSignal): Promise<ProjectSession> {
+    signal?.throwIfAborted();
     const session: ProjectSession = { id: createId("session"), treeId: this.tree.id, createdAt: Date.now() };
-    await this.repository.appendBatch(() => [
-      { type: "session_created", session },
-      { type: "active_session_changed", sessionId: session.id, reason: "new" },
-    ], true);
+    await this.repository.appendBatch(() => {
+      signal?.throwIfAborted();
+      return [
+        { type: "session_created", session },
+        { type: "active_session_changed", sessionId: session.id, reason: "new" },
+      ];
+    }, true);
     return structuredClone(session);
   }
 
@@ -236,8 +239,8 @@ export class SessionTreeService {
   planTurn(input: string, images: readonly ImageContent[], sessionId: string, fileCheckpoints: boolean,
     dreamerReview?: DreamerAdmission, goal?: SessionGoal, scheduled?: ScheduledWakeup): PlannedTurn {
     if (userContentIsEmpty(input, images)) throw new Error("User message cannot be empty");
-    this.requireIdle();
     const session = this.resolveSession(sessionId);
+    this.requireIdle(session.id);
     return {
       id: createId("turn"),
       sessionId: session.id,
@@ -261,7 +264,7 @@ export class SessionTreeService {
     const content = planned.content;
     if (isEmptyUserMessageContent(content)) throw new Error("User message cannot be empty");
     const goal = planned.goal === undefined ? undefined : structuredClone(planned.goal);
-    this.requireIdle();
+    this.requireIdle(planned.sessionId);
     if (!this.projection.sessions.has(planned.sessionId) ||
         planned.parentTurnId !== (this.projection.liveTips.get(planned.sessionId) ?? null)) {
       throw new Error(`Planned turn ${planned.id} no longer extends its Session`);
@@ -422,7 +425,7 @@ export class SessionTreeService {
   }
 
   async moveLiveTipForRewind(turnId: string | null, sessionId: string): Promise<void> {
-    this.requireIdle();
+    this.requireIdle(sessionId);
     await this.repository.append(() => ({
       type: "live_tip_changed",
       sessionId,
@@ -493,11 +496,12 @@ export class SessionTreeService {
     return matches[0]!;
   }
 
-  requireIdle(): void {
+  requireIdle(sessionId?: string): void {
     if (this.projection.pendingFileRewind) {
       throw new Error("A file rewind is unfinished. Resolve the reported file error and reopen the project to resume it before continuing.");
     }
-    const running = this.projection.runningTurnsBySession.values().next().value;
+    const running = sessionId ? this.projection.runningTurnsBySession.get(sessionId)
+      : this.projection.runningTurnsBySession.values().next().value;
     if (running) throw new Error(`Turn ${running.id} is still running`);
   }
 
