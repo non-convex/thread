@@ -32,7 +32,7 @@ The Session Tree and worker-task repositories own their record formats and proje
 
 `core/session-tree/service.ts` records a new dedicated Session and its schedule in one event batch without selecting it, with initialization due at creation rather than at the first time-rule occurrence. On wakeup admission it batches the ordinary user message and `Turn.scheduled` origin with consumption/advancement of the due occurrence; initialization preserves an `at` rule's follow-up even if that time is already overdue. `session-tree/projection.ts` retains the task state; rewind does not reverse schedules or consumed wakeups. Interrupted turn recovery does not retry their side effects.
 
-Session Tree and credential storage use `core/utils/file-lock.ts`. The operating system owns the lock, and closing the handle releases it. The lock file stays in place. JSON snapshots, including the Session Tree manifest, share `atomic-json.ts`. Built-in file tools and rewind use the underlying `atomic-file.ts` helper to prepare complete files before publishing them.
+Session Tree and credential storage use `core/utils/file-lock.ts`. The operating system owns the lock, and closing the handle releases it. The lock file stays in place. JSON snapshots share `atomic-json.ts`. Built-in file tools and rewind use the underlying `atomic-file.ts` helper to prepare complete files before publishing them.
 
 A file rewind records its source and target in the Session Tree before changing the workspace. Its completion event moves the live tip only after all restores succeed. If restoration fails, foreground work remains blocked; startup resumes the saved intent before exposing the runtime. Conversation-only rewind still moves the tip without a file-restoration intent.
 

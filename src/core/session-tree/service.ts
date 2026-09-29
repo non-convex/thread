@@ -106,7 +106,6 @@ export class SessionTreeService {
       throw new Error("Session Tree project identity does not match the opened project");
     }
     await this.interruptRunningTurns();
-    await this.repository.writeManifest();
   }
 
   async createSession(): Promise<ProjectSession> {

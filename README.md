@@ -245,7 +245,7 @@ Project state lives outside the workspace:
 ~/.thread/projects/<project-id>/
 ├── project.json
 ├── state.json
-├── session-tree/{tree.json,events.jsonl}
+├── session-tree/events.jsonl
 ├── file-history/blobs/
 ├── session-search/
 └── agent-tasks/events.jsonl

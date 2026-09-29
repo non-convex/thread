@@ -241,7 +241,7 @@ Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <32
 ~/.thread/projects/<project-id>/
 ├── project.json
 ├── state.json
-├── session-tree/{tree.json,events.jsonl}
+├── session-tree/events.jsonl
 ├── file-history/blobs/
 ├── session-search/
 └── agent-tasks/events.jsonl
