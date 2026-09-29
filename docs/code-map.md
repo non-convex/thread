@@ -4,7 +4,7 @@ Thread has three layers. The runtime owns execution and durable project history.
 
 ## From input to a durable turn
 
-`src/app/thread-app.ts` opens the runtime, loads extensions and tracks the session selected by the coding app. `input-router.ts` parses a slash command once and dispatches it. Model selection and agent settings share the handlers in `commands/agents.ts`; Session Tree commands remain in `commands/builtins.ts`.
+`src/app/thread-app.ts` opens the runtime, loads extensions and tracks the session selected by the coding app. `input-router.ts` parses a slash command once, and `ThreadApp` dispatches it. Model selection and agent settings share the handlers in `commands/agents.ts`; Session Tree commands remain in `commands/builtins.ts`.
 
 All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. Startup resource acquisition lives in `resources.ts`. The runtime serializes foreground operations, captures the selected model and preferences for each turn, publishes events, and settles owned work before closing.
 
@@ -50,7 +50,7 @@ Optional MCP support lives in `core/mcp/`: `client.ts` owns SDK connections and 
 
 The TUI controller receives runtime events and batches them through `ui/events.ts`. It retains one in-flight view even when that Session is not selected, so `/schedule` and `/session` can open live work without losing received deltas. `runtime_status` drives execution busy state; selecting a Session only changes the viewing preference and does not redirect execution. Coding command events originate in `app/events.ts` and arrive through `onCommandEvent`; the app never imports UI code. Core uses `onExecutionEvent` internally, and public prompt options forward only the documented fields. `ui/reducer.ts` updates presentation state. Main-agent and worker traces both use `ui/transcript-stream.ts`, so text completion and tool-call transitions follow the same rules. Historical transcript projection remains separate because it reads persisted records rather than deltas.
 
-`contextSnapshot(sessionId)` supplies messages and usage from one context build. Context construction clones retained content rather than first cloning the complete live-path history. Public history queries still return independent snapshots. `scripts/check-boundaries.ts`, invoked by `bun run check`, enforces core/app import directions without executing the runtime.
+`contextSnapshot(sessionId)` supplies messages and usage from one context build. Context construction clones retained content rather than first cloning the complete live-path history. Public history queries still return independent snapshots.
 
 `terminal/view.tsx` handles screen selection and keyboard priority. `composer-state.ts` owns the input draft and asynchronous clipboard work; clearing a draft prevents an earlier paste from updating the replacement draft. Question input is handled by `ask-input.ts` with answers stored on the displayed request.
 

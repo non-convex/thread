@@ -10,7 +10,7 @@
 
 仓库是一个包，公开入口为 `thread`、`thread/runtime` 和 `thread/tui`，共用安装依赖与发布流程。`thread` 在 runtime API 之外提供 `ThreadApp`、配置辅助函数和应用扩展类型；repository、projection、runner 和 scheduler 等内部可写对象不再由包入口导出。MCP 实现后同样归入核心。
 
-`bun run check` 执行类型检查和静态依赖边界检查，包括类型导入、重导出及动态导入：core 只能依赖 core 或外部包，app 只能依赖 app、core 或外部包，runtime 入口只指向 core。CI 使用同一个命令，并执行构建；不自动运行独立宿主示例。
+`bun run check` 执行 TypeScript 类型检查。core 只能依赖 core 或外部包、app 只能依赖 app、core 或外部包、runtime 入口只指向 core 这些依赖方向靠代码审查维持，没有脚本自动检查。CI 使用同一个命令，并执行构建；不自动运行独立宿主示例。
 
 ## 运行离线示例
 
