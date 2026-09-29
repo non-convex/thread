@@ -1,0 +1,600 @@
+diff --git a/index.bun.js b/index.bun.js
+index 554cbb96eb52968a777da0190018264c10c6a6f2..815eef77e53d709b9d7dffdd9d5c57f1b8cdc70a 100644
+--- a/index.bun.js
++++ b/index.bun.js
+@@ -11793,6 +11793,7 @@ class MarkdownRenderable extends Renderable {
+     this._renderNode = options.renderNode;
+     this._streaming = options.streaming ?? this._contentDefaultOptions.streaming;
+     this._internalBlockMode = options.internalBlockMode ?? this._contentDefaultOptions.internalBlockMode;
++    this._baseHighlight = options.baseHighlight;
+     this.updateBlocks();
+   }
+   get content() {
+@@ -11905,7 +11906,9 @@ class MarkdownRenderable extends Renderable {
+     return style;
+   }
+   createChunk(text, group, link2) {
+-    const style = this.getStyle(group) || this.getStyle("default");
++    const base = this._baseHighlight ? this.getStyle(this._baseHighlight) : undefined;
++    const specific = this.getStyle(group) || this.getStyle("default");
++    const style = group === "default" ? { ...specific, ...base } : { ...base, ...specific };
+     return {
+       __isChunk: true,
+       text,
+@@ -11924,16 +11927,15 @@ class MarkdownRenderable extends Renderable {
+     return this.createChunk(text, "default");
+   }
+   createInitialStyledText(token) {
+-    if (!this._streaming)
+-      return;
+     const chunks = [];
+-    if ("tokens" in token && Array.isArray(token.tokens)) {
+-      this.renderInlineContent(token.tokens, chunks);
+-    }
+-    if (chunks.length === 0 && "text" in token && typeof token.text === "string") {
+-      this.renderInlineContent(x.lexInline(token.text), chunks);
++    const tokens = token.tokens?.length ? token.tokens : x.lexInline(token.text ?? "");
++    if (token.type === "heading") {
++      if (!this._conceal) chunks.push(this.createChunk("#".repeat(token.depth) + " ", "markup.heading"));
++      for (const child of tokens) this.renderInlineTokenWithStyle(child, chunks, "markup.heading");
++    } else {
++      this.renderInlineContent(tokens, chunks);
+     }
+-    return chunks.length > 0 ? new StyledText(chunks) : undefined;
++    return new StyledText(chunks);
+   }
+   renderInlineContent(tokens, chunks) {
+     for (const token of tokens) {
+@@ -11943,7 +11945,8 @@ class MarkdownRenderable extends Renderable {
+   renderInlineToken(token, chunks) {
+     switch (token.type) {
+       case "text":
+-        chunks.push(this.createDefaultChunk(token.text));
++        if (token.tokens?.length) this.renderInlineContent(token.tokens, chunks);
++        else chunks.push(this.createDefaultChunk(token.text));
+         break;
+       case "escape":
+         chunks.push(this.createDefaultChunk(token.text));
+@@ -12037,25 +12040,15 @@ class MarkdownRenderable extends Renderable {
+     }
+   }
+   renderInlineTokenWithStyle(token, chunks, styleGroup, link2) {
+-    switch (token.type) {
+-      case "text":
+-        chunks.push(this.createChunk(token.text, styleGroup, link2));
+-        break;
+-      case "escape":
+-        chunks.push(this.createChunk(token.text, styleGroup, link2));
+-        break;
+-      case "codespan":
+-        if (this._conceal) {
+-          chunks.push(this.createChunk(token.text, "markup.raw", link2));
+-        } else {
+-          chunks.push(this.createChunk("`", "markup.raw", link2));
+-          chunks.push(this.createChunk(token.text, "markup.raw", link2));
+-          chunks.push(this.createChunk("`", "markup.raw", link2));
+-        }
+-        break;
+-      default:
+-        this.renderInlineToken(token, chunks);
+-        break;
++    if ((token.type === "text" && !token.tokens?.length) || token.type === "escape") {
++      chunks.push(this.createChunk(token.text, styleGroup, link2));
++      return;
++    }
++    const nested = [];
++    this.renderInlineToken(token, nested);
++    const parent = this.createChunk("", styleGroup, link2);
++    for (const chunk of nested) {
++      chunks.push({ ...chunk, attributes: (chunk.attributes ?? 0) | parent.attributes, link: link2 ?? chunk.link });
+     }
+   }
+   applyMargins(renderable, marginTop, marginBottom) {
+@@ -12063,20 +12056,12 @@ class MarkdownRenderable extends Renderable {
+     renderable.marginBottom = marginBottom;
+   }
+   createMarkdownCodeRenderable(content, id, marginBottom = 0, onChunks = this._linkifyMarkdownChunks, baseHighlight, initialStyledText) {
+-    return new CodeRenderable(this.ctx, {
++    // Marked owns prose semantics; Tree-sitter remains exclusive to fenced code.
++    return new TextRenderable(this.ctx, {
+       id,
+-      content,
+-      filetype: "markdown",
+-      syntaxStyle: this._syntaxStyle,
++      content: initialStyledText ?? this.createInitialStyledText({ text: content }),
+       fg: this._fg,
+       bg: this._bg,
+-      conceal: this._conceal,
+-      drawUnstyledText: initialStyledText !== undefined,
+-      streaming: true,
+-      initialStyledText,
+-      baseHighlight,
+-      onChunks,
+-      treeSitterClient: this._treeSitterClient,
+       width: "100%",
+       marginBottom
+     });
+@@ -12087,6 +12072,22 @@ class MarkdownRenderable extends Renderable {
+   getBlockquoteBorderColor() {
+     return this.getStyle("conceal")?.fg ?? this.getStyle("default")?.fg ?? this._fg ?? "#FFFFFF";
+   }
++  createBlockquoteBody(token, id) {
++    return new MarkdownRenderable(this.ctx, {
++      id,
++      content: this.getBlockquoteContent(token),
++      syntaxStyle: this._syntaxStyle,
++      fg: this._fg,
++      bg: this._bg,
++      conceal: this._conceal,
++      concealCode: this._concealCode,
++      streaming: this._streaming,
++      treeSitterClient: this._treeSitterClient,
++      internalBlockMode: "top-level",
++      baseHighlight: "markup.quote",
++      width: "100%"
++    });
++  }
+   createBlockquoteRenderable(token, id, marginBottom = 0) {
+     const renderable = new BoxRenderable(this.ctx, {
+       id,
+@@ -12097,7 +12098,7 @@ class MarkdownRenderable extends Renderable {
+       flexShrink: 0,
+       marginBottom
+     });
+-    renderable.add(this.createMarkdownCodeRenderable(this.getBlockquoteContent(token), `${id}-content`, 0, this._linkifyMarkdownChunks, "markup.quote"));
++    renderable.add(this.createBlockquoteBody(token, `${id}-content`));
+     return renderable;
+   }
+   createListRenderable(token, id, marginBottom = 0) {
+@@ -12243,8 +12244,8 @@ class MarkdownRenderable extends Renderable {
+     return tokens;
+   }
+   applyListChildRenderable(renderable, token, previousToken, id) {
+-    if ((token.type === "text" || token.type === "paragraph") && renderable instanceof CodeRenderable) {
+-      this.applyMarkdownCodeRenderable(renderable, this.normalizeScrollbackMarkdownBlockRaw(token.raw), 0);
++    if ((token.type === "text" || token.type === "paragraph") && renderable instanceof TextRenderable) {
++      this.applyMarkdownCodeRenderable(renderable, this.normalizeScrollbackMarkdownBlockRaw(token.raw), 0, undefined, this.createInitialStyledText(token));
+       return true;
+     }
+     if (token.type === "list" && renderable instanceof BoxRenderable) {
+@@ -12321,16 +12322,9 @@ class MarkdownRenderable extends Renderable {
+     });
+   }
+   applyMarkdownCodeRenderable(renderable, content, marginBottom, baseHighlight, initialStyledText) {
+-    renderable.initialStyledText = initialStyledText;
+-    renderable.filetype = "markdown";
+-    renderable.syntaxStyle = this._syntaxStyle;
+     renderable.fg = this._fg;
+     renderable.bg = this._bg;
+-    renderable.conceal = this._conceal;
+-    renderable.drawUnstyledText = initialStyledText !== undefined;
+-    renderable.streaming = true;
+-    renderable.baseHighlight = baseHighlight;
+-    renderable.content = content;
++    renderable.content = initialStyledText ?? this.createInitialStyledText({ text: content });
+     renderable.marginBottom = marginBottom;
+   }
+   applyBlockquoteRenderable(renderable, token, marginBottom) {
+@@ -12339,14 +12333,20 @@ class MarkdownRenderable extends Renderable {
+     renderable.borderColor = this.getBlockquoteBorderColor();
+     renderable.marginBottom = marginBottom;
+     const child = renderable.getChildren()[0];
+-    if (child instanceof CodeRenderable) {
+-      this.applyMarkdownCodeRenderable(child, this.getBlockquoteContent(token), 0, "markup.quote");
++    if (child instanceof MarkdownRenderable) {
++      child.syntaxStyle = this._syntaxStyle;
++      child.fg = this._fg;
++      child.bg = this._bg;
++      child.conceal = this._conceal;
++      child.concealCode = this._concealCode;
++      child.streaming = this._streaming;
++      child.content = this.getBlockquoteContent(token);
+       return;
+     }
+     for (const existing of renderable.getChildren()) {
+       existing.destroyRecursively();
+     }
+-    renderable.add(this.createMarkdownCodeRenderable(this.getBlockquoteContent(token), `${renderable.id}-content`, 0, this._linkifyMarkdownChunks, "markup.quote"));
++    renderable.add(this.createBlockquoteBody(token, `${renderable.id}-content`));
+   }
+   applyCodeBlockRenderable(renderable, token, marginBottom) {
+     if (!(renderable instanceof CodeRenderable))
+@@ -12365,13 +12365,7 @@ class MarkdownRenderable extends Renderable {
+     return token.type === "code" || token.type === "table" || token.type === "blockquote" || token.type === "hr";
+   }
+   getInterBlockMargin(token, nextToken) {
+-    if (!nextToken)
+-      return 0;
+-    if (this.shouldRenderSeparately(token))
+-      return 1;
+-    if (!this.shouldRenderSeparately(nextToken))
+-      return 0;
+-    return TRAILING_MARKDOWN_BLOCK_NEWLINES_RE.test(token.raw) ? 0 : 1;
++    return nextToken ? 1 : 0;
+   }
+   applyInterBlockMargin(state, token, nextToken) {
+     if (state.tracksInterBlockMargin === false)
+@@ -12397,45 +12391,8 @@ class MarkdownRenderable extends Renderable {
+     return this._renderNode?.codeBlockOnly === true;
+   }
+   buildRenderableTokens(tokens) {
+-    if (this._renderNode && !this.isCodeBlockOnlyRenderer()) {
+-      return tokens.filter((token) => token.type !== "space");
+-    }
+-    const renderTokens = [];
+-    let markdownRaw = "";
+-    const flushMarkdownRaw = () => {
+-      if (markdownRaw.length === 0)
+-        return;
+-      const normalizedRaw = this.normalizeMarkdownBlockRaw(markdownRaw);
+-      if (normalizedRaw.length > 0) {
+-        renderTokens.push(this.createMarkdownBlockToken(normalizedRaw));
+-      }
+-      markdownRaw = "";
+-    };
+-    for (let i = 0;i < tokens.length; i += 1) {
+-      const token = tokens[i];
+-      if (token.type === "space") {
+-        if (markdownRaw.length === 0) {
+-          continue;
+-        }
+-        let nextIndex = i + 1;
+-        while (nextIndex < tokens.length && tokens[nextIndex].type === "space") {
+-          nextIndex += 1;
+-        }
+-        const nextToken = tokens[nextIndex];
+-        if (nextToken && !this.shouldRenderSeparately(nextToken)) {
+-          markdownRaw += token.raw;
+-        }
+-        continue;
+-      }
+-      if (this.shouldRenderSeparately(token)) {
+-        flushMarkdownRaw();
+-        renderTokens.push(token);
+-        continue;
+-      }
+-      markdownRaw += token.raw;
+-    }
+-    flushMarkdownRaw();
+-    return renderTokens;
++    // Keep Marked's block/inline tokens instead of reparsing coalesced source.
++    return tokens.filter((token) => token.type !== "space");
+   }
+   buildTopLevelRenderBlocks(tokens) {
+     const blocks = [];
+@@ -12535,7 +12492,7 @@ class MarkdownRenderable extends Renderable {
+       ...chunk,
+       fg: headingStyle.fg ?? chunk.fg,
+       bg: headingStyle.bg ?? chunk.bg,
+-      attributes: headingAttributes
++      attributes: headingAttributes | (chunk.attributes ?? 0)
+     }));
+   }
+   buildTableContentCache(table, previous, forceRegenerate = false) {
+@@ -12862,7 +12819,7 @@ class MarkdownRenderable extends Renderable {
+       const tableToken = token;
+       const { cache, changed } = this.buildTableContentCache(tableToken, state.tableContentCache);
+       if (!cache) {
+-        if (state.renderable instanceof CodeRenderable) {
++        if (state.renderable instanceof TextRenderable) {
+           this.applyMarkdownCodeRenderable(state.renderable, tableToken.raw, marginBottom);
+           state.tableContentCache = undefined;
+           return;
+@@ -12890,7 +12847,7 @@ class MarkdownRenderable extends Renderable {
+       state.tableContentCache = cache;
+       return;
+     }
+-    if (state.renderable instanceof CodeRenderable) {
++    if (state.renderable instanceof TextRenderable) {
+       this.applyMarkdownCodeRenderable(state.renderable, this.getTopLevelBlockRaw(token) ?? token.raw, marginBottom, undefined, this.createInitialStyledText(token));
+       return;
+     }
+@@ -12987,7 +12944,7 @@ class MarkdownRenderable extends Renderable {
+       return renderable instanceof BoxRenderable;
+     if (token.type === "hr")
+       return renderable instanceof BoxRenderable;
+-    return renderable instanceof CodeRenderable;
++    return renderable instanceof TextRenderable;
+   }
+   updateBlocks(forceTableRefresh = false) {
+     if (this.isDestroyed)
+diff --git a/index.node.js b/index.node.js
+index 075fbd4ef05232695c122845348686bdedf0917d..d7f0d8f1a64dbc13f37fdb6dce66cd9c7035c424 100644
+--- a/index.node.js
++++ b/index.node.js
+@@ -11792,6 +11792,7 @@ class MarkdownRenderable extends Renderable {
+     this._renderNode = options.renderNode;
+     this._streaming = options.streaming ?? this._contentDefaultOptions.streaming;
+     this._internalBlockMode = options.internalBlockMode ?? this._contentDefaultOptions.internalBlockMode;
++    this._baseHighlight = options.baseHighlight;
+     this.updateBlocks();
+   }
+   get content() {
+@@ -11904,7 +11905,9 @@ class MarkdownRenderable extends Renderable {
+     return style;
+   }
+   createChunk(text, group, link2) {
+-    const style = this.getStyle(group) || this.getStyle("default");
++    const base = this._baseHighlight ? this.getStyle(this._baseHighlight) : undefined;
++    const specific = this.getStyle(group) || this.getStyle("default");
++    const style = group === "default" ? { ...specific, ...base } : { ...base, ...specific };
+     return {
+       __isChunk: true,
+       text,
+@@ -11923,16 +11926,15 @@ class MarkdownRenderable extends Renderable {
+     return this.createChunk(text, "default");
+   }
+   createInitialStyledText(token) {
+-    if (!this._streaming)
+-      return;
+     const chunks = [];
+-    if ("tokens" in token && Array.isArray(token.tokens)) {
+-      this.renderInlineContent(token.tokens, chunks);
+-    }
+-    if (chunks.length === 0 && "text" in token && typeof token.text === "string") {
+-      this.renderInlineContent(x.lexInline(token.text), chunks);
++    const tokens = token.tokens?.length ? token.tokens : x.lexInline(token.text ?? "");
++    if (token.type === "heading") {
++      if (!this._conceal) chunks.push(this.createChunk("#".repeat(token.depth) + " ", "markup.heading"));
++      for (const child of tokens) this.renderInlineTokenWithStyle(child, chunks, "markup.heading");
++    } else {
++      this.renderInlineContent(tokens, chunks);
+     }
+-    return chunks.length > 0 ? new StyledText(chunks) : undefined;
++    return new StyledText(chunks);
+   }
+   renderInlineContent(tokens, chunks) {
+     for (const token of tokens) {
+@@ -11942,7 +11944,8 @@ class MarkdownRenderable extends Renderable {
+   renderInlineToken(token, chunks) {
+     switch (token.type) {
+       case "text":
+-        chunks.push(this.createDefaultChunk(token.text));
++        if (token.tokens?.length) this.renderInlineContent(token.tokens, chunks);
++        else chunks.push(this.createDefaultChunk(token.text));
+         break;
+       case "escape":
+         chunks.push(this.createDefaultChunk(token.text));
+@@ -12036,25 +12039,15 @@ class MarkdownRenderable extends Renderable {
+     }
+   }
+   renderInlineTokenWithStyle(token, chunks, styleGroup, link2) {
+-    switch (token.type) {
+-      case "text":
+-        chunks.push(this.createChunk(token.text, styleGroup, link2));
+-        break;
+-      case "escape":
+-        chunks.push(this.createChunk(token.text, styleGroup, link2));
+-        break;
+-      case "codespan":
+-        if (this._conceal) {
+-          chunks.push(this.createChunk(token.text, "markup.raw", link2));
+-        } else {
+-          chunks.push(this.createChunk("`", "markup.raw", link2));
+-          chunks.push(this.createChunk(token.text, "markup.raw", link2));
+-          chunks.push(this.createChunk("`", "markup.raw", link2));
+-        }
+-        break;
+-      default:
+-        this.renderInlineToken(token, chunks);
+-        break;
++    if ((token.type === "text" && !token.tokens?.length) || token.type === "escape") {
++      chunks.push(this.createChunk(token.text, styleGroup, link2));
++      return;
++    }
++    const nested = [];
++    this.renderInlineToken(token, nested);
++    const parent = this.createChunk("", styleGroup, link2);
++    for (const chunk of nested) {
++      chunks.push({ ...chunk, attributes: (chunk.attributes ?? 0) | parent.attributes, link: link2 ?? chunk.link });
+     }
+   }
+   applyMargins(renderable, marginTop, marginBottom) {
+@@ -12062,20 +12055,12 @@ class MarkdownRenderable extends Renderable {
+     renderable.marginBottom = marginBottom;
+   }
+   createMarkdownCodeRenderable(content, id, marginBottom = 0, onChunks = this._linkifyMarkdownChunks, baseHighlight, initialStyledText) {
+-    return new CodeRenderable(this.ctx, {
++    // Marked owns prose semantics; Tree-sitter remains exclusive to fenced code.
++    return new TextRenderable(this.ctx, {
+       id,
+-      content,
+-      filetype: "markdown",
+-      syntaxStyle: this._syntaxStyle,
++      content: initialStyledText ?? this.createInitialStyledText({ text: content }),
+       fg: this._fg,
+       bg: this._bg,
+-      conceal: this._conceal,
+-      drawUnstyledText: initialStyledText !== undefined,
+-      streaming: true,
+-      initialStyledText,
+-      baseHighlight,
+-      onChunks,
+-      treeSitterClient: this._treeSitterClient,
+       width: "100%",
+       marginBottom
+     });
+@@ -12086,6 +12071,22 @@ class MarkdownRenderable extends Renderable {
+   getBlockquoteBorderColor() {
+     return this.getStyle("conceal")?.fg ?? this.getStyle("default")?.fg ?? this._fg ?? "#FFFFFF";
+   }
++  createBlockquoteBody(token, id) {
++    return new MarkdownRenderable(this.ctx, {
++      id,
++      content: this.getBlockquoteContent(token),
++      syntaxStyle: this._syntaxStyle,
++      fg: this._fg,
++      bg: this._bg,
++      conceal: this._conceal,
++      concealCode: this._concealCode,
++      streaming: this._streaming,
++      treeSitterClient: this._treeSitterClient,
++      internalBlockMode: "top-level",
++      baseHighlight: "markup.quote",
++      width: "100%"
++    });
++  }
+   createBlockquoteRenderable(token, id, marginBottom = 0) {
+     const renderable = new BoxRenderable(this.ctx, {
+       id,
+@@ -12096,7 +12097,7 @@ class MarkdownRenderable extends Renderable {
+       flexShrink: 0,
+       marginBottom
+     });
+-    renderable.add(this.createMarkdownCodeRenderable(this.getBlockquoteContent(token), `${id}-content`, 0, this._linkifyMarkdownChunks, "markup.quote"));
++    renderable.add(this.createBlockquoteBody(token, `${id}-content`));
+     return renderable;
+   }
+   createListRenderable(token, id, marginBottom = 0) {
+@@ -12242,8 +12243,8 @@ class MarkdownRenderable extends Renderable {
+     return tokens;
+   }
+   applyListChildRenderable(renderable, token, previousToken, id) {
+-    if ((token.type === "text" || token.type === "paragraph") && renderable instanceof CodeRenderable) {
+-      this.applyMarkdownCodeRenderable(renderable, this.normalizeScrollbackMarkdownBlockRaw(token.raw), 0);
++    if ((token.type === "text" || token.type === "paragraph") && renderable instanceof TextRenderable) {
++      this.applyMarkdownCodeRenderable(renderable, this.normalizeScrollbackMarkdownBlockRaw(token.raw), 0, undefined, this.createInitialStyledText(token));
+       return true;
+     }
+     if (token.type === "list" && renderable instanceof BoxRenderable) {
+@@ -12320,16 +12321,9 @@ class MarkdownRenderable extends Renderable {
+     });
+   }
+   applyMarkdownCodeRenderable(renderable, content, marginBottom, baseHighlight, initialStyledText) {
+-    renderable.initialStyledText = initialStyledText;
+-    renderable.filetype = "markdown";
+-    renderable.syntaxStyle = this._syntaxStyle;
+     renderable.fg = this._fg;
+     renderable.bg = this._bg;
+-    renderable.conceal = this._conceal;
+-    renderable.drawUnstyledText = initialStyledText !== undefined;
+-    renderable.streaming = true;
+-    renderable.baseHighlight = baseHighlight;
+-    renderable.content = content;
++    renderable.content = initialStyledText ?? this.createInitialStyledText({ text: content });
+     renderable.marginBottom = marginBottom;
+   }
+   applyBlockquoteRenderable(renderable, token, marginBottom) {
+@@ -12338,14 +12332,20 @@ class MarkdownRenderable extends Renderable {
+     renderable.borderColor = this.getBlockquoteBorderColor();
+     renderable.marginBottom = marginBottom;
+     const child = renderable.getChildren()[0];
+-    if (child instanceof CodeRenderable) {
+-      this.applyMarkdownCodeRenderable(child, this.getBlockquoteContent(token), 0, "markup.quote");
++    if (child instanceof MarkdownRenderable) {
++      child.syntaxStyle = this._syntaxStyle;
++      child.fg = this._fg;
++      child.bg = this._bg;
++      child.conceal = this._conceal;
++      child.concealCode = this._concealCode;
++      child.streaming = this._streaming;
++      child.content = this.getBlockquoteContent(token);
+       return;
+     }
+     for (const existing of renderable.getChildren()) {
+       existing.destroyRecursively();
+     }
+-    renderable.add(this.createMarkdownCodeRenderable(this.getBlockquoteContent(token), `${renderable.id}-content`, 0, this._linkifyMarkdownChunks, "markup.quote"));
++    renderable.add(this.createBlockquoteBody(token, `${renderable.id}-content`));
+   }
+   applyCodeBlockRenderable(renderable, token, marginBottom) {
+     if (!(renderable instanceof CodeRenderable))
+@@ -12364,13 +12364,7 @@ class MarkdownRenderable extends Renderable {
+     return token.type === "code" || token.type === "table" || token.type === "blockquote" || token.type === "hr";
+   }
+   getInterBlockMargin(token, nextToken) {
+-    if (!nextToken)
+-      return 0;
+-    if (this.shouldRenderSeparately(token))
+-      return 1;
+-    if (!this.shouldRenderSeparately(nextToken))
+-      return 0;
+-    return TRAILING_MARKDOWN_BLOCK_NEWLINES_RE.test(token.raw) ? 0 : 1;
++    return nextToken ? 1 : 0;
+   }
+   applyInterBlockMargin(state, token, nextToken) {
+     if (state.tracksInterBlockMargin === false)
+@@ -12396,45 +12390,8 @@ class MarkdownRenderable extends Renderable {
+     return this._renderNode?.codeBlockOnly === true;
+   }
+   buildRenderableTokens(tokens) {
+-    if (this._renderNode && !this.isCodeBlockOnlyRenderer()) {
+-      return tokens.filter((token) => token.type !== "space");
+-    }
+-    const renderTokens = [];
+-    let markdownRaw = "";
+-    const flushMarkdownRaw = () => {
+-      if (markdownRaw.length === 0)
+-        return;
+-      const normalizedRaw = this.normalizeMarkdownBlockRaw(markdownRaw);
+-      if (normalizedRaw.length > 0) {
+-        renderTokens.push(this.createMarkdownBlockToken(normalizedRaw));
+-      }
+-      markdownRaw = "";
+-    };
+-    for (let i = 0;i < tokens.length; i += 1) {
+-      const token = tokens[i];
+-      if (token.type === "space") {
+-        if (markdownRaw.length === 0) {
+-          continue;
+-        }
+-        let nextIndex = i + 1;
+-        while (nextIndex < tokens.length && tokens[nextIndex].type === "space") {
+-          nextIndex += 1;
+-        }
+-        const nextToken = tokens[nextIndex];
+-        if (nextToken && !this.shouldRenderSeparately(nextToken)) {
+-          markdownRaw += token.raw;
+-        }
+-        continue;
+-      }
+-      if (this.shouldRenderSeparately(token)) {
+-        flushMarkdownRaw();
+-        renderTokens.push(token);
+-        continue;
+-      }
+-      markdownRaw += token.raw;
+-    }
+-    flushMarkdownRaw();
+-    return renderTokens;
++    // Keep Marked's block/inline tokens instead of reparsing coalesced source.
++    return tokens.filter((token) => token.type !== "space");
+   }
+   buildTopLevelRenderBlocks(tokens) {
+     const blocks = [];
+@@ -12534,7 +12491,7 @@ class MarkdownRenderable extends Renderable {
+       ...chunk,
+       fg: headingStyle.fg ?? chunk.fg,
+       bg: headingStyle.bg ?? chunk.bg,
+-      attributes: headingAttributes
++      attributes: headingAttributes | (chunk.attributes ?? 0)
+     }));
+   }
+   buildTableContentCache(table, previous, forceRegenerate = false) {
+@@ -12861,7 +12818,7 @@ class MarkdownRenderable extends Renderable {
+       const tableToken = token;
+       const { cache, changed } = this.buildTableContentCache(tableToken, state.tableContentCache);
+       if (!cache) {
+-        if (state.renderable instanceof CodeRenderable) {
++        if (state.renderable instanceof TextRenderable) {
+           this.applyMarkdownCodeRenderable(state.renderable, tableToken.raw, marginBottom);
+           state.tableContentCache = undefined;
+           return;
+@@ -12889,7 +12846,7 @@ class MarkdownRenderable extends Renderable {
+       state.tableContentCache = cache;
+       return;
+     }
+-    if (state.renderable instanceof CodeRenderable) {
++    if (state.renderable instanceof TextRenderable) {
+       this.applyMarkdownCodeRenderable(state.renderable, this.getTopLevelBlockRaw(token) ?? token.raw, marginBottom, undefined, this.createInitialStyledText(token));
+       return;
+     }
+@@ -12986,7 +12943,7 @@ class MarkdownRenderable extends Renderable {
+       return renderable instanceof BoxRenderable;
+     if (token.type === "hr")
+       return renderable instanceof BoxRenderable;
+-    return renderable instanceof CodeRenderable;
++    return renderable instanceof TextRenderable;
+   }
+   updateBlocks(forceTableRefresh = false) {
+     if (this.isDestroyed)

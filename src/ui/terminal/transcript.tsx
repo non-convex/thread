@@ -24,7 +24,6 @@ function MarkdownReply(props: {
   resources: ThreadViewResources;
 }) {
   return (
-    // OpenTUI 0.5.7 only paints markdown content in streaming mode.
     <markdown
       {...(props.id ? { id: props.id } : {})}
       content={normalizeMarkdownForTerminal(props.content)}
@@ -32,7 +31,8 @@ function MarkdownReply(props: {
       syntaxStyle={props.resources.syntaxStyle}
       fg={props.resources.theme.text}
       conceal={true}
-      streaming={true}
+      streaming={false}
+      internalBlockMode="top-level"
       maxWidth={180}
     />
   );
@@ -239,7 +239,7 @@ function TranscriptItemView(props: {
             syntaxStyle={props.resources.syntaxStyle}
             fg={theme.text}
             conceal={true}
-            streaming={true}
+            streaming={block().streaming === true}
             internalBlockMode="top-level"
             maxWidth={180}
           />
