@@ -125,12 +125,6 @@ export class SessionRecallService {
     }
   }
 
-  /** Explicit barrier for offline integrations and validation; normal search never waits for model preparation. */
-  async whenIdle(): Promise<void> {
-    await this.preparation;
-    while (this.background) await this.background;
-  }
-
   async search(sessionId: string, queries: readonly string[], limit = 8, callerSignal?: AbortSignal): Promise<RecallSearchResult> {
     const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
     signal.throwIfAborted();

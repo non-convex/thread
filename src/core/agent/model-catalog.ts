@@ -148,16 +148,6 @@ function registerCustomProvider(models: MutableModels, providerId: string, confi
   }));
 }
 
-export function createBuiltinModelClient(providerId: string, modelId: string): PiModelClient {
-  const credentials = new InMemoryCredentialStore();
-  registerBunOAuthFlows();
-  return new PiModelCatalog(builtinModels({ credentials }), undefined, credentials).createClient(providerId, modelId);
-}
-
-export function createConfiguredModelClient(providerId: string, modelId: string, providers: Record<string, CustomProviderConfig>): PiModelClient {
-  return createConfiguredModelCatalog(providers).createClient(providerId, modelId);
-}
-
 export function createConfiguredModelCatalog(providers: Record<string, CustomProviderConfig>, options: ModelCatalogOptions = {}): PiModelCatalog {
   const credentials = options.credentials ?? new InMemoryCredentialStore();
   // Standalone Bun cannot discover pi-ai's private lazy OAuth modules at runtime.

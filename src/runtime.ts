@@ -17,9 +17,7 @@ export {
   type AskResultDetails,
 } from "./core/runtime/interaction.js";
 export {
-  createBuiltinModelClient,
   createConfiguredModelCatalog,
-  createConfiguredModelClient,
   PiModelCatalog,
   type ModelAuthProviderStatus,
   type ModelCatalog,
@@ -46,7 +44,7 @@ export type {
   ToolResourceClaim,
   ToolResourceScope,
 } from "./core/tools/execution.js";
-export { claim, entireWorkspaceClaim, noResources, singletonResource, workspacePathClaim } from "./core/tools/execution.js";
+export { claim, noResources, singletonResource, workspacePathClaim } from "./core/tools/execution.js";
 export type { Project } from "./core/project/model.js";
 export type { ProjectSession, SessionEntry, SessionGoal, Turn } from "./core/session-tree/model.js";
 export type { RewindCandidate } from "./core/session-tree/service.js";

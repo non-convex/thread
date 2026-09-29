@@ -93,34 +93,12 @@ const open: ThreadCommand = {
   },
 };
 
-function allHistoryItems(context: ThreadCommandContext, snapshot: HistorySnapshot): HistoryViewItem[] {
-  const activeSessionId = context.selectedSessionId;
-  const activePathIds = new Set(context.runtime.readSession(activeSessionId).turns.map((turn) => turn.id));
-  const labels = requestLabels(snapshot);
-  return snapshot.turns
-    .sort((left, right) => right.startedAt - left.startedAt)
-    .map((turn) => {
-      return {
-        turnId: turn.id,
-        userEntryId: turn.userEntryId,
-        label: labels.get(turn.id) ?? "(no request text)",
-        outcome: turn.status,
-        startedAt: turn.startedAt,
-        status: turn.sessionId !== activeSessionId
-          ? "other-session"
-          : activePathIds.has(turn.id) ? "current-path" : "current-session-off-path",
-      };
-    });
-}
-
 export function buildRewindItems(context: ThreadCommandContext): HistoryViewItem[] {
   return context.runtime.rewindCandidates(context.selectedSessionId).slice().reverse().map((candidate) => ({
     turnId: candidate.turnId,
-    userEntryId: candidate.userEntryId,
     label: candidate.label,
     outcome: candidate.status,
     startedAt: candidate.startedAt,
-    status: "current-path",
   }));
 }
 
@@ -130,8 +108,7 @@ const history: ThreadCommand = {
   async execute(_args, context) {
     context.signal.throwIfAborted();
     const snapshot = context.runtime.readHistory();
-    const items = allHistoryItems(context, snapshot);
-    const itemByTurn = new Map(items.map((item) => [item.turnId, item]));
+    const labels = requestLabels(snapshot);
     const lines: string[] = [`Root ${snapshot.tree.rootId}`];
     const sessions = snapshot.sessions.sort((left, right) => left.createdAt - right.createdAt);
     for (const session of sessions) {
@@ -148,9 +125,8 @@ const history: ThreadCommand = {
       }
       const render = (parentId: string | null, depth: number): void => {
         for (const turn of children.get(parentId) ?? []) {
-          const item = itemByTurn.get(turn.id)!;
           const live = snapshot.liveTips[session.id] === turn.id ? " live" : "";
-          lines.push(`${"│  ".repeat(depth + 1)}├─ ${short(turn.id)} ${item.outcome}${live} — ${item.label}`);
+          lines.push(`${"│  ".repeat(depth + 1)}├─ ${short(turn.id)} ${turn.status}${live} — ${labels.get(turn.id) ?? "(no request text)"}`);
           render(turn.id, depth + 1);
         }
       };

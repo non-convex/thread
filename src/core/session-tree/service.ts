@@ -58,12 +58,6 @@ export interface PlannedTurn {
   scheduled?: ScheduledWakeup;
 }
 
-/** Runtime-only reserved identity used when tool facts may precede the complete assistant message. */
-export interface PlannedMessageEntry {
-  id: string;
-  turnId: string;
-}
-
 /** Select durable fields; callers may hold a public snapshot with a derived turn count. */
 function goalState(goal: SessionGoalState): SessionGoalState {
   const { id, objective, status, reason, turnLimit, createdAt, updatedAt } = goal;
@@ -87,8 +81,7 @@ export class SessionTreeService {
     return this.projection.activeSession();
   }
 
-  async initialize(): Promise<{ created: boolean; interruptedTurnIds: string[] }> {
-    let created = false;
+  async initialize(): Promise<void> {
     if (!this.projection.tree) {
       const now = Date.now();
       const treeId = stableId("tree", this.repository.project.id);
@@ -108,14 +101,12 @@ export class SessionTreeService {
         { type: "session_created", session },
         { type: "active_session_changed", sessionId: session.id, reason: "created" },
       ], true);
-      created = true;
     } else if (this.tree.projectId !== this.repository.project.id ||
         this.tree.rootPath !== this.repository.project.rootPath) {
       throw new Error("Session Tree project identity does not match the opened project");
     }
-    const interruptedTurnIds = await this.interruptRunningTurns();
+    await this.interruptRunningTurns();
     await this.repository.writeManifest();
-    return { created, interruptedTurnIds };
   }
 
   async createSession(): Promise<ProjectSession> {
@@ -346,10 +337,6 @@ export class SessionTreeService {
     }, true);
   }
 
-  planMessageEntry(turnId: string): PlannedMessageEntry {
-    return { id: createId("entry"), turnId };
-  }
-
   async appendMessage(
     input: { turnId: string; message: Message; entryId?: string },
     flush = false,
@@ -476,10 +463,6 @@ export class SessionTreeService {
     return pathToTurn(this.projection, turnId);
   }
 
-  entriesForTurn(turnId: string): SessionEntry[] {
-    return (this.projection.entriesByTurn.get(turnId) ?? []).map((entry) => structuredClone(entry));
-  }
-
   messagesForTurn(turnId: string): Message[] {
     return (this.projection.entriesByTurn.get(turnId) ?? [])
       .filter((entry): entry is MessageEntry => entry.type === "message")
@@ -550,7 +533,7 @@ export class SessionTreeService {
     }
   }
 
-  private async interruptRunningTurns(): Promise<string[]> {
+  private async interruptRunningTurns(): Promise<void> {
     const running = [...this.projection.turns.values()].filter((turn) => turn.status === "running");
     const error = new Error("Thread stopped before this turn completed");
     error.name = "Interrupted";
@@ -558,6 +541,5 @@ export class SessionTreeService {
       await this.sealRunningTurn(turn.id, "interrupted", error);
       await this.finishTurn(turn.id, "interrupted", error);
     }
-    return running.map((turn) => turn.id);
   }
 }

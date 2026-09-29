@@ -3,11 +3,9 @@ import type { ThreadRuntime } from "../../core/runtime/thread-runtime.js";
 
 export interface HistoryViewItem {
   turnId: string;
-  userEntryId: string;
   label: string;
   outcome: "running" | "completed" | "interrupted" | "failed";
   startedAt: number;
-  status: "current-path" | "current-session-off-path" | "other-session";
 }
 
 export interface AgentPickerItem {

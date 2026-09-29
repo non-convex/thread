@@ -1,4 +1,4 @@
-import type { Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { McpClients, McpServerStatus } from "../mcp/client.js";
 import { AgentRunner, type TurnResult } from "../agent/runner.js";
 import type { RunTurnOptions } from "../agent/turn-runner.js";
@@ -577,15 +577,6 @@ export class ThreadRuntime {
     return this.tree.rewindCandidates(this.tree.resolveSession(sessionId).id);
   }
 
-  contextMessages(sessionId: string): Message[] {
-    this.assertOpen();
-    return this.builder.build({ sessionId: this.tree.resolveSession(sessionId).id }).messages;
-  }
-
-  contextUsage(sessionId: string) {
-    return this.contextSnapshot(sessionId).usage;
-  }
-
   /** Build messages and their usage together so clients need only one context projection. */
   contextSnapshot(sessionId: string) {
     this.assertOpen();
@@ -695,7 +686,6 @@ export class ThreadRuntime {
     this.remember({ ...this.state, agents: { ...this.state.agents, [id]: { enabled, ...(selection ? { model: selection } : {}) } } });
   }
 
-  agentTaskSummaries(parentTurnId: string) { return structuredClone(this.tasks.summariesForTurn(parentTurnId)); }
   agentTaskDetailsForTurn(parentTurnId: string) {
     return [...this.tasks.repository.projection.tasks.values()].filter((task) => task.parentTurnId === parentTurnId)
       .map((task) => ({ task: structuredClone(task), summary: this.tasks.repository.projection.summary(task.id) }));

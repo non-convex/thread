@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionTreeService } from "../session-tree/service.js";
 import type { ExecutionIdentity } from "../runtime/policy.js";
+import { createId } from "../utils/id.js";
 
 export interface ToolExecutionFact {
   assistantEntryId: string;
@@ -38,7 +39,7 @@ export class SessionTurnJournal implements ExecutionJournal {
   }
 
   planAssistantEntryId(): string {
-    return this.tree.planMessageEntry(this.executionId).id;
+    return createId("entry");
   }
 
   conversationMessages(): Message[] {

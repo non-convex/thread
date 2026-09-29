@@ -156,8 +156,3 @@ export async function resolveToolPath(context: ToolContext, input: string, forWr
   }
   return target;
 }
-
-/** A conservative claim for tools, such as a shell, whose workspace effects cannot be enumerated. */
-export function entireWorkspaceClaim(access: ToolResourceAccess): ToolResourceClaim {
-  return claim("workspace", "*", access, "subtree");
-}

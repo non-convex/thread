@@ -321,7 +321,7 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 凭据存储 `auth.json` 也使用同一个操作系统锁实现，保护读取、OAuth 刷新和原子写回的整个操作。等待锁支持取消，不再按 PID 或锁文件年龄判断是否可以接管。`auth.json.lock` 会保留；升级前应先退出仍使用旧凭据锁协议的进程，避免两套协议同时操作同一凭据文件。凭据 JSON 格式没有变化。
 
-`contextSnapshot()` 和 `contextUsage()` 在执行期间采用当前 Runner 捕获的系统提示词和工具注册表，因此 goal 指令和临时的 `update_goal` 定义也计入估算。它们不会另行拼装一份普通模式配置。
+`contextSnapshot()` 在执行期间采用当前 Runner 捕获的系统提示词和工具注册表，因此 goal 指令和临时的 `update_goal` 定义也计入估算。它们不会另行拼装一份普通模式配置。
 
 每轮开始时创建执行器，捕获该轮的模型、思考级别和系统提示词。执行中通过 `setThinkingLevel()` 或 TUI 的 `Shift+Tab` 调整偏好，不改变当前轮后续模型步骤；下一轮使用新设置。
 
