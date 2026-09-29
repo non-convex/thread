@@ -176,7 +176,7 @@ export class AgentTaskOrchestrator {
     }
   }
 
-  /** Reserve capacity and scopes before any await; parallel tool calls cannot admit the same work twice. */
+  /** Reserve task IDs and scopes before any await; parallel tool calls cannot admit conflicting work. */
   private reserveAdmissions(tasks: readonly Pick<AgentTask, "id" | "profileId" | "spec">[]): void {
     const occupied = new Map<string, Pick<AgentTask, "id" | "profileId" | "spec">>(
       [...this.repository.projection.tasks.values()].filter((task) => task.status === "running").map((task) => [task.id, task]),
@@ -185,9 +185,6 @@ export class AgentTaskOrchestrator {
     for (const task of tasks) {
       if (occupied.has(task.id)) throw new Error(`Task ${task.id} is already running or starting`);
       const active = [...occupied.values()];
-      if (active.filter((candidate) => candidate.profileId === task.profileId).length >= this.workerSettings.limits.maxConcurrent) {
-        throw new Error(`worker capacity is ${this.workerSettings.limits.maxConcurrent}; wait for active tasks before starting more`);
-      }
       const overlap = active.find((candidate) => scopesOverlap(task.spec.writeScope, candidate.spec.writeScope));
       if (overlap) throw new Error(`Task ${task.spec.title} overlaps active task ${overlap.id} (${overlap.spec.title})`);
       occupied.set(task.id, task);

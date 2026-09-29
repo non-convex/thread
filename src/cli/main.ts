@@ -256,7 +256,6 @@ async function main(): Promise<void> {
         settings: {
           thinkingLevel: workerConfig.thinkingLevel,
           limits: {
-            maxConcurrent: workerConfig.maxConcurrent,
             maxSteps: workerConfig.maxSteps,
             maxRuntimeMs: workerConfig.maxRuntimeMinutes * 60_000,
             maxRevisions: workerConfig.maxRevisions,

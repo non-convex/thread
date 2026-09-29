@@ -13,7 +13,6 @@ export interface WorkerProfileSettings {
 }
 
 export interface WorkerLimits {
-  maxConcurrent: number;
   maxSteps: number;
   maxRuntimeMs: number;
   maxRevisions: number;
@@ -22,7 +21,6 @@ export interface WorkerLimits {
 export const DEFAULT_WORKER_SETTINGS: WorkerProfileSettings = {
   thinkingLevel: "xhigh",
   limits: {
-    maxConcurrent: 6,
     maxSteps: 100,
     maxRuntimeMs: 60 * 60_000,
     maxRevisions: 2,

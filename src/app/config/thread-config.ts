@@ -13,7 +13,6 @@ export const DEFAULT_THREAD_CONFIG_FILE = "config.json";
 export interface WorkerConfig {
   model: ModelSelectionConfig;
   thinkingLevel: ModelThinkingLevel;
-  maxConcurrent: number;
   maxSteps: number;
   maxRuntimeMinutes: number;
   maxRevisions: number;
