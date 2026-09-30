@@ -24,7 +24,7 @@ Scheduling is opt-in in `core/runtime/options.ts` and starts in `ThreadRuntime.o
 
 Model discovery, provider configuration and login belong to `agent/model-catalog.ts`. Streaming and retries belong to `agent/model-client.ts`. Both remain available through the existing public package exports.
 
-`app/model-catalog.ts` limits the coding app's OpenAI Codex model lists to GPT-6 Astra, Sol, and Luna. The core catalog accepts an optional `isModelVisible` predicate for `list()` and `listAll()`; without it, embedded hosts retain the complete catalog. This display filter does not restrict explicit `createClient()` selections or change provider authentication.
+`app/model-catalog.ts` limits the coding app's OpenAI Codex model lists to GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna. The `pi-ai` dependency patch adds GPT-6.1 Sol to the bundled Codex catalog. The core catalog accepts an optional `isModelVisible` predicate for `list()` and `listAll()`; without it, embedded hosts retain the complete catalog. This display filter does not restrict explicit `createClient()` selections or change provider authentication.
 
 ## Persistence and file changes
 
