@@ -243,6 +243,17 @@ export class ThreadTuiController {
     this.notify();
   }
 
+  selectAskOption(index: number | undefined): void {
+    const screen = this.state.screen;
+    if (screen.type !== "ask") return;
+    if (index === undefined) screen.customText ??= "";
+    else {
+      screen.selected = index;
+      screen.customText = undefined;
+    }
+    this.notify();
+  }
+
   handleScreenKey(key: TerminalKey): boolean {
     const screen = this.state.screen;
     const enter = isEnter(key);

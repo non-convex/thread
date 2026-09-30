@@ -76,7 +76,7 @@ export function SessionScreen(props: {
   const hasTranscript = () => props.transcript().length > 0 || props.liveTurn() !== undefined;
   // Floating panels share the composer's outer edges.
   const contentWidth = () => Math.max(20, props.terminalWidth() - 2);
-  const panelHeight = () => overlayHeight(state().screen);
+  const panelHeight = () => overlayHeight(state().screen, contentWidth());
   const workerPanelHeight = () => props.workerPanelCard()
     ? Math.max(0, Math.min(24, props.terminalHeight() - controlsHeight())) : 0;
   const floatingHeight = () => panelHeight() || (state().screen.type === "session" && props.suggestions().length
@@ -136,7 +136,7 @@ export function SessionScreen(props: {
           </Show>
         }>
           <SessionOverlay screen={() => state().screen} selected={props.overlaySelected} navigated={props.overlayNavigated}
-            resources={props.resources} contentWidth={contentWidth} />
+            resources={props.resources} contentWidth={contentWidth} onAskSelect={(index) => props.controller.selectAskOption(index)} />
         </Show>
       </box>
     </Show>
@@ -167,6 +167,7 @@ export function SessionScreen(props: {
             textColor={theme.text} focusedTextColor={theme.text} backgroundColor={theme.surfaceHigh}
             focusedBackgroundColor={theme.surfaceHigh} cursorColor={theme.accent} selectionBg={theme.selection}
             selectionFg={theme.selectionText} keyBindings={COMPOSER_KEY_BINDINGS}
+            onMouseDown={(event) => { if (state().screen.type === "ask") event.preventDefault(); }}
             onContentChange={() => { draft.setText(draft.editor?.plainText ?? ""); syncCursor(); }}
             onCursorChange={syncCursor} onSubmit={submit} />
         </box>

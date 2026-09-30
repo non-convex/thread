@@ -88,7 +88,9 @@ export function ThreadRoot(props: {
 
   createEffect(() => {
     const active = state();
-    if (active.screen.type !== "session" || !draft.editor) return;
+    if (!draft.editor) return;
+    if (active.screen.type === "ask") { draft.editor.blur(); return; }
+    if (active.screen.type !== "session") return;
     if (active.composerInput !== undefined) {
       draft.replace(active.composerInput);
       delete active.composerInput;

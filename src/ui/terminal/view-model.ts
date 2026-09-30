@@ -43,6 +43,8 @@ export interface ThreadTuiViewModel {
   cycleThinkingLevel(): void;
   closeView(): void;
   handleScreenKey(key: TerminalKey): boolean;
+  /** Focus an ask option, or the free-text field when index is undefined; does not submit. */
+  selectAskOption(index: number | undefined): void;
   /** Synchronously reports whether the input was accepted; completion is handled by controller events. */
   submit(raw: string, images?: readonly ComposerImage[]): boolean;
   note(text: string, level?: "info" | "success" | "error"): void;

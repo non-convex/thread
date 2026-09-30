@@ -26,8 +26,17 @@ export function handleAskKey(screen: AskScreen, key: TerminalKey, ask: AskServic
       screen.customText = undefined;
     }
   };
+  if (key.name === "tab") {
+    screen.customText = screen.customText === undefined ? "" : undefined;
+    return;
+  }
   const typed = printableKey(key);
   if (screen.customText !== undefined) {
+    if (key.name === "up" || key.name === "down") {
+      screen.customText = undefined;
+      screen.selected = key.name === "up" ? question.options.length - 1 : 0;
+      return;
+    }
     if (typed) screen.customText += typed;
     else if (key.name === "space" && !key.ctrl && !key.meta) screen.customText += " ";
     else if (key.name === "escape") screen.customText = undefined;
