@@ -60,6 +60,8 @@ async function answer(model: ModelClient, customTool: AgentTool) {
 
 coding 应用的默认配置统一由 `ThreadApp.open()` 装配：完整基础工具、默认 Skill 目录、产品提示词、Recall、全局记忆和文件 checkpoint。CLI 和直接使用 coding 应用的调用者共享这份配置；`ThreadRuntime.open()` 的最小默认值保持独立。
 
+CLI 默认只读取 `~/.thread/config.json`，不回退到 Pi 配置。默认文件不存在时仍可用内置模型及已有登录凭据启动；显式指定 `--config` 或 `THREAD_CONFIG` 的文件不存在则报错。`loadThreadConfig()` 不再返回 `source` 字段，`getPiAgentDir` 不再导出。
+
 CLI 在启动模型前先按 `rootPath` 解析项目身份，再读取该项目数据目录中的 `state.json`。交互中选择的主模型、推理档位，以及 Worker / Dreamer 的模型和启停状态只写回这一文件，不会覆盖其他项目。主模型优先级为命令行或环境变量、当前项目记录、全局配置；推理档位优先用项目记录，再用配置默认值。旧的全局 `~/.thread/state.json` 不再读取或迁移。配置和凭据仍然共享；`logout` 撤销共享凭据，但只清理启动目录所对应项目的模型选择，不改写其他项目的偏好文件。
 
 嵌入宿主仍通过 `state` 和 `onStateChange` 自行管理偏好持久化。应用入口导出的 `getThreadStatePath(project)` 根据显式传入的 `project.statePath` 返回偏好文件位置；`loadThreadState(statePath)` 和 `saveThreadState(state, statePath)` 均要求明确提供文件路径，不再默认访问全局文件。

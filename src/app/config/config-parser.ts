@@ -112,28 +112,12 @@ function parseModelOverrides(value: unknown, label: string): Record<string, Mode
   return overrides;
 }
 
-export function parsePiModelOverrides(
-  providerId: string,
-  value: unknown,
-  label: string,
-): Record<string, ModelOverrideConfig> {
-  const overrides: Record<string, ModelOverrideConfig> = {};
-  for (const [modelId, override] of Object.entries(object(value, label))) {
-    if (!modelId.trim()) throw new Error(`${label} model id cannot be empty`);
-    const input = object(override, `${label}.${modelId}`);
-    if (input.contextWindow === undefined) continue;
-    overrides[`${providerId}/${modelId}`] = parseModelOverride(input, `${label}.${modelId}`);
-  }
-  return overrides;
-}
-
-export function parseProvider(providerId: string, value: unknown, source: "thread" | "pi" = "thread"): CustomProviderConfig {
+export function parseProvider(providerId: string, value: unknown): CustomProviderConfig {
   const label = `providers.${providerId}`;
   const input = object(value, label);
   const api = string(input.api, `${label}.api`);
   if (api !== "openai-completions" && api !== "openai-responses" && api !== "anthropic-messages") {
-    throw new Error(source === "pi" ? `${label}.api is not supported by thread: ${api}`
-      : `${label}.api must be openai-completions, openai-responses, or anthropic-messages`);
+    throw new Error(`${label}.api must be openai-completions, openai-responses, or anthropic-messages`);
   }
   const baseUrl = string(input.baseUrl, `${label}.baseUrl`);
   let parsedUrl: URL;
@@ -145,8 +129,8 @@ export function parseProvider(providerId: string, value: unknown, source: "threa
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     throw new Error(`${label}.baseUrl must use http or https`);
   }
-  const apiKeyEnv = source === "pi" || input.apiKeyEnv === undefined ? undefined : string(input.apiKeyEnv, `${label}.apiKeyEnv`);
-  const apiKey = source === "thread" && input.apiKey === undefined ? undefined : string(input.apiKey, `${label}.apiKey`);
+  const apiKeyEnv = input.apiKeyEnv === undefined ? undefined : string(input.apiKeyEnv, `${label}.apiKeyEnv`);
+  const apiKey = input.apiKey === undefined ? undefined : string(input.apiKey, `${label}.apiKey`);
   if (apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
     throw new Error(`${label}.apiKeyEnv is not a valid environment name`);
   }

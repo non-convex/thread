@@ -142,7 +142,7 @@ function registerCustomProvider(models: MutableModels, providerId: string, confi
         const headers = await resolveConfigHeaders(config.headers, (name) => ctx.env(name));
         signal.throwIfAborted();
         return key ? { auth: { apiKey: key, ...(headers ? { headers } : {}) },
-          source: credential?.key ? "stored credential" : config.apiKeyEnv ?? "pi models.json" } : undefined;
+          source: credential?.key ? "stored credential" : config.apiKeyEnv ?? "provider configuration" } : undefined;
       },
     } },
   }));

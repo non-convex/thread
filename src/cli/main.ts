@@ -100,7 +100,6 @@ TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain 
 Default config: ~/.thread/config.json
 Remembered main model, thinking, and agent choices: ~/.thread/projects/<project-id>/state.json (delete to reset this project)
 Subscription credentials: ~/.thread/auth.json
-Fallback: ~/.pi/agent/models.json + settings.json when thread config is absent
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
 /model to select the main model, /agent to configure background agents, /clear, /compact,
@@ -175,9 +174,7 @@ async function main(): Promise<void> {
     level: "error",
     message,
   }));
-  const workerConfig = loadedConfig?.source === "thread"
-    ? loadedConfig.config.agents[WORKER_PROFILE_ID]
-    : undefined;
+  const workerConfig = loadedConfig?.config.agents[WORKER_PROFILE_ID];
   const workerState = state?.agents?.[WORKER_PROFILE_ID];
   const workerSelection = workerState?.model ?? workerConfig?.model;
   let workerModel: ReturnType<typeof modelCatalog.createClient> | undefined;
@@ -198,9 +195,7 @@ async function main(): Promise<void> {
       message: "Worker was enabled without a worker model; use /agent worker model to choose one.",
     });
   }
-  const dreamerConfig = loadedConfig?.source === "thread"
-    ? loadedConfig.config.agents.dreamer
-    : undefined;
+  const dreamerConfig = loadedConfig?.config.agents.dreamer;
   const dreamerState = state?.agents?.dreamer;
   const dreamerSelection = dreamerState?.model ?? dreamerConfig?.model;
   let dreamerModel: ReturnType<typeof modelCatalog.createClient> | undefined;
@@ -298,7 +293,7 @@ async function main(): Promise<void> {
     for (const extension of options.extensions) await app.loadExtension(extension.startsWith(".") ? resolve(extension) : extension);
     if (usePlain) {
       await runPlainCli(app, {
-        ...(loadedConfig ? { configDescription: `${loadedConfig.source} ${loadedConfig.path}` } : {}),
+        ...(loadedConfig ? { configDescription: `thread ${loadedConfig.path}` } : {}),
       });
     } else {
       if (!terminalModule) throw new Error("Interactive terminal module was not loaded");

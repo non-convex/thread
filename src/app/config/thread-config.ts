@@ -1,12 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import type { CacheRetention, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getThreadHome } from "../../core/config/home.js";
 import { resolveConfigValue } from "../../core/config/config-value.js";
 import type { McpServers } from "../../core/mcp/client.js";
 import type { CustomProviderConfig, ModelOverrideConfig, ModelSelectionConfig } from "../../core/config/model-config.js";
-import { object, parseConfig, parsePiModelOverrides, parseProvider, thinkingLevel } from "./config-parser.js";
+import { parseConfig } from "./config-parser.js";
 
 export const DEFAULT_THREAD_CONFIG_FILE = "config.json";
 
@@ -51,95 +50,12 @@ export interface ThreadConfig {
 
 export interface LoadedThreadConfig {
   path: string;
-  source: "thread" | "pi";
   config: ThreadConfig;
   agentDiagnostics: string[];
 }
 
 export function getDefaultThreadConfigPath(): string {
   return path.join(getThreadHome(), DEFAULT_THREAD_CONFIG_FILE);
-}
-
-export function getPiAgentDir(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR;
-  return configured ? path.resolve(configured) : path.join(homedir(), ".pi", "agent");
-}
-
-async function readJson(filePath: string, label: string): Promise<unknown> {
-  let source: string;
-  try {
-    source = await readFile(filePath, "utf8");
-  } catch (error) {
-    throw new Error(`Cannot read ${label} ${filePath}: ${error instanceof Error ? error.message : String(error)}`, {
-      cause: error,
-    });
-  }
-  try {
-    return JSON.parse(source) as unknown;
-  } catch (error) {
-    throw new Error(`Cannot parse ${label} ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (error as { cause?: NodeJS.ErrnoException }).cause?.code === "ENOENT";
-}
-
-async function loadPiThreadConfig(): Promise<LoadedThreadConfig | undefined> {
-  const piDir = getPiAgentDir();
-  const modelsPath = path.join(piDir, "models.json");
-  let parsed: unknown;
-  try {
-    parsed = await readJson(modelsPath, "pi model config");
-  } catch (error) {
-    if (isMissingFileError(error)) return undefined;
-    throw error;
-  }
-  try {
-    const input = object(parsed, "pi models config");
-    const providers: Record<string, CustomProviderConfig> = {};
-    const modelOverrides: Record<string, ModelOverrideConfig> = {};
-    for (const [providerId, provider] of Object.entries(object(input.providers, "providers"))) {
-      const providerInput = object(provider, `providers.${providerId}`);
-      if (providerInput.modelOverrides !== undefined) {
-        Object.assign(
-          modelOverrides,
-          parsePiModelOverrides(providerId, providerInput.modelOverrides, `providers.${providerId}.modelOverrides`),
-        );
-      }
-      if (providerInput.models !== undefined || providerInput.modelOverrides === undefined) {
-        providers[providerId] = parseProvider(providerId, provider, "pi");
-      }
-    }
-    let model: ModelSelectionConfig | undefined;
-    let defaultThinkingLevel: ModelThinkingLevel | undefined;
-    const settingsPath = path.join(piDir, "settings.json");
-    try {
-      const settings = object(await readJson(settingsPath, "pi settings"), "pi settings");
-      if (typeof settings.defaultProvider === "string" && typeof settings.defaultModel === "string") {
-        model = { provider: settings.defaultProvider, id: settings.defaultModel };
-      }
-      if (settings.defaultThinkingLevel !== undefined) {
-        defaultThinkingLevel = thinkingLevel(settings.defaultThinkingLevel, "settings.defaultThinkingLevel");
-      }
-    } catch (error) {
-      if (!isMissingFileError(error)) throw error;
-    }
-    return {
-      path: modelsPath,
-      source: "pi",
-      agentDiagnostics: [],
-      config: {
-        ...(model ? { model } : {}),
-        ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
-        agents: {},
-        modelOverrides,
-        providers,
-      },
-    };
-  } catch (error) {
-    throw new Error(`Invalid pi model config ${modelsPath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 export async function loadThreadConfig(configuredPath?: string): Promise<LoadedThreadConfig | undefined> {
@@ -149,7 +65,7 @@ export async function loadThreadConfig(configuredPath?: string): Promise<LoadedT
     source = await readFile(configPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" && configuredPath === undefined) {
-      return loadPiThreadConfig();
+      return undefined;
     }
     throw new Error(`Cannot read Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -177,7 +93,7 @@ export async function loadThreadConfig(configuredPath?: string): Promise<LoadedT
       if (server.transport === "stdio") server.env = resolved;
       else server.headers = resolved;
     }
-    return { path: configPath, source: "thread", ...loaded };
+    return { path: configPath, ...loaded };
   } catch (error) {
     throw new Error(`Invalid Thread config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }

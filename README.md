@@ -126,7 +126,7 @@ thread --root /path/to/project --provider openai-codex --model gpt-6.1-sol
 
 Thread stores this login separately from Codex CLI in `~/.thread/auth.json` (or `$THREAD_HOME/auth.json`). Treat it like a password. Remove it with `thread logout openai-codex`.
 
-Built-in model metadata can be overridden in `~/.thread/config.json` without replacing its provider or authentication. For example, `"modelOverrides": { "openai-codex/gpt-6.1-sol": { "contextWindow": 500000 } }` changes Thread's local context budgeting, display, and compaction threshold. It cannot raise a limit enforced by the provider. When Thread falls back to `~/.pi/agent/models.json`, it also reads pi's nested `providers.<provider>.modelOverrides` format.
+Built-in model metadata can be overridden in `~/.thread/config.json` without replacing its provider or authentication. For example, `"modelOverrides": { "openai-codex/gpt-6.1-sol": { "contextWindow": 500000 } }` changes Thread's local context budgeting, display, and compaction threshold. It cannot raise a limit enforced by the provider.
 
 For an API key or compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, and set the environment variable named by `apiKeyEnv`. Custom providers can use `openai-responses`, `openai-completions`, or `anthropic-messages`.
 
@@ -225,7 +225,7 @@ In the full-screen TUI, `Shift+Tab` cycles supported thinking levels, `Ctrl+V` (
 
 ## Configuration and storage
 
-Thread reads `~/.thread/config.json` by default and falls back to compatible settings under `~/.pi/agent` when that file is absent. Main-model selection priority is:
+Thread reads `~/.thread/config.json` by default. If that file is absent, startup continues without file-based configuration; Pi settings are not read. An explicitly selected config file must exist. Main-model selection priority is:
 
 ```text
 --provider/--model or THREAD_PROVIDER/THREAD_MODEL

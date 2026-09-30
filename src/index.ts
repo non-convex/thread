@@ -3,7 +3,6 @@ export { ThreadApp, type ThreadAppOptions, type InputResult } from "./app/thread
 export {
   DEFAULT_THREAD_CONFIG_FILE,
   getDefaultThreadConfigPath,
-  getPiAgentDir,
   loadThreadConfig,
   type ThreadConfig,
   type AttributionConfig,
