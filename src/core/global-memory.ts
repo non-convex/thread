@@ -67,33 +67,13 @@ export async function globalMemoryRevision(filePath: string, signal?: AbortSigna
   return observeGlobalMemoryRevision(filePath, signal);
 }
 
-function validateGlobalMemoryEntries(content: Buffer): void {
-  const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
-  let count = 0;
-  for (const line of text.split(/\r\n|\r|\n/u)) {
-    if (!line.trim()) continue;
-    const entry = /^- \[(\d{4})-(\d{2})-(\d{2})\] (.+)$/u.exec(line);
-    if (!entry || !entry[4]!.trim()) throw new Error("Global memory must contain only dated Markdown list entries (- [YYYY-MM-DD] content).");
-    const year = Number(entry[1]);
-    const month = Number(entry[2]);
-    const day = Number(entry[3]);
-    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    if (month < 1 || month > 12 || day < 1 || day > days[month - 1]!) {
-      throw new Error("Global memory entry has an invalid date.");
-    }
-    if (++count > 15) throw new Error("Global memory must contain no more than 15 entries.");
-  }
-  if (content.length > 0 && count === 0) throw new Error("Global memory must be empty or contain dated Markdown list entries.");
-}
-
 /** One execution's observed memory version, separate from its fixed Session snapshot. */
 export class GlobalMemoryAccess {
   private observed: { content: Buffer | null; toolCallId: string; visible: boolean } | undefined;
   private expectedRevision: string | undefined;
 
   constructor(private readonly filePath: string, private readonly memoryOnly = false,
-    private readonly options: { expectedRevision?: string; validateEntries?: boolean } = {}) {
+    options: { expectedRevision?: string } = {}) {
     this.expectedRevision = options.expectedRevision;
   }
 
@@ -171,7 +151,6 @@ export class GlobalMemoryAccess {
         this.observed = undefined;
         throw new Error("Global memory changed since it was read. Re-read it in a separate step and regenerate the update.");
       }
-      if (this.options.validateEntries) validateGlobalMemoryEntries(content);
       const guardedCommit = async () => {
         await beforeCommit();
         if (this.expectedRevision !== undefined &&

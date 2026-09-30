@@ -302,7 +302,7 @@ export class DreamerScheduler {
     writable: boolean, canUpdate: boolean, evidenceLimit: number, signal: AbortSignal): Promise<void> {
     const tools = canUpdate ? profile.tools : new ToolRegistry();
     if (!canUpdate) tools.register(profile.tools.get("read")!);
-    const memory = new GlobalMemoryAccess(this.memoryPath, true, { expectedRevision: revision, validateEntries: true });
+    const memory = new GlobalMemoryAccess(this.memoryPath, true, { expectedRevision: revision });
     const executor = new ToolCallExecutor(this.rootPath, tools, new ExtensionEvents(), {
       acceptsImages: false,
       writableExternalPaths: [this.memoryPath],
