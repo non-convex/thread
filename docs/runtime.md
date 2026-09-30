@@ -211,7 +211,7 @@ Skill 的完整说明已在当前上下文中且仍适用时，模型应直接�
 
 Dreamer 需要显式配置 `globalMemoryPath` 和 `dreamer: { enabled: true, model: dreamerModel }`。可选的调度参数为 `idleTurns`（默认 10）、`idleMs`（默认 10 分钟）、`maxWaitMs`（默认 30 分钟）、`maxSteps`（每批默认 20）和 `maxRuntimeMs`（一次运行默认 5 分钟）。小批量达到 `maxWaitMs` 后也可启动，但仍须满足 `idleMs`；这不是在主代理忙碌时强制启动的期限。
 
-审阅资格在 turn 开始时持久化，完整 turn 和长 turn 的分片进度记录在 Session Tree。关闭或禁用 Dreamer 不丢待办，重启或重新启用后继续；禁用期间发起的 turn 不自动补录。前台操作先取消并结算 Dreamer，新 turn 重置空闲计时，普通查询不重置。`runtime.dreamerStatus` 返回状态副本，包含待办数量、完整审阅数量、部分 turn、最近成功时间和结果、下次可运行时间与错误；未配置全局记忆时为 `undefined`。`dreamer_status` 事件提供同样的状态变化。完整策略见[全局记忆与 Dreamer](./global-memory-architecture.md)。
+审阅资格在 turn 开始时持久化，Session Tree 按整轮确认审阅进度。超大 turn 保留用户消息和最后一条不调用工具的 assistant 回复（含结束原因），不再按字符分片；如果这两部分仍超预算，保留待办并报告受阻。关闭或禁用 Dreamer 不丢待办，重启或重新启用后继续；禁用期间发起的 turn 不自动补录。前台操作先取消并结算 Dreamer，新 turn 重置空闲计时，普通查询不重置。`runtime.dreamerStatus` 返回状态副本，包含待办数量、已审阅数量、最近成功时间和结果、下次可运行时间与错误；不再提供轮内游标对应的 `partialTurnId`。未配置全局记忆时为 `undefined`。`dreamer_status` 事件提供同样的状态变化。完整策略见[全局记忆与 Dreamer](./global-memory-architecture.md)。
 
 MCP 属于未来的核心能力，将通过同一工具注册、策略、执行与取消机制接入。当前尚未实现 MCP 客户端或配置项。
 
@@ -313,7 +313,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `subscribe(listener)` | 订阅实时执行事件，返回取消订阅函数 |
 | `close()` | 停止接收操作、取消并等待执行、关闭实例拥有的资源 |
 
-Session Tree 当前使用 `thread-session-tree-v3`，清晰区分持久目标状态与派生轮数，并保存按消息定位的 Dreamer 游标。只接受当前格式：旧事件格式会在加载时明确报错，不迁移、不回填，也不自动删除历史。升级前应保留原数据；需要从新记录开始时，由宿主显式选择新的 `stateDirectory`。
+Session Tree 当前使用 `thread-session-tree-v3`，清晰区分持久目标状态与派生轮数，并保存 Dreamer 已确认轮次和候选观察。只接受当前格式：旧事件格式会在加载时明确报错，不迁移、不回填，也不自动删除历史。升级前应保留原数据；需要从新记录开始时，由宿主显式选择新的 `stateDirectory`。
 
 Session Tree 的历史与传给模型的上下文分别保存。读取快照不会改变内部状态；客户端不应通过修改快照来编辑历史。进程恢复时保留未完成任务的记录并将其结算为 interrupted，不自动重跑结果不确定的工具。
 
@@ -389,7 +389,7 @@ Worker 的 `agent_run_started.input` 是本次运行实际收到的 user 消息�
 | `tool_started` | `phase: queued` 为进入预检；`running` 为效果满足持久化时机后实际开始执行，参数是准备和策略处理后的实际参数 |
 | `tool_finished` | completed、failed、cancelled 或 denied；进入执行边界的调用包含 durationMs；content 为执行器当时形成的模型可见结果，details 为工具返回的可选结构化元数据。完整批次结算后可能另向持久化结果追加重复调用提醒。取消时 content 为诊断文本（会话封口可能另补中断结果） |
 | `agent_run_started` / `agent_run_finished` | worker 每次修订和 Dreamer 每个批次的输入、输出、结束状态 |
-| `dreamer_status` | 后台审阅的待办、分片进度、最近结果和错误；sessionId/turnId 为 null |
+| `dreamer_status` | 后台审阅的待办、已审阅轮数、最近结果和错误；sessionId/turnId 为 null |
 | `turn_started` / `turn_finished` | 用户任务生命周期；结束事件包含最终助手文本 output。completed 表示正常结束，不是评测通过 |
 | `runtime_status` | 该执行目标准入和结算后的 busy 状态，按 `sessionId` 区分，覆盖尚未创建 turn 就失败或取消的操作；无目标会话的项目级操作使用 null。不是整个 runtime 或当前查看会话的汇总状态；其他 Session 可继续执行 |
 

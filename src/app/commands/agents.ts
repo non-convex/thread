@@ -11,7 +11,6 @@ export function dreamerStatusLines(status: DreamerStatus | undefined): string[] 
   if (!status) return ["Global memory is not configured."];
   return [
     `Review: ${status.phase} · ${status.pendingTurns} pending · ${status.reviewedTurns} reviewed`,
-    ...(status.partialTurnId ? ["A long turn is partially reviewed; its remaining text is saved."] : []),
     `Last successful review: ${status.lastReviewedAt === undefined ? "none" : new Date(status.lastReviewedAt).toLocaleString()}`,
     ...(status.lastResult ? [`Result: ${{ updated: "memory updated", unchanged: "no memory change needed", observed: "observations saved; later history is still pending", read_only: "older evidence reviewed without changing memory" }[status.lastResult]}`] : []),
     ...(status.nextReviewAt === undefined ? [] : [`Next eligible review: ${new Date(status.nextReviewAt).toLocaleString()}`]),

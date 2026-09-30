@@ -120,14 +120,11 @@ export class ThreadRuntime {
       sessionIdForTurn: (turnId) => this.tree.projection.turns.get(turnId)?.sessionId,
     });
     this.dreamer = this.memory ? new DreamerScheduler(this.rootPath, this.memory.filePath, dreamer, {
-      readTurn: (turnId, startOrdinal) => {
+      readTurn: (turnId) => {
         const entries = this.tree.projection.entriesByTurn.get(turnId);
         if (!entries) throw new Error(`Dreamer cannot read missing turn: ${turnId}`);
         return (function* () {
-          for (let ordinal = startOrdinal; ordinal < entries.length; ordinal++) {
-            const entry = entries[ordinal]!;
-            if (entry.type === "message") yield { ordinal: entry.ordinal, message: entry.message };
-          }
+          for (const entry of entries) if (entry.type === "message") yield entry.message;
         })();
       },
       pendingTurns: () => this.tree.pendingDreamerTurns(this.memory!.filePath),

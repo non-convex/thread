@@ -1,5 +1,5 @@
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText, type Message } from "@earendil-works/pi-ai";
 import { EphemeralAgentJournal } from "../agent/ephemeral-journal.js";
 import type { AgentProfile } from "../agent/profile.js";
 import { AgentStepRunner, assertModelStepSucceeded } from "../agent/step-runner.js";
@@ -8,7 +8,7 @@ import { ExtensionEvents } from "../extensions/events.js";
 import type { HostToolPolicy } from "../runtime/policy.js";
 import { DREAMER_MAX_RUNTIME_MS, DREAMER_MAX_STEPS, parseDreamerReviewResult } from "./profile.js";
 import { validateExecutionLimits } from "../runtime/limits.js";
-import { createDreamerReviewBatch, type DreamerReviewBatch, type DreamerReviewEntry, type DreamerReviewSource } from "./review.js";
+import { createDreamerReviewBatch, type DreamerReviewBatch, type DreamerReviewSource } from "./review.js";
 import type { DreamerAdmission, DreamerCheckpoint } from "./state.js";
 import { GlobalMemoryAccess, globalMemoryRevision } from "../global-memory.js";
 import { ToolRegistry } from "../tools/types.js";
@@ -25,7 +25,6 @@ export interface DreamerStatus {
   phase: "disabled" | "idle" | "waiting" | "running" | "retrying" | "blocked";
   pendingTurns: number;
   reviewedTurns: number;
-  partialTurnId?: string;
   oldestPendingAt?: number;
   lastReviewedAt?: number;
   lastResult?: "updated" | "unchanged" | "observed" | "read_only";
@@ -34,7 +33,7 @@ export interface DreamerStatus {
 }
 
 export interface DreamerSchedulerOptions {
-  readTurn: (turnId: string, startOrdinal: number) => Iterable<DreamerReviewEntry>;
+  readTurn: (turnId: string) => Iterable<Message>;
   pendingTurns: () => DreamerReviewSource[];
   checkpoint: () => DreamerCheckpoint;
   saveCheckpoint: (turnIds: readonly string[], checkpoint: DreamerCheckpoint, signal?: AbortSignal) => Promise<void>;
@@ -105,7 +104,6 @@ export class DreamerScheduler {
         : this.checkpoint.lastError ? "retrying" : "waiting",
       pendingTurns: pending.length,
       reviewedTurns: this.checkpoint.reviewedTurns,
-      ...(this.checkpoint.cursor ? { partialTurnId: this.checkpoint.cursor.turnId } : {}),
       ...(pending[0] ? { oldestPendingAt: pending[0].finishedAt ?? pending[0].startedAt } : {}),
       ...(this.checkpoint.lastReviewedAt !== undefined ? { lastReviewedAt: this.checkpoint.lastReviewedAt } : {}),
       ...(this.checkpoint.lastResult ? { lastResult: this.checkpoint.lastResult } : {}),
@@ -160,13 +158,13 @@ export class DreamerScheduler {
     this.clearTimer();
     this.controller?.abort(new DOMException("Thread application closed", "AbortError"));
     await this.running;
-    // Pending turns and the last confirmed fragment remain in the Session Tree.
+    // Pending turns and confirmed batches remain in the Session Tree.
   }
 
   private dueAt(pending: readonly DreamerReviewSource[]): number | undefined {
     const first = pending[0];
     if (!first) return undefined;
-    const triggered = this.checkpoint.cursor !== undefined || this.checkpoint.retryAfter !== undefined;
+    const triggered = this.checkpoint.retryAfter !== undefined;
     const thresholdAt = triggered || pending.length >= this.idleTurns ? 0
       : (first.finishedAt ?? first.startedAt) + this.maxWaitMs;
     return Math.max(Date.now(), this.foregroundIdleSince + this.idleMs, thresholdAt, this.checkpoint.retryAfter ?? 0);
@@ -284,14 +282,14 @@ export class DreamerScheduler {
       let batch: DreamerReviewBatch | undefined;
       try {
         batch = await createDreamerReviewBatch(this.memoryPath, sources, this.options.readTurn,
-          this.checkpoint.cursor, budget, evidence, signal);
+          budget, evidence, signal);
       } catch (error) {
         signal.throwIfAborted();
         throw new ReviewBlockedError(`Cannot prepare Dreamer review: ${String(error instanceof Error ? error.message : error)}`);
       }
       if (!batch) throw new ReviewBlockedError("Pending Dreamer turns produced no review material");
-      // Read later corrections before publishing an inference from an earlier fragment.
-      const canUpdate = writable && !batch.cursor && batch.turnIds.length === pending.length;
+      // Read later corrections before publishing an inference from an earlier turn.
+      const canUpdate = writable && batch.turnIds.length === pending.length;
       await this.reviewBatch(profile, batch, revision, writable, canUpdate, evidenceLimit, signal);
       // This batch only removes its confirmed prefix; foreground admissions wait for us to settle.
       this.publishStatus(pending.slice(batch.turnIds.length));
@@ -329,9 +327,9 @@ export class DreamerScheduler {
         const result = await runner.run({ systemPrompt: instructions, messages: journal.conversationMessages(), tools: tools.modelDefinitions() },
           journal, { signal, step, onExecutionEvent: ui });
         output = contentText(result.response.content, "");
-        if (runner.isContextOverflow(result.response)) throw new ReviewOverflowError("Dreamer context overflow; retrying with a smaller review fragment.");
+        if (runner.isContextOverflow(result.response)) throw new ReviewOverflowError("Dreamer context overflow; retrying with a smaller review batch.");
         assertModelStepSucceeded(result, signal);
-        if (result.response.stopReason === "length") throw new ReviewOverflowError("Dreamer output was truncated; this fragment remains pending.");
+        if (result.response.stopReason === "length") throw new ReviewOverflowError("Dreamer output was truncated; this batch remains pending.");
         for (const item of result.results) {
           if (item.role !== "toolResult") continue;
           const group = item.toolName === "write" || item.toolName === "edit" ? "memory update" : item.toolName;
@@ -352,8 +350,6 @@ export class DreamerScheduler {
           const next: DreamerCheckpoint = { ...this.checkpoint, evidence: writable ? completed.evidence : "",
             reviewedTurns: this.checkpoint.reviewedTurns + batch.turnIds.length, lastReviewedAt: Date.now(), consecutiveFailures: 0,
             lastResult: !writable ? "read_only" : !canUpdate ? "observed" : memory.revision !== revision ? "updated" : "unchanged" };
-          if (batch.cursor) next.cursor = batch.cursor;
-          else delete next.cursor;
           delete next.lastError;
           delete next.blocked;
           signal.throwIfAborted();
@@ -365,14 +361,14 @@ export class DreamerScheduler {
           await this.save(batch.turnIds, next, signal);
           return;
         }
-        if (step >= this.maxSteps) throw new Error(`Dreamer exceeded ${this.maxSteps} model steps; this fragment remains pending`);
+        if (step >= this.maxSteps) throw new Error(`Dreamer exceeded ${this.maxSteps} model steps; this batch remains pending`);
       }
     } catch (cause) {
       error = cause;
       throw cause;
     } finally {
       // A successful file edit is not rolled back when generation later fails or is cancelled.
-      // Remember our own publication without acknowledging the unfinished fragment.
+      // Remember our own publication without acknowledging the unfinished batch.
       try {
         if (memory.revision && memory.revision !== revision && memory.revision !== this.checkpoint.memoryRevision) {
           await this.rememberOwnRevision(revision, memory.revision);

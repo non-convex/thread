@@ -427,27 +427,6 @@ export class SessionTreeProjection {
     if (turnIds.some((turnId) => turnId !== pending?.next().value?.id)) {
       throw new SessionTreeCorruptionError("Dreamer reviewed turns must be a pending prefix");
     }
-    const nextPending = pending?.next().value;
-    if (checkpoint.cursor !== undefined) {
-      const cursor = checkpoint.cursor;
-      if (!cursor || typeof cursor.turnId !== "string" ||
-          !Number.isSafeInteger(cursor.entryOrdinal) || cursor.entryOrdinal < 0 ||
-          !Number.isSafeInteger(cursor.recordIndex) || cursor.recordIndex < 0 ||
-          !Number.isSafeInteger(cursor.offset) || cursor.offset < 0 ||
-          cursor.turnId !== nextPending?.id ||
-          this.entriesByTurn.get(cursor.turnId)?.[cursor.entryOrdinal]?.type !== "message") {
-        throw new SessionTreeCorruptionError("Invalid Dreamer review cursor");
-      }
-    }
-    const priorCursor = previous?.cursor;
-    if (priorCursor && !completed.has(priorCursor.turnId) &&
-        (!checkpoint.cursor || checkpoint.cursor.turnId !== priorCursor.turnId ||
-          checkpoint.cursor.entryOrdinal < priorCursor.entryOrdinal ||
-          (checkpoint.cursor.entryOrdinal === priorCursor.entryOrdinal &&
-            (checkpoint.cursor.recordIndex < priorCursor.recordIndex ||
-              (checkpoint.cursor.recordIndex === priorCursor.recordIndex && checkpoint.cursor.offset < priorCursor.offset))))) {
-      throw new SessionTreeCorruptionError("Dreamer review cursor cannot move backwards or skip its turn");
-    }
   }
 
   private isAncestor(candidate: string | null, descendant: string | null): boolean {
