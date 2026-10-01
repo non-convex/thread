@@ -21,9 +21,10 @@ export function dreamerStatusLines(status: DreamerStatus | undefined): string[] 
 }
 
 /** /model and /agent share selection, listing and enable/disable behavior. */
-export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | undefined, args: string[]): CommandResult {
+export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | undefined, sessionId: string, args: string[]): CommandResult {
+  const main = runtime.getModelSettings(sessionId);
   const states = {
-    main: { enabled: true, model: runtime.model && { provider: runtime.model.providerId, id: runtime.model.modelId } },
+    main: { enabled: true, model: main.model && { provider: main.model.providerId, id: main.model.modelId } },
     worker: { enabled: runtime.workerEnabled, model: runtime.workerModel },
     dreamer: { enabled: runtime.dreamerEnabled, model: runtime.dreamerModel },
   };
@@ -34,7 +35,7 @@ export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | und
   if (!args.length) {
     const agents = (Object.keys(states) as AgentId[]).map((id) => ({
       id, label: labels[id], enabled: states[id].enabled,
-      detail: modelName(id) + (id === "dreamer" && runtime.dreamerStatus
+      detail: modelName(id) + (id === "main" ? " · this Session" : " · project-wide") + (id === "dreamer" && runtime.dreamerStatus
         ? ` · ${runtime.dreamerStatus.phase} · ${runtime.dreamerStatus.pendingTurns} pending` : ""),
     }));
     const content = [
@@ -58,10 +59,15 @@ export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | und
   });
   const picker = (scope: Scope = "configured"): CommandResult => {
     if (id === "main") {
-      const current = runtime.model;
-      const content = current
-        ? `Current model: ${modelName(id)}\nContext window: ${current.contextWindow.toLocaleString("en-US")} tokens\nImages: ${current.acceptsImages === true ? "supported" : "not supported"}\nThinking level: ${runtime.thinkingLevel}`
-        : "No model selected. Use /model list and /model <provider>/<model>.";
+      const current = main.model;
+      const content = [
+        `Session: ${sessionId}`,
+        ...(main.active ? [`This turn: ${main.active.model.providerId}/${main.active.model.modelId} · thinking ${main.active.thinkingLevel}`] : []),
+        current
+          ? `${main.active ? "Next-turn model" : "Selected model"}: ${modelName(id)}\nContext window: ${current.contextWindow.toLocaleString("en-US")} tokens\nImages: ${current.acceptsImages === true ? "supported" : "not supported"}\nThinking level: ${main.thinkingLevel}`
+          : "No model selected. Use /model list and /model <provider>/<model>.",
+        "Model changes apply only to this Session's next turn.",
+      ].join("\n");
       return catalog ? view(content, scope) : ephemeral(content);
     }
     if (!catalog) throw new Error(`${label} model selection is unavailable`);
@@ -76,8 +82,8 @@ export function agentCommand(runtime: ThreadRuntime, catalog: ModelCatalog | und
       throw new Error(id === "main" ? "Model switching is unavailable" : `${label} model selection is unavailable`);
     }
     if (id === "main") {
-      runtime.selectModel(providerId, modelId);
-      return ephemeral(`Switched model from ${model ? modelName(id) : "none"} to ${providerId}/${modelId}`, true);
+      runtime.selectModel(sessionId, providerId, modelId);
+      return ephemeral(`Next-turn model: ${providerId}/${modelId}.${main.active ? ` This turn continues with ${main.active.model.providerId}/${main.active.model.modelId}.` : ""}`, true);
     }
     runtime.configureAgent(id, true, catalog.createClient(providerId, modelId));
     return ephemeral(`${label}: On · ${providerId}/${modelId}`, true);

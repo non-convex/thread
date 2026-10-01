@@ -1,4 +1,4 @@
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { McpClients, McpServerStatus } from "../mcp/client.js";
 import { AgentRunner, type TurnResult } from "../agent/runner.js";
 import type { RunTurnOptions } from "../agent/turn-runner.js";
@@ -11,7 +11,7 @@ import { createWorkerProfile, DEFAULT_WORKER_SETTINGS, WORKER_PROFILE_ID, type W
 import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
 import { createAgentRunner } from "./create-agent-runner.js";
-import { bindModel, ModelSelection } from "./model-selection.js";
+import { bindModel, ModelSelection, type SessionModelSettings } from "./model-selection.js";
 import type { ThreadState } from "./state.js";
 import { ContextBuilder } from "../context/builder.js";
 import { contextBudget } from "../context/budget.js";
@@ -43,11 +43,33 @@ import { ToolRegistry, type AgentTool } from "../tools/types.js";
 import type { AskPresenter } from "./interaction.js";
 import { runtimeEventSink, withoutModelContent, safeRuntimeEvent, type RuntimeSubscriptionOptions, type RuntimeEvent, type RuntimeEventSink } from "./events.js";
 
+interface TurnModelSnapshot {
+  readonly model: ModelClient;
+  readonly thinkingLevel: ModelThinkingLevel;
+  readonly reasoning?: ThinkingLevel;
+}
+
+interface RunnerGoal {
+  state: SessionGoal;
+  tool: AgentTool;
+}
+
+interface RunnerContext {
+  systemPrompt: string;
+  tools: ToolRegistry;
+}
+
+interface TurnAdmission {
+  model: TurnModelSnapshot;
+  goal?: RunnerGoal;
+}
+
 interface ActiveOperation {
   sessionId?: string;
   goalId?: string;
-  /** Exact prompt and registry captured by this operation's current runner. */
-  context?: { systemPrompt: string; tools: ToolRegistry };
+  model?: TurnModelSnapshot;
+  /** Intended context during preparation, replaced by the exact context captured by the runner. */
+  context?: RunnerContext;
   controller: AbortController;
   signal: AbortSignal;
   done: Promise<unknown>;
@@ -69,7 +91,8 @@ export class ThreadRuntime {
   private readonly modelCatalog: ModelCatalog | undefined;
   private readonly repository: SessionTreeRepository;
   private readonly builder: ContextBuilder;
-  private readonly modelSelection: ModelSelection;
+  private readonly sessionModels = new Map<string, ModelSelection>();
+  private readonly sessionModelErrors = new Map<string, Error>();
   private readonly memory: GlobalMemorySnapshots | undefined;
   private readonly dreamer: DreamerScheduler | undefined;
   private readonly scheduler: ScheduleScheduler | undefined;
@@ -106,8 +129,6 @@ export class ThreadRuntime {
     this.loadedSkills = values.skills;
     this.state = structuredClone(options.state ?? {});
     this.workerSettings = options.worker?.settings ?? DEFAULT_WORKER_SETTINGS;
-    this.modelSelection = new ModelSelection(this.tree.tree.id, options.cacheRetention,
-      options.thinkingLevel ?? "medium", (state) => this.remember({ ...this.state, ...state }));
     const worker = options.worker?.enabled && options.worker.model
       ? this.bindProfile(createWorkerProfile(options.worker.model, this.workerSettings)) : undefined;
     const dreamer = options.dreamer?.enabled && options.dreamer.model
@@ -162,7 +183,6 @@ export class ThreadRuntime {
     }
     this.syncTaskTools();
     this.setAskPresenter(options.askPresenter);
-    this.modelSelection.select(options.model);
   }
 
   static async open(input: ThreadRuntimeOptions): Promise<ThreadRuntime> {
@@ -186,10 +206,20 @@ export class ThreadRuntime {
     }
   }
 
-  get model() { return this.modelSelection.model; }
-  get thinkingLevel() { return this.modelSelection.thinkingLevel; }
-  get supportsThinking() { return this.modelSelection.supportsThinking; }
-  get availableThinkingLevels() { return this.modelSelection.availableThinkingLevels; }
+  /** Next-turn preferences, plus the model already fixed for this Session's current turn. */
+  getModelSettings(sessionId: string): SessionModelSettings {
+    this.assertOpen();
+    const id = this.tree.resolveSession(sessionId).id;
+    const selection = this.modelSelectionFor(id);
+    const active = this.active.get(id)?.model;
+    return Object.freeze({
+      ...(selection.model ? { model: selection.model } : {}),
+      thinkingLevel: selection.thinkingLevel,
+      supportsThinking: selection.supportsThinking,
+      availableThinkingLevels: Object.freeze([...selection.availableThinkingLevels]),
+      ...(active ? { active: Object.freeze({ model: active.model, thinkingLevel: active.thinkingLevel }) } : {}),
+    });
+  }
   get skills() { return structuredClone(this.loadedSkills.skills); }
   get skillDiagnostics() { return structuredClone(this.loadedSkills.diagnostics); }
   get fileCheckpoints() { return this.files.captureEnabled; }
@@ -223,8 +253,11 @@ export class ThreadRuntime {
   get workerModel() { return this.secondaryModel(WORKER_PROFILE_ID); }
   get dreamerModel() { return this.secondaryModel(DREAMER_PROFILE_ID); }
   get agentProfileDiagnostics(): readonly AgentProfileDiagnostic[] {
-    return [...this.profiles.diagnostics, ...(this.memory?.diagnostic
-      ? [{ profileId: "main", level: "warning" as const, message: this.memory.diagnostic }] : [])];
+    return [...this.profiles.diagnostics,
+      ...[...this.sessionModelErrors.values()].map((error) => ({ profileId: MAIN_AGENT_PROFILE_ID,
+        level: "error" as const, message: error.message })),
+      ...(this.memory?.diagnostic
+        ? [{ profileId: "main", level: "warning" as const, message: this.memory.diagnostic }] : [])];
   }
 
   listSessions() {
@@ -338,17 +371,22 @@ export class ThreadRuntime {
   private async wakeSchedule(id: string): Promise<void> {
     // Reserve through operate() synchronously. A status check followed by an
     // asynchronous enqueue would race a human prompt or another foreground command.
-    if (this.closing || this.stateOperations.size || !this.model || this.tree.projection.pendingFileRewind) return;
+    if (this.closing || this.stateOperations.size || this.tree.projection.pendingFileRewind) return;
     const due = this.tree.projection.schedules.get(id);
     if (!due?.enabled || due.nextRunAt === null || due.nextRunAt > Date.now() || this.sessionBusy(due.sessionId)) return;
+    const selection = this.modelSelectionFor(due.sessionId);
+    const error = this.sessionModelErrors.get(due.sessionId);
+    if (error) throw error;
+    if (!selection.model) return;
+    const model = this.captureTurnModel(due.sessionId);
     await this.operate(due.sessionId, undefined, async (signal) => {
       const task = this.tree.projection.schedules.get(id);
       if (!task?.enabled || task.nextRunAt === null || task.nextRunAt > Date.now()) return;
       const scheduled: ScheduledWakeup = {
         scheduleId: task.id, scheduledAt: task.nextRunAt, phase: task.lastTurnId ? "followup" : "initial",
       };
-      await this.executePrompt(task.sessionId, formatScheduledPrompt(task, scheduled, Date.now()), {}, signal, scheduled);
-    }, true);
+      await this.executePrompt(task.sessionId, formatScheduledPrompt(task, scheduled, Date.now()), {}, signal, model, scheduled);
+    }, true, undefined, false, { model });
   }
 
   private async scheduleFailed(id: string, error: unknown): Promise<void> {
@@ -377,18 +415,23 @@ export class ThreadRuntime {
   }
 
   prompt(sessionId: string, input: string, options: PromptOptions = {}): Promise<TurnResult> {
+    let model: TurnModelSnapshot;
+    try {
+      this.assertOpen();
+      options.signal?.throwIfAborted();
+      model = this.captureTurnModel(sessionId);
+    } catch (error) { return Promise.reject(error); }
     return this.operate(sessionId, options.signal,
-      (signal) => this.executePrompt(sessionId, input, options, signal), true);
+      (signal) => this.executePrompt(sessionId, input, options, signal, model), true, undefined, false, { model });
   }
 
   /** Human input and scheduled messages share the same main-agent execution path. */
   private async executePrompt(sessionId: string, input: string, options: PromptOptions, signal: AbortSignal,
-    scheduled?: ScheduledWakeup): Promise<TurnResult> {
+    model: TurnModelSnapshot, scheduled?: ScheduledWakeup): Promise<TurnResult> {
     const session = this.tree.resolveSession(sessionId);
-    if (!this.model) throw new Error("No model configured");
-    if (options.images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
+    if (options.images?.length && model.model.acceptsImages !== true) throw new Error("Current model does not accept images");
     await this.mcp?.refresh(signal);
-    const runner = this.createAgentRunner(session.id);
+    const runner = this.createAgentRunner(session.id, model);
     const dreamerReview = await this.dreamer?.admission(signal);
     signal.throwIfAborted();
     return runner.run(input, { ...this.runOptions(session.id, signal, options),
@@ -404,15 +447,18 @@ export class ThreadRuntime {
   runGoal(sessionId: string, objective: string | undefined, options: GoalOptions = {}): Promise<TurnResult> {
     let goal: SessionGoal;
     let id: string;
+    let firstModel: TurnModelSnapshot;
     const maxTurns = options.maxTurns ?? DEFAULT_GOAL_MAX_TURNS;
     // Capture mutable public options before asynchronous admission.
     const images = options.images ? structuredClone(options.images) : undefined;
     const onEvent = options.onEvent;
     try {
+      this.assertOpen();
+      options.signal?.throwIfAborted();
       id = this.tree.resolveSession(sessionId).id;
       this.assertIdle(id);
-      if (!this.model) throw new Error("No model configured");
-      if (images?.length && this.model.acceptsImages !== true) throw new Error("Current model does not accept images");
+      firstModel = this.captureTurnModel(id);
+      if (images?.length && firstModel.model.acceptsImages !== true) throw new Error("Current model does not accept images");
       if (this.toolRegistry.get(GOAL_TOOL_NAME)) throw new Error(`Goal mode reserves the tool name ${GOAL_TOOL_NAME}`);
       if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new RangeError("maxTurns must be a positive safe integer");
       const previous = this.tree.readGoal(id);
@@ -427,26 +473,32 @@ export class ThreadRuntime {
       }
       if (!Number.isSafeInteger(goal.turnLimit)) throw new RangeError("Goal turn limit is too large");
     } catch (error) { return Promise.reject(error); }
+    // One goal tool follows the operation; each turn receives a fresh intent accumulator.
+    let reported: { decision?: GoalDecision; callId?: string } = {};
+    const tool = createGoalTool(goal.id, (report, context) => {
+      const running = this.tree.projection.runningTurnsBySession.get(id);
+      if (running?.id !== context.invocation.turnId || running?.goalId !== goal.id ||
+          this.tree.readGoal(id)?.id !== goal.id) throw new Error("This goal is no longer current");
+      if (this.tasks.summariesForTurn(running.id).some((task) => task.status === "running")) {
+        throw new Error("Wait for or cancel running workers before reporting a goal outcome");
+      }
+      reported.decision = report;
+      reported.callId = context.invocation.toolCallId;
+    });
     return this.operate(id, options.signal, async (signal) => {
       let first = true;
       let idleTurns = 0;
       try {
         for (;;) {
           signal.throwIfAborted();
+          // Every automatic continuation admits fresh Session preferences before any I/O.
+          const model = first ? firstModel : this.captureTurnModel(id);
+          const active = this.active.get(id);
+          if (active) { active.model = model; active.context = this.contextForRun(id, { state: goal, tool }); }
           // The tool reports intent; only a successfully settled turn may commit its outcome.
-          const reported: { decision?: GoalDecision; callId?: string } = {};
-          const tool = createGoalTool(goal.id, (report, context) => {
-            const running = this.tree.projection.runningTurnsBySession.get(id);
-            if (running?.id !== context.invocation.turnId || running?.goalId !== goal.id ||
-                this.tree.readGoal(id)?.id !== goal.id) throw new Error("This goal is no longer current");
-            if (this.tasks.summariesForTurn(running.id).some((task) => task.status === "running")) {
-              throw new Error("Wait for or cancel running workers before reporting a goal outcome");
-            }
-            reported.decision = report;
-            reported.callId = context.invocation.toolCallId;
-          });
+          reported = {};
           await this.mcp?.refresh(signal);
-          const runner = this.createAgentRunner(id, { state: goal, tool });
+          const runner = this.createAgentRunner(id, model, { state: goal, tool });
           const dreamerReview = await this.dreamer?.admission(signal);
           signal.throwIfAborted();
           const input = first && objective !== undefined ? goal.objective
@@ -494,7 +546,7 @@ export class ThreadRuntime {
         }
         throw error;
       }
-    }, true, goal.id);
+    }, true, goal.id, false, { model: firstModel, goal: { state: goal, tool } });
   }
 
   async pauseGoal(sessionId: string): Promise<void> {
@@ -548,11 +600,16 @@ export class ThreadRuntime {
   }
 
   compact(sessionId: string, options: PromptOptions = {}) {
+    let model: TurnModelSnapshot;
+    try {
+      this.assertOpen();
+      options.signal?.throwIfAborted();
+      model = this.captureTurnModel(sessionId);
+    } catch (error) { return Promise.reject(error); }
     return this.operate(sessionId, options.signal, (signal) => {
       const session = this.tree.resolveSession(sessionId);
-      if (!this.model) throw new Error("Compaction requires a configured model");
-      return this.createAgentRunner(session.id).compactCurrent(this.runOptions(session.id, signal, options));
-    });
+      return this.createAgentRunner(session.id, model).compactCurrent(this.runOptions(session.id, signal, options));
+    }, false, undefined, false, { model });
   }
 
   rewind(sessionId: string, turnIdOrUserEntryId: string, options: RewindOptions = {}) {
@@ -587,14 +644,16 @@ export class ThreadRuntime {
     this.assertOpen();
     const session = this.tree.resolveSession(sessionId);
     const messages = this.builder.build({ sessionId: session.id }).messages;
-    if (!this.model) return { messages, usage: undefined };
-    const context = this.active.get(session.id)?.context;
+    const active = this.active.get(session.id);
+    const model = active?.model?.model ?? this.modelSelectionFor(session.id).model;
+    if (!model) return { messages, usage: undefined };
+    const context = active?.context;
     const { requestTokens } = contextBudget({
       systemPrompt: context?.systemPrompt ?? this.systemPromptFor(session.id),
-      messages: this.model.acceptsImages ? messages : messages.map(messageWithoutImages),
+      messages: model.acceptsImages ? messages : messages.map(messageWithoutImages),
       tools: (context?.tools ?? this.toolsForRun()).modelDefinitions(),
     }, messages);
-    return { messages, usage: { requestTokens, contextWindow: this.model.contextWindow } };
+    return { messages, usage: { requestTokens, contextWindow: model.contextWindow } };
   }
 
   subscribe(listener: RuntimeEventSink, options: RuntimeSubscriptionOptions = {}): () => void {
@@ -642,26 +701,34 @@ export class ThreadRuntime {
     };
   }
 
-  setModel(model: ModelClient): void {
-    this.assertIdle();
-    this.modelSelection.select(model);
-    this.modelSelection.remember();
+  /** Changes only this Session's future turns, including while a turn is being prepared or run. */
+  setModel(sessionId: string, model: ModelClient): void {
+    this.assertOpen();
+    const id = this.tree.resolveSession(sessionId).id;
+    const selection = this.modelSelectionFor(id);
+    selection.select(model);
+    this.sessionModelErrors.delete(id);
+    selection.remember();
   }
 
-  selectModel(providerId: string, modelId: string): void {
+  selectModel(sessionId: string, providerId: string, modelId: string): void {
+    this.assertOpen();
+    const id = this.tree.resolveSession(sessionId).id;
     if (!this.modelCatalog) throw new Error("Model switching is unavailable");
-    this.setModel(this.modelCatalog.createClient(providerId, modelId));
+    this.setModel(id, this.modelCatalog.createClient(providerId, modelId));
   }
 
   /** Changes preferences for the next turn; an active runner retains its captured settings. */
-  setThinkingLevel(level: ModelThinkingLevel): void {
+  setThinkingLevel(sessionId: string, level: ModelThinkingLevel): void {
     this.assertOpen();
-    this.modelSelection.setThinkingLevel(level);
+    const id = this.tree.resolveSession(sessionId).id;
+    this.modelSelectionFor(id).setThinkingLevel(level);
   }
 
-  cycleThinkingLevel(): ModelThinkingLevel | undefined {
+  cycleThinkingLevel(sessionId: string): ModelThinkingLevel | undefined {
     this.assertOpen();
-    return this.modelSelection.cycleThinkingLevel();
+    const id = this.tree.resolveSession(sessionId).id;
+    return this.modelSelectionFor(id).cycleThinkingLevel();
   }
 
   configureAgent(id: typeof WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID, enabled: boolean, model?: ModelClient): void {
@@ -737,18 +804,22 @@ export class ThreadRuntime {
   }
 
   private operate<T>(sessionId: string | undefined, signal: AbortSignal | undefined,
-    operation: (signal: AbortSignal) => Promise<T> | T, resetsDreamerIdle = false, goalId?: string, exclusive = false): Promise<T> {
+    operation: (signal: AbortSignal) => Promise<T> | T, resetsDreamerIdle = false, goalId?: string, exclusive = false,
+    admission?: TurnAdmission): Promise<T> {
     let resolvedSessionId: string | undefined;
+    let context: RunnerContext | undefined;
     try {
       this.assertOpen();
       signal?.throwIfAborted();
       resolvedSessionId = sessionId ? this.tree.resolveSession(sessionId).id : undefined;
       this.assertIdle(exclusive ? undefined : resolvedSessionId);
+      if (admission && resolvedSessionId) context = this.contextForRun(resolvedSessionId, admission.goal);
     } catch (error) { return Promise.reject(error); }
     const controller = new AbortController();
     const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const active: ActiveOperation = { ...(resolvedSessionId ? { sessionId: resolvedSessionId } : {}),
-      ...(goalId ? { goalId } : {}), controller, signal: combined, done: Promise.resolve() };
+      ...(goalId ? { goalId } : {}), ...(admission ? { model: admission.model } : {}),
+      ...(context ? { context } : {}), controller, signal: combined, done: Promise.resolve() };
     const key = exclusive ? undefined : resolvedSessionId;
     this.active.set(key, active);
     this.resetDreamerIdle ||= resetsDreamerIdle;
@@ -834,6 +905,48 @@ export class ThreadRuntime {
     this.options.onStateChange?.(structuredClone(state));
   }
 
+  /** Restore only the requested Session; a broken saved choice must not block project startup or repair. */
+  private modelSelectionFor(sessionId: string): ModelSelection {
+    const existing = this.sessionModels.get(sessionId);
+    if (existing) return existing;
+    const preferences = this.state.sessions?.[sessionId];
+    const selection = new ModelSelection(`${this.treeId}:${sessionId}`, this.options.cacheRetention,
+      preferences?.thinkingLevel ?? this.options.thinkingLevel ?? "medium", (preferences) => {
+        this.remember({ ...this.state, sessions: { ...this.state.sessions,
+          [sessionId]: { ...this.state.sessions?.[sessionId], ...preferences } } });
+      });
+    this.sessionModels.set(sessionId, selection);
+    try {
+      const saved = preferences?.model;
+      const startup = this.options.model;
+      if (!saved || (startup?.providerId === saved.provider && startup.modelId === saved.id)) {
+        selection.select(startup);
+      } else {
+        if (!this.modelCatalog) throw new Error("Model catalog is unavailable; supply a model with setModel or configure a catalog");
+        selection.select(this.modelCatalog.createClient(saved.provider, saved.id));
+      }
+    } catch (cause) {
+      const saved = preferences?.model;
+      this.sessionModelErrors.set(sessionId, new Error(
+        `Session ${sessionId} model${saved ? ` ${saved.provider}/${saved.id}` : ""} is unavailable: ${cause instanceof Error ? cause.message : String(cause)}. Select a model for this Session to repair it.`,
+        { cause },
+      ));
+    }
+    return selection;
+  }
+
+  /** Called synchronously at admission, before Dreamer settlement, MCP refresh or any other preparation. */
+  private captureTurnModel(sessionId: string): TurnModelSnapshot {
+    const id = this.tree.resolveSession(sessionId).id;
+    const selection = this.modelSelectionFor(id);
+    const error = this.sessionModelErrors.get(id);
+    if (error) throw error;
+    const model = selection.model;
+    if (!model) throw new Error(`No model configured for Session ${id}`);
+    return Object.freeze({ model, thinkingLevel: selection.thinkingLevel,
+      ...(selection.reasoning ? { reasoning: selection.reasoning } : {}) });
+  }
+
   private secondaryModel(id: typeof WORKER_PROFILE_ID | typeof DREAMER_PROFILE_ID) {
     const profile = this.profiles.get(id);
     if (profile) return { provider: profile.model.providerId, id: profile.model.modelId };
@@ -857,15 +970,19 @@ export class ThreadRuntime {
       `# Concurrent tool calls\n\n${TOOL_CONCURRENCY_PROMPT}`].filter(Boolean).join("\n\n") };
   }
 
-  private createAgentRunner(sessionId: string, goal?: { state: SessionGoal; tool: AgentTool }): AgentRunner {
-    if (!this.model) throw new Error("No model configured");
+  private contextForRun(sessionId: string, goal?: RunnerGoal): RunnerContext {
     const systemPrompt = [this.systemPromptFor(sessionId), goal ? goalPrompt(goal.state) : ""].filter(Boolean).join("\n\n");
     const tools = this.toolsForRun(Boolean(goal));
     if (goal) tools.register(goal.tool);
+    return { systemPrompt, tools };
+  }
+
+  private createAgentRunner(sessionId: string, model: TurnModelSnapshot, goal?: RunnerGoal): AgentRunner {
+    const context = this.contextForRun(sessionId, goal);
+    const { systemPrompt, tools } = context;
     const active = this.active.get(sessionId);
-    if (active) active.context = { systemPrompt, tools };
-    const model = bindModel(this.model, `${this.treeId}:${sessionId}`, this.options.cacheRetention);
-    return createAgentRunner({ model, ...(this.modelSelection.reasoning ? { reasoning: this.modelSelection.reasoning } : {}),
+    if (active) active.context = context;
+    return createAgentRunner({ model: model.model, ...(model.reasoning ? { reasoning: model.reasoning } : {}),
       rootPath: this.rootPath, systemPrompt, tree: this.tree, fileHistory: this.files, contextBuilder: this.builder,
       tools, extensions: this.extensions, agentTasks: this.tasks, askPresenter: () => this.askPresenter,
       writableExternalPaths: [...(this.options.writableExternalPaths ?? []), ...(this.memory ? [this.memory.filePath] : [])],

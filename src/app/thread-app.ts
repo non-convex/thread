@@ -65,10 +65,6 @@ export class ThreadApp {
     switch (command) {
       case undefined:
       case "exit":
-        if (!runtime.model) throw new Error("No model configured. Use /model list and /model <provider>/<model>.");
-        if (options.images?.length && runtime.model.acceptsImages !== true) {
-          throw new Error("Current model does not accept images. Use /model to pick a vision model.");
-        }
         return { kind: "turn", result: await runtime.prompt(sessionId, input, options) };
       case "goal": return this.routeGoal(goal!, options, sessionId);
       case "schedule": return this.runCommand("schedule", options, () => scheduleCommand(parseCommandLine(rest), this.commandContext(options.signal, sessionId)));
@@ -84,15 +80,14 @@ export class ThreadApp {
         });
       case "compact":
         usage();
-        if (!runtime.model) throw new Error("/compact requires a configured model");
         return this.runCommand("compact", options, async () => {
           const result = await runtime.compact(sessionId, options);
           return ephemeral(result.compacted
             ? `Context compacted: ${result.summarizedSteps} step(s) summarized; ${result.retainedSteps} retained; ${result.tokensBefore - result.tokensAfter} estimated tokens freed`
             : "Nothing can be compacted with a meaningful estimated token reduction", result.compacted);
         });
-      case "agent": return { kind: "command", result: agentCommand(runtime, this.catalog, parseCommandLine(rest)) };
-      case "model": return { kind: "command", result: agentCommand(runtime, this.catalog, ["main", "model", ...parseCommandLine(rest)]) };
+      case "agent": return { kind: "command", result: agentCommand(runtime, this.catalog, sessionId, parseCommandLine(rest)) };
+      case "model": return { kind: "command", result: agentCommand(runtime, this.catalog, sessionId, ["main", "model", ...parseCommandLine(rest)]) };
       case "session": {
         const args = parseCommandLine(rest);
         return this.routeThreadCommand(args.length ? `/thread open ${args.join(" ")}` : "/thread sessions", options, sessionId);
@@ -129,7 +124,6 @@ export class ThreadApp {
             emptyText: paths.length ? `No skills loaded. Add skills under ${paths.join(", ")}` : "No skills loaded for this application.",
           }) };
         }
-        if (!runtime.model) throw new Error("/skill requires a configured model");
         return { kind: "turn", result: await runtime.invokeSkill(sessionId, name, match?.[2]?.trim() || undefined, options) };
       }
       default:
@@ -222,7 +216,6 @@ Use schedule_task when the user requests recurring or future work; use list_sche
   private async routeGoal(action: GoalInputAction, options: InputOptions, sessionId: string): Promise<InputResult> {
     const runtime = this.runtime;
     if (action.type === "run" || action.type === "resume") {
-      if (!runtime.model) throw new Error("/goal requires a configured model. Use /model to choose one.");
       return { kind: "turn", result: await runtime.runGoal(sessionId, action.type === "run" ? action.objective : undefined, options) };
     }
     if (action.type === "status") {

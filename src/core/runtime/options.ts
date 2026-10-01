@@ -21,8 +21,11 @@ export interface ThreadRuntimeOptions {
   rootPath: string;
   /** Exact project data directory. Omitted: Thread's usual per-project directory. */
   stateDirectory?: string;
+  /** Default for Sessions without a saved model; later Session selections do not change it. */
   model?: ModelClient;
+  /** Resolves saved per-Session model identifiers and explicit selectModel calls. */
   modelCatalog?: ModelCatalog;
+  /** Default for Sessions without a saved thinking preference. */
   thinkingLevel?: ModelThinkingLevel;
   /** Base instructions. A bare runtime adds no coding or global-memory defaults. */
   systemPrompt?: string;
@@ -75,7 +78,9 @@ export interface ThreadRuntimeOptions {
     maxRuntimeMs?: number;
   };
   agentProfileDiagnostics?: readonly AgentProfileDiagnostic[];
+  /** Session model/thinking preferences and project-wide Worker/Dreamer preferences. */
   state?: ThreadState;
+  /** Receives the complete preference snapshot; the host owns persistence. */
   onStateChange?: (state: ThreadState) => void;
 }
 

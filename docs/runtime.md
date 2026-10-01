@@ -62,13 +62,15 @@ coding 应用的默认配置统一由 `ThreadApp.open()` 装配：完整基础�
 
 CLI 默认只读取 `~/.thread/config.json`，不回退到 Pi 配置。默认文件不存在时仍可用内置模型及已有登录凭据启动；显式指定 `--config` 或 `THREAD_CONFIG` 的文件不存在则报错。`loadThreadConfig()` 不再返回 `source` 字段，`getPiAgentDir` 不再导出。
 
-CLI 在启动模型前先按 `rootPath` 解析项目身份，再读取该项目数据目录中的 `state.json`。交互中选择的主模型、推理档位，以及 Worker / Dreamer 的模型和启停状态只写回这一文件，不会覆盖其他项目。主模型优先级为命令行或环境变量、当前项目记录、全局配置；推理档位优先用项目记录，再用配置默认值。旧的全局 `~/.thread/state.json` 不再读取或迁移。配置和凭据仍然共享；`logout` 撤销共享凭据，但只清理启动目录所对应项目的模型选择，不改写其他项目的偏好文件。
+CLI 在启动模型前先按 `rootPath` 解析项目身份，再读取该项目数据目录中的 `state.json`。主模型和推理档位保存在 `sessions[sessionId]`，不同 Session 的选择互不影响；Worker / Dreamer 的模型和启停状态仍保存在项目级 `agents`。没有保存选择的 Session 使用启动默认值，新建 Session 和独立定时任务也从默认值开始，不继承当前查看的 Session。
 
-嵌入宿主仍通过 `state` 和 `onStateChange` 自行管理偏好持久化。应用入口导出的 `getThreadStatePath(project)` 根据显式传入的 `project.statePath` 返回偏好文件位置；`loadThreadState(statePath)` 和 `saveThreadState(state, statePath)` 均要求明确提供文件路径，不再默认访问全局文件。
+CLI 的 `--provider/--model` 或对应环境变量设置启动默认模型，并覆盖初始打开的 Session 的模型选择，不覆盖其他 Session 已保存的选择。没有显式指定时，Session 保存的模型优先于配置默认模型，保存的推理档位优先于配置默认档位。旧的项目级顶层 `model`、`thinkingLevel` 字段不再读取或迁移。配置和凭据仍然共享；`logout` 撤销共享凭据，并清理当前项目各 Session 对该提供方的选择，不改写其他项目的偏好文件。
+
+嵌入宿主仍通过 `state` 和 `onStateChange` 自行管理偏好持久化。恢复与启动默认模型不同的已保存模型时，需要 `modelCatalog`，或者由宿主显式调用 `setModel(sessionId, model)` 提供客户端。已保存模型不可用时会报告诊断，保留该选择，允许重新选模型修复，不会阻止其他 Session 启动。应用入口导出的 `getThreadStatePath(project)` 根据显式传入的 `project.statePath` 返回偏好文件位置；`loadThreadState(statePath)` 和 `saveThreadState(state, statePath)` 均要求明确提供文件路径，不再默认访问全局文件。
 
 定时任务在裸 runtime 中默认关闭；嵌入宿主通过 `ThreadRuntime.open({ ..., scheduling: true })` 启用，coding `ThreadApp` 默认启用（可用 `scheduling: false` 关闭）。启用后可通过 `runtime.createSchedule({ name, prompt, initialPrompt?, schedule, sessionId? })` 创建任务：省略 `sessionId` 新建一个独立会话，指定则固定到已有会话；用 `listSchedules()`、`updateSchedule(id, { prompt?, schedule? }, { signal? })`、`setScheduleEnabled(id, enabled)`、`deleteSchedule(id)` 管理。主 agent 可用 `update_schedule` 修改后续提示词、唤醒规则或同时修改两者，至少提供一个字段；`/schedule` 没有编辑子命令。
 
-创建时立即将 `initialPrompt` 置为待执行，runtime 空闲后发送；如果正在执行创建任务的那轮对话，会先等当前轮次结束，不等下一个定时时刻。消息在执行开始时写入会话历史。之后按 `schedule` 发送 `prompt`，包括 `at` 指定时间的那次后续消息。省略 `initialPrompt` 时，初始化也使用 `prompt`；如果实际动作必须等到未来，应明确提供仅做准备的初始指令。任务只在 runtime 保持打开期间触发，所有会话的执行仍全项目串行；详见[定时任务使用与嵌入](./scheduling.md)。
+创建时立即将 `initialPrompt` 置为待执行，runtime 空闲后发送；如果正在执行创建任务的那轮对话，会先等当前轮次结束，不等下一个定时时刻。消息在执行开始时写入会话历史。之后按 `schedule` 发送 `prompt`，包括 `at` 指定时间的那次后续消息。省略 `initialPrompt` 时，初始化也使用 `prompt`；如果实际动作必须等到未来，应明确提供仅做准备的初始指令。任务只在 runtime 保持打开期间触发，同一 Session 内串行，不同 Session 可并发；详见[定时任务使用与嵌入](./scheduling.md)。
 
 例如，把已有任务的唤醒间隔改为 50 分钟，同时缩短提示，不必重建任务或重复初始指令；也可省略其中一个字段：
 
@@ -97,7 +99,7 @@ try {
 }
 ```
 
-界面需要在清空草稿前同步判断输入能否提交时，可以先用 `parseInput(text)` 得到不可变的 `RoutedInput`，调用 `app.canHandleInput(route)`，再将同一对象传给 `app.handleInput(route, options)`。工作输入和控制输入由解析器统一分类；`/goal status`、`pause`、`clear` 可以在工作运行期间执行，其余输入仍等待空闲。`handleInput()` 同时接受原始字符串，不需要额外的执行入口。关闭应用会取消并等待所有已接受的输入操作。
+界面需要在清空草稿前同步判断输入能否提交时，可以先用 `parseInput(text)` 得到不可变的 `RoutedInput`，调用 `app.canHandleInput(route)`，再将同一对象传给 `app.handleInput(route, options)`。工作输入和控制输入由解析器统一分类。会话导航、主模型选择、模型列表、Agent 状态、`/thread status/history`、无参数 `/skill`、`/rewind` 预览及 `/clear` 可以在工作运行期间执行。分类细化到子命令，实际回退、技能调用和 Worker / Dreamer 配置修改仍受执行限制；未知扩展命令不会自动获准并行。`/goal status`、`pause`、`clear` 仍可执行，其中后两项明确停止目标运行。`handleInput()` 同时接受原始字符串，不需要额外的执行入口。关闭应用会取消并等待所有已接受的输入操作。
 
 `ThreadApp` 可通过 `search: false` 或 `globalMemoryPath: false` 关闭相应产品能力；其他 AI 宿主使用 `ThreadRuntime.open()` 声明自己的能力。coding 应用在 plain 模式仍暴露 `ask`，缺少交互展示时返回不可用结果；TUI 为同一个工具绑定问题面板。ask 工具的 `details` 使用 `AskResultDetails`，以 `answered`、`dismissed`、`unavailable` 或 `invalid` 标明结果；只有 `answered` 携带用户答案。历史分析读取这个结构化结果，不依赖展示文案。
 
@@ -105,7 +107,7 @@ coding 应用始终在主 agent 的系统提示词中加入启动时确定的项
 
 coding 应用默认在启动时读取 `rootPath/AGENTS.md`，将项目指令共享给主 agent 和 worker；`projectInstructions: false` 可关闭读取。只读取根目录这一份文件，不遍历祖先、子目录或全局指令目录。缺失或空文件不追加内容；文件须为项目内的 UTF-8 普通文件，上限 32 KiB，超限或无法读取时报错，不截断规则。修改文件后重新打开应用才会生效，同一实例内新建会话或重新启用 worker 仍使用启动快照。
 
-创建实例时会复制配置数据。之后修改原始 options 中的提示词、工具定义、Skill 路径、已加载 Skill 或 worker 限制，不会悄悄重配正在使用的实例；明确的模型切换使用 `setModel()` 等操作。工具的执行函数仍绑定宿主提供的原始实例，支持带内部状态的类实现。注入的模型客户端、工具资源、交互服务及嵌入客户端仍由宿主负责其生命周期；关闭 runtime 不会关闭共享模型客户端。
+创建实例时会复制配置数据。之后修改原始 options 中的提示词、工具定义、Skill 路径、已加载 Skill 或 worker 限制，不会悄悄重配正在使用的实例；明确的模型切换使用 `setModel(sessionId, model)` 等操作。工具的执行函数仍绑定宿主提供的原始实例，支持带内部状态的类实现。注入的模型客户端、工具资源、交互服务及嵌入客户端仍由宿主负责其生命周期；关闭 runtime 不会关闭共享模型客户端。
 
 `prompt()` 将输入当作模型输入，例如 `"/new"` 会原样进入会话。创建会话使用 `createSession()`；斜杠命令、picker 和输入框属于客户端。
 
@@ -290,7 +292,7 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 
 每次手动执行都显式传入 `sessionId`；定时任务则始终使用创建时绑定的会话。客户端分别保存自己选中的会话，创建或切换查看会话不会改变已接受请求的执行目标。同一个 runtime 内，不同 Session 可以并发执行；同一 Session 同时只允许一个执行操作，重复提交会被拒绝，定时任务等待该 Session 空闲。主模型客户端按 Session 绑定缓存和连接标识，避免并行会话共用续接连接。
 
-各 Session 共享项目工作区，内置文件写入继续使用同一路径协调和版本检查。恢复文件的 rewind、文件历史清理、MCP 重连及模型／Agent 配置变更仍要求整个 runtime 空闲；不恢复文件的 rewind 只要求目标 Session 空闲。`close()` 会取消并等待所有 Session，`interrupt(sessionId)` 只处理指定 Session。Dreamer 在所有前台执行结束后才重新开始计算空闲等待。
+各 Session 共享项目工作区，内置文件写入继续使用同一路径协调和版本检查。恢复文件的 rewind、文件历史清理、MCP 重连及 Worker / Dreamer 配置变更仍要求整个 runtime 空闲；不恢复文件的 rewind 只要求目标 Session 空闲。`close()` 会取消并等待所有 Session，`interrupt(sessionId)` 只处理指定 Session。Dreamer 在所有前台执行结束后才重新开始计算空闲等待。
 
 | 操作 | 语义 |
 | --- | --- |
@@ -304,9 +306,11 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `runGoal(sessionId, objective, options?)` | 设置或恢复持续目标，等待本次运行结束，返回最后一轮结果 |
 | `readGoal(sessionId)` | 返回当前目标的独立快照，运行中可读 |
 | `pauseGoal(sessionId)` / `clearGoal(sessionId)` | 停止并结算目标运行，分别保留或清除目标 |
-| `setModel(model)` / `setThinkingLevel(level)` | 模型在空闲时切换；思考偏好可以随时调整，从下一轮生效 |
+| `getModelSettings(sessionId)` | 返回该 Session 的配置；`active` 存在时是当前轮次固定的模型和推理档位 |
+| `setModel(sessionId, model)` / `selectModel(sessionId, providerId, modelId)` | 修改该 Session 的后续轮次模型，运行中可调用 |
+| `setThinkingLevel(sessionId, level)` / `cycleThinkingLevel(sessionId)` | 修改该 Session 的后续轮次推理档位，运行中可调用 |
 | `openSession(sessionId)` | 保存下次启动应恢复的查看会话，执行中也可调用，不改变正在运行的回合或显式 prompt 的目标 |
-| `searchHistory(sessionId, queries, options?)` | 搜索整个项目历史；以传入会话标注当前路径，支持 limit 和取消信号 |
+| `searchHistory(sessionId, queries, options?)` | 搜索整个项目历史；以传入会话标注当前路径，支持 limit 和取消信号；仍要求目标 Session 空闲 |
 | `contextSnapshot(sessionId)` | 一次构建返回 `{ messages, usage }`；没有模型时 usage 为 undefined |
 | `compact(sessionId)` / `rewind(sessionId, target, options?)` | 压缩目标会话上下文，或回退 live tip；是否恢复文件由 `restoreFiles` 决定 |
 | `interrupt(sessionId)` | 取消指定会话的当前执行，并等待结算；不会取消其他会话 |
@@ -327,9 +331,9 @@ Session Tree 通过 `fs-native-extensions` 使用操作系统文件锁保护整�
 
 凭据存储 `auth.json` 也使用同一个操作系统锁实现，保护读取、OAuth 刷新和原子写回的整个操作。等待锁支持取消，不再按 PID 或锁文件年龄判断是否可以接管。`auth.json.lock` 会保留；升级前应先退出仍使用旧凭据锁协议的进程，避免两套协议同时操作同一凭据文件。凭据 JSON 格式没有变化。
 
-`contextSnapshot()` 在执行期间采用当前 Runner 捕获的系统提示词和工具注册表，因此 goal 指令和临时的 `update_goal` 定义也计入估算。它们不会另行拼装一份普通模式配置。
+`contextSnapshot(sessionId)` 在执行期间采用本轮固定的模型、当前 Runner 的系统提示词和工具注册表，因此模型上下文窗口、图片能力、goal 指令和临时的 `update_goal` 定义都与实际执行一致，不会因为用户修改下一轮配置而改变估算。
 
-每轮开始时创建执行器，捕获该轮的模型、思考级别和系统提示词。执行中通过 `setThinkingLevel()` 或 TUI 的 `Shift+Tab` 调整偏好，不改变当前轮后续模型步骤；下一轮使用新设置。
+每轮在异步准备之前固定模型和推理档位；工具执行后的继续推理和轮内压缩仍使用同一份设置。运行中修改只影响这个 Session 的后续轮次，不影响其他 Session。目标自动续轮和定时任务也按其目标 Session 的设置开始每一轮。`ThreadRuntime.open()` 的 `model`、`thinkingLevel` 是未配置 Session 的默认值；宿主通过 `state.sessions` 和 `onStateChange` 保存各 Session 的选择，不再使用无 Session 参数的模型 getter 或 setter。
 
 主回合先完成 turn 持久化，再运行扩展和模型；所有模型步骤都通过同一个上下文构建器读取已落盘的 turn。工具执行记录仍须在相应工具产生副作用前落盘，写入类工具继续等待完整 assistant 消息持久化。
 

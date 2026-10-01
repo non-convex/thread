@@ -19,7 +19,7 @@ prompt:        "Time for the build check."
 
 To continue **this conversation** instead, ask the main agent to schedule with `target: "current"`. That binds the task to the Session making the tool call, including its existing context. An embedded host uses `sessionId` in `createSchedule()` for the same binding; omit it to create the dedicated Session. The binding never changes. Both wakeup texts are normal `user` messages, retain Session context, and use ordinary compaction. The first text is determined by whether a scheduled turn has been admitted, **not** by whether the Session is otherwise empty. Even if that first turn is interrupted, its user message stays in history and the next wakeup uses `prompt`.
 
-A dedicated Session inherits the application's configured model instructions and tools and shares the project workspace; it does **not** inherit the creator's chat history or provide a sandbox. A background wakeup does not switch the coding app's selected Session.
+A dedicated Session starts with the application's default model and thinking level, uses its configured instructions and tools, and shares the project workspace. It does **not** inherit the creator's model choice or chat history, or provide a sandbox. Each wakeup uses the settings saved for its bound Session. Open that Session and use `/model` or `Shift+Tab` to change later turns without affecting a running wakeup or other Sessions. A background wakeup does not switch the coding app's selected Session.
 
 To update future wakeups, the agent can call `update_schedule({ id, prompt?, schedule? })`. Supply at least one of `prompt` or `schedule`; both can change in the same update. The `id` accepts an existing task ID or a unique prefix. A supplied `prompt` must be nonempty and at most 32,000 characters; keep it brief and rely on the bound Session's context instead of repeating the setup.
 
@@ -40,7 +40,7 @@ Paused or completed tasks remain disabled. To use a completed one-shot again, gi
 
 Updates are allowed during execution. Already-running turns are not interrupted, and messages already prepared retain their text. If a time-rule update replaces a follow-up that was prepared but not yet admitted, admission rejects the obsolete occurrence; the scheduler uses the new time instead.
 
-You can open the bound Session while the task is running, through `/schedule` or the regular `/session` picker. The TUI shows its history and current text, thinking, tools, and workers. It keeps receiving the running turn's events while you view another Session, so switching back retains the live content already received. Viewing a Session does not interrupt or redirect the running agent; starting another agent turn still waits for the project to become idle.
+You can open the bound Session while the task is running, through `/schedule` or the regular `/session` picker. The TUI shows its history and current text, thinking, tools, and workers. It keeps receiving the running turn's events while you view another Session, so switching back retains the live content already received. Viewing a Session does not interrupt or redirect the running agent; another turn in that same Session waits for it to become idle, while other Sessions can run independently.
 
 ## Times and lifecycle
 

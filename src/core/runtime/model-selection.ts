@@ -1,6 +1,18 @@
 import type { CacheRetention, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelClient } from "../agent/model-client.js";
-import type { ThreadState } from "./state.js";
+import type { SessionModelPreferences } from "./state.js";
+
+/** Independent settings snapshot. Executable model clients remain host-owned references. */
+export interface SessionModelSettings {
+  readonly model?: ModelClient;
+  readonly thinkingLevel: ModelThinkingLevel;
+  readonly supportsThinking: boolean;
+  readonly availableThinkingLevels: readonly ModelThinkingLevel[];
+  readonly active?: {
+    readonly model: ModelClient;
+    readonly thinkingLevel: ModelThinkingLevel;
+  };
+}
 
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -14,17 +26,17 @@ export function bindModel(model: ModelClient, cacheKey: string, cacheRetention: 
   return bound;
 }
 
-/** Owns only the primary agent's mutable model and thinking selection. */
+/** Owns one Session's primary-agent model and thinking preferences. */
 export class ModelSelection {
   private currentModel: ModelClient | undefined;
   private preferredThinkingLevel: ModelThinkingLevel;
   private currentThinkingLevel: ModelThinkingLevel = "off";
 
   constructor(
-    private readonly treeId: string,
+    private readonly cacheKey: string,
     private readonly cacheRetention: CacheRetention | undefined,
     preferredThinkingLevel: ModelThinkingLevel,
-    private readonly onStateChange?: (state: Pick<ThreadState, "model" | "thinkingLevel">) => void,
+    private readonly onStateChange?: (state: SessionModelPreferences) => void,
   ) {
     this.preferredThinkingLevel = preferredThinkingLevel;
   }
@@ -36,7 +48,7 @@ export class ModelSelection {
   get reasoning(): ThinkingLevel | undefined { return this.currentThinkingLevel === "off" ? undefined : this.currentThinkingLevel; }
 
   select(model: ModelClient | undefined): void {
-    this.currentModel = model ? bindModel(model, this.treeId, this.cacheRetention) : undefined;
+    this.currentModel = model ? bindModel(model, this.cacheKey, this.cacheRetention) : undefined;
     this.currentThinkingLevel = this.clamp(this.currentModel, this.preferredThinkingLevel);
   }
 

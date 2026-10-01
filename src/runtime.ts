@@ -1,6 +1,8 @@
 /** Supported headless entrypoint. Terminal rendering lives in thread/tui. */
 export { ThreadRuntime } from "./core/runtime/thread-runtime.js";
 export type { ThreadRuntimeOptions, PromptOptions, GoalOptions, RewindOptions } from "./core/runtime/options.js";
+export type { SessionModelSettings } from "./core/runtime/model-selection.js";
+export type { ThreadState, SessionModelPreferences } from "./core/runtime/state.js";
 export type { BuiltinToolName } from "./core/tools/builtins.js";
 export type { RuntimeEvent, RuntimeEventSink, RuntimeScope, RuntimeSubscriptionOptions, ModelEvent } from "./core/runtime/events.js";
 export type { ExecutionIdentity, HostToolCall, HostToolDecision, HostToolPolicy } from "./core/runtime/policy.js";

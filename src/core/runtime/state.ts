@@ -8,10 +8,14 @@ export interface WorkerState {
 
 export type DreamerState = WorkerState;
 
-/** Model and agent choices reported through the runtime state callback. */
-export interface ThreadState {
+export interface SessionModelPreferences {
   model?: ModelSelectionConfig;
   thinkingLevel?: ModelThinkingLevel;
+}
+
+/** Session model choices and project-wide agent choices reported through the runtime state callback. */
+export interface ThreadState {
+  sessions?: Record<string, SessionModelPreferences>;
   agents?: {
     worker?: WorkerState;
     dreamer?: DreamerState;

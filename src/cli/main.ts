@@ -98,11 +98,11 @@ Usage: thread [--root <project-directory>] [--config <file>]
 TTY default: full-screen OpenTUI. Non-TTY input/output automatically uses plain mode.
 --cache-diagnostics appends content-free provider-prefix diagnostics as JSONL (opt-in).
 Default config: ~/.thread/config.json
-Remembered main model, thinking, and agent choices: ~/.thread/projects/<project-id>/state.json (delete to reset this project)
+Session model/thinking choices and project-wide worker/Dreamer choices: ~/.thread/projects/<project-id>/state.json
 Subscription credentials: ~/.thread/auth.json
 Environment: THREAD_HOME, THREAD_CONFIG, THREAD_PROVIDER, THREAD_MODEL
 Inside the prompt use /new to create an empty root Session, /session to resume one,
-/model to select the main model, /agent to configure background agents, /clear, /compact,
+/model to select this Session's next-turn model, /agent to configure background agents, /clear, /compact,
 /goal <objective> to work across turns (status, pause, resume, clear),
 /schedule to view or manage timed tasks (list, open, pause, resume, delete),
 /mcp to inspect configured MCP servers, /mcp reconnect <server> to reconnect while idle,
@@ -110,7 +110,9 @@ Inside the prompt use /new to create an empty root Session, /session to resume o
 Ask the agent to create scheduled tasks; they run only while Thread is open.
 Use /schedule or /session to view a task's Session, including while it is running.
 Rewind restores recorded edit/write changes and the conversation; bash changes are not tracked.
-In the interactive TUI, Shift+Tab cycles supported thinking levels.`;
+Model/thinking changes affect only the selected Session's next turn; other Sessions keep their choices.
+Model lists, agent status, /thread status/history, /skill and /clear are available while running.
+In the interactive TUI, Shift+Tab cycles this Session's supported thinking levels.`;
 }
 
 async function main(): Promise<void> {
@@ -131,9 +133,12 @@ async function main(): Promise<void> {
           const agent = agents[id];
           if (agent?.model?.provider === command.providerId) agents[id] = { ...agent, enabled: false };
         }
+        const sessions = Object.fromEntries(Object.entries(remembered.sessions ?? {}).map(([id, settings]) => {
+          const { model, ...preferences } = settings;
+          return [id, { ...preferences, ...(model && model.provider !== command.providerId ? { model } : {}) }];
+        }));
         await saveThreadState({
-          ...(remembered.model?.provider === command.providerId ? {} : remembered.model ? { model: remembered.model } : {}),
-          ...(remembered.thinkingLevel ? { thinkingLevel: remembered.thinkingLevel } : {}),
+          ...(Object.keys(sessions).length ? { sessions } : {}),
           ...(Object.keys(agents).length > 0 ? { agents } : {}),
         }, statePath);
       }
@@ -161,12 +166,11 @@ async function main(): Promise<void> {
   // Resolve the same project identity used by the runtime before loading its preferences.
   const project = await ProjectService.resolve(options.rootPath);
   const statePath = getThreadStatePath(project);
-  // An explicit --provider/--model pair outranks this project's remembered choice,
-  // which in turn outranks the configured default. parseArgs guarantees a complete pair.
+  // Saved choices are resolved per Session by the runtime. CLI/config provide
+  // defaults; an explicit CLI pair also selects the initially opened Session.
   const state = await loadThreadState(statePath);
   const selection = resolveMainModelSelection({
     ...(options.provider && options.model ? { cli: { provider: options.provider, id: options.model } } : {}),
-    state,
     ...(loadedConfig ? { config: loadedConfig.config } : {}),
   });
   const agentProfileDiagnostics: AgentProfileDiagnostic[] = (loadedConfig?.agentDiagnostics ?? []).map((message) => ({
@@ -216,24 +220,7 @@ async function main(): Promise<void> {
       message: "Dreamer was enabled without a model; use /agent dreamer model to choose one.",
     });
   }
-  let model: ReturnType<typeof modelCatalog.createClient> | undefined;
-  if (selection.model) {
-    try {
-      model = modelCatalog.createClient(selection.model.provider, selection.model.id);
-    } catch (error) {
-      // A remembered model can disappear when the config changes. Fall back to
-      // the configured default instead of refusing to start.
-      const configured = loadedConfig?.config.model;
-      const canFallBack = configured
-        && (configured.provider !== selection.model.provider || configured.id !== selection.model.id);
-      if (!canFallBack) throw error;
-      output.write(
-        `Remembered model ${selection.model.provider}/${selection.model.id} is unavailable; ` +
-        `falling back to ${configured!.provider}/${configured!.id}\n`,
-      );
-      model = modelCatalog.createClient(configured!.provider, configured!.id);
-    }
-  }
+  const model = selection.model ? modelCatalog.createClient(selection.model.provider, selection.model.id) : undefined;
   let stateSave: Promise<void> = Promise.resolve();
   const app = await ThreadApp.open({
     rootPath: project.rootPath,
@@ -282,6 +269,7 @@ async function main(): Promise<void> {
   });
   let closeCacheDiagnostics: (() => Promise<void>) | undefined;
   try {
+    if (options.provider && options.model && model) app.runtime.setModel(app.selectedSessionId, model);
     for (const server of app.runtime.mcpServers) {
       if (server.status === "failed") errorOutput.write(`MCP ${server.name}: ${server.error ?? "connection failed"}. Use /mcp for details.\n`);
     }

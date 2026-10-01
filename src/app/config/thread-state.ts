@@ -46,9 +46,18 @@ export async function loadThreadState(statePath: string): Promise<ThreadState | 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const input = parsed as Record<string, unknown>;
   const state: ThreadState = {};
-  const mainModel = modelSelection(input.model);
-  if (mainModel) state.model = mainModel;
-  if (isThinkingLevel(input.thinkingLevel)) state.thinkingLevel = input.thinkingLevel;
+  if (typeof input.sessions === "object" && input.sessions !== null && !Array.isArray(input.sessions)) {
+    const sessions = Object.fromEntries(Object.entries(input.sessions).flatMap(([sessionId, candidate]) => {
+      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return [];
+      const values = candidate as Record<string, unknown>;
+      const model = modelSelection(values.model);
+      const thinkingLevel = isThinkingLevel(values.thinkingLevel) ? values.thinkingLevel : undefined;
+      return model || thinkingLevel ? [[sessionId, {
+        ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}),
+      }]] : [];
+    }));
+    if (Object.keys(sessions).length) state.sessions = sessions;
+  }
 
   if (typeof input.agents === "object" && input.agents !== null && !Array.isArray(input.agents)) {
     const parsedAgents: NonNullable<ThreadState["agents"]> = {};
@@ -66,7 +75,7 @@ export async function loadThreadState(statePath: string): Promise<ThreadState | 
     }
     if (Object.keys(parsedAgents).length > 0) state.agents = parsedAgents;
   }
-  return state.model || state.thinkingLevel || state.agents ? state : undefined;
+  return state.sessions || state.agents ? state : undefined;
 }
 
 const writeQueues = new Map<string, Promise<void>>();
@@ -91,13 +100,13 @@ export interface ResolvedMainModelSelection {
   thinkingLevel?: ModelThinkingLevel;
 }
 
+/** Startup defaults for Sessions without a saved choice; explicit CLI selection also applies to the opened Session. */
 export function resolveMainModelSelection(sources: {
   cli?: ModelSelectionConfig | undefined;
-  state?: ThreadState | undefined;
   config?: ThreadConfig | undefined;
 }): ResolvedMainModelSelection {
-  const model = sources.cli ?? sources.state?.model ?? sources.config?.model;
-  const thinkingLevel = sources.state?.thinkingLevel ?? sources.config?.defaultThinkingLevel;
+  const model = sources.cli ?? sources.config?.model;
+  const thinkingLevel = sources.config?.defaultThinkingLevel;
   return {
     ...(model ? { model } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),

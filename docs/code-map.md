@@ -6,7 +6,7 @@ Thread has three layers. The runtime owns execution and durable project history.
 
 `src/app/thread-app.ts` opens the runtime, loads extensions and tracks the session selected by the coding app. `input-router.ts` parses a slash command once, and `ThreadApp` dispatches it. Model selection and agent settings share the handlers in `commands/agents.ts`; Session Tree commands remain in `commands/builtins.ts`.
 
-All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. Startup resource acquisition lives in `resources.ts`. The runtime admits one operation per Session, permits different Sessions to execute concurrently, captures the selected model and preferences for each turn, publishes events, and settles all owned work before closing. File restoration and project-wide configuration remain exclusive; built-in writes share the existing path coordination boundary.
+All execution enters `ThreadRuntime` in `src/core/runtime/thread-runtime.ts`. Startup resource acquisition lives in `resources.ts`. The runtime admits one operation per Session, permits different Sessions to execute concurrently, and captures each Session's model and thinking preferences before asynchronous turn preparation. `getModelSettings(sessionId)` separates next-turn preferences from the active turn's fixed settings; setters affect only that Session's future turns. Preferences are persisted through `ThreadState.sessions`, while Worker and Dreamer configuration remains project-wide. The runtime publishes events and settles all owned work before closing. File restoration and secondary-agent configuration remain exclusive; built-in writes share the existing path coordination boundary.
 
 The execution path is:
 
