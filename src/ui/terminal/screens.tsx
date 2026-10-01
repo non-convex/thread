@@ -29,10 +29,14 @@ function ScreenHeader(props: { left: string; right: string; resources: ThreadVie
 
 function ScreenFooter(props: { hint: string; state: Accessor<UiState>; resources: ThreadViewResources }) {
   const theme = props.resources.theme;
+  const notice = () => props.state().notice;
+  const color = () => notice()?.level === "error" ? theme.error : notice()?.level === "success" ? theme.success : theme.faint;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <RuleFill width={2} color={theme.borderStrong} />
-      <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={theme.faint}> {props.hint} </text>
+      <text height={1} flexShrink={1} minWidth={0} wrapMode="none" truncate={true} fg={color()}>
+        {" "}{notice()?.text ? `${notice()!.text} · esc back` : props.hint}{" "}
+      </text>
       <RuleFill color={theme.borderStrong} />
       <text height={1} flexShrink={0} wrapMode="none" fg={theme.softText}>
         {" "}session {short(props.state().sessionId)} · tip {props.state().liveTipTurnId ? short(props.state().liveTipTurnId!) : "root"}{" "}

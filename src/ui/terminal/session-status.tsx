@@ -59,12 +59,13 @@ export function Footer(props: {
   const cacheText = () => ` ⚡ ${cacheHitLabel(meta().cacheHitPercent)}`;
   const missText = () => cacheMissHint(meta().cacheMissReason, meta().cacheMissedTokens);
   const labels = createMemo(() => {
-    const thinking = meta().supportsThinking ? stringWidth(` · ${meta().thinkingLevel}`) + (narrow() ? 0 : 3) : 0;
+    const thinking = meta().supportsThinking ? stringWidth(` · ${meta().thinkingLevel}`) + (narrow() || meta().nextModelSettings ? 0 : 3) : 0;
+    const next = meta().nextModelSettings ? stringWidth(` → next ${meta().nextModelSettings}`) : 0;
     // Padding, the ⊙ mark and the two-cell minimum spacer before the model.
     const fixed = 5
       + (compact() ? 0 : stringWidth(FOOTER_SEPARATOR) + 8 + stringWidth(` ${meta().contextPercent}%`))
       + (narrow() ? 0 : stringWidth(cacheText() + missText()))
-      + stringWidth(meta().modelName) + thinking;
+      + stringWidth(meta().modelName) + thinking + next;
     return footerLabelWidths({ width: props.width(), sessionId: state().sessionId, branch: meta().gitBranch, fixed });
   });
 
@@ -97,9 +98,14 @@ export function Footer(props: {
       <text height={1} wrapMode="none" flexShrink={0} fg={theme().nameAccent}>{meta().modelName}</text>
       <Show when={meta().supportsThinking}>
         <text height={1} wrapMode="none" flexShrink={0} fg={theme().muted}> · {meta().thinkingLevel}</text>
-        <Show when={!narrow()}>
+        <Show when={!narrow() && !meta().nextModelSettings}>
           <text height={1} wrapMode="none" flexShrink={0} fg={theme().faint}> ⇧⇥</text>
         </Show>
+      </Show>
+      <Show when={meta().nextModelSettings}>
+        <text height={1} wrapMode="none" flexShrink={1} minWidth={0} truncate={true} fg={theme().warning}>
+          {" → next "}{meta().nextModelSettings}
+        </text>
       </Show>
     </box>
   );
@@ -130,13 +136,11 @@ export function Status(props: { state: Accessor<UiState>; resources: ThreadViewR
   const changes = createMemo(() => turnChangeCounts(state()));
   const hasChanges = () => changes().additions > 0 || changes().deletions > 0;
   const noticeLevel = () => state().notice?.level;
-  const color = () => state().busy
-    ? theme().runningAccent
-    : noticeLevel() === "error"
-      ? theme().error
-      : noticeLevel() === "success"
-        ? theme().success
-        : theme().muted;
+  const color = () => noticeLevel() === "error"
+    ? theme().error
+    : noticeLevel() === "success"
+      ? theme().success
+      : state().busy ? theme().runningAccent : theme().muted;
   return (
     <box flexDirection="row" width="100%" height={1} paddingX={1}>
       <box flexDirection="row" flexBasis={0} flexGrow={1} minWidth={0} height={1} overflow="hidden">

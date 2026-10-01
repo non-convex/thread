@@ -208,7 +208,7 @@ Dreamer starts after ten ended turns and ten continuous minutes of Main being id
 | `/session [<session-id>]` | List Sessions or resume one. |
 | `/rewind [<turn-id-or-user-entry-id>]` | Undo recorded built-in file edits and rewind the conversation. |
 | `/compact` | Compact the active live context. |
-| `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or select the main model. |
+| `/model [all\|list [provider]\|<provider>/<model>]` | Inspect or select this Session's next-turn main model. |
 | `/agent` | Choose an agent, then configure it. |
 | `/agent <id> [on\|off]` | Open settings or toggle a secondary agent. |
 | `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | Inspect or select an agent model. |
@@ -221,21 +221,19 @@ Dreamer starts after ten ended turns and ten continuous minutes of Main being id
 | `/clear` | Clear the visible transcript. |
 | `/exit` | Exit Thread. |
 
-In the full-screen TUI, `Shift+Tab` cycles supported thinking levels, `Ctrl+V` (or `Alt+V` when the terminal intercepts Ctrl+V) attaches a clipboard image for vision models, and `Esc` interrupts the active turn.
+Each Session keeps its own main model and thinking level. `/model` and `Shift+Tab` can change them while a turn is running; that turn keeps its original settings, and the next turn uses the new choice. Other Sessions are unchanged. Model lists, agent status, `/thread status/history`, the skill list and `/clear` are also available during execution. Worker and Dreamer configuration changes still require all Sessions to be idle.
+
+In the full-screen TUI, `Shift+Tab` cycles this Session's supported thinking levels, `Ctrl+V` (or `Alt+V` when the terminal intercepts Ctrl+V) attaches a clipboard image for vision models, and `Esc` interrupts the active turn.
 
 ## Configuration and storage
 
-Thread reads `~/.thread/config.json` by default. If that file is absent, startup continues without file-based configuration; Pi settings are not read. An explicitly selected config file must exist. Main-model selection priority is:
+Thread reads `~/.thread/config.json` by default. If that file is absent, startup continues without file-based configuration; Pi settings are not read. An explicitly selected config file must exist.
 
-```text
---provider/--model or THREAD_PROVIDER/THREAD_MODEL
-→ this project's remembered choice in ~/.thread/projects/<project-id>/state.json
-→ model in ~/.thread/config.json
-```
+Main-model and thinking choices are stored by Session ID under `sessions` in `~/.thread/projects/<project-id>/state.json`. A saved Session choice takes precedence over the startup default. New Sessions, including independent scheduled-task Sessions, start from the default rather than inheriting the Session currently on screen. Worker and Dreamer choices remain project-wide under `agents`.
 
-`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Each project remembers its main model, thinking level, and secondary-agent model/enabled choices in `~/.thread/projects/<project-id>/state.json`. The project is identified by its root directory (`--root`, or the startup directory), so changing a choice in one project does not affect another. Thinking levels use the project's remembered preference, then the configured default.
+`--provider/--model` or `THREAD_PROVIDER/THREAD_MODEL` set the startup default and override the initially opened Session's model. They do not replace saved choices in other Sessions. Without these options, the startup model and thinking defaults come from `~/.thread/config.json`.
 
-Provider configuration and credentials remain shared. The former `~/.thread/state.json` is no longer read or migrated; until a project saves its own choices, it uses the configured defaults or explicit command-line selections.
+`THREAD_HOME` changes the state directory and `THREAD_CONFIG` selects another config file. Provider configuration and credentials remain shared. The old project-level `model` and `thinkingLevel` fields, and the former `~/.thread/state.json`, are not read or migrated.
 
 Git commits created or amended by Thread include `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>` by default. This keeps the user's configured Git author intact while linking Thread's GitHub account as a co-author. To disable or replace the trailer, set `attribution.commit` in `~/.thread/config.json`; an empty string disables it.
 

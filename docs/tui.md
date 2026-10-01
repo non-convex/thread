@@ -74,9 +74,13 @@
 
 图片附件不进入 textarea。Ctrl+V / Alt+V 从 host clipboard 读图，输入框上方用一行宽高和格式确认；处理期间显示 `reading clipboard…`，避免回车抢先提交；空输入框按 Backspace 删除最后一张。Windows Terminal 会拦截 Ctrl+V，此时 Alt+V 是可靠的贴图键。回车后附件与文字组成同一条多模态用户消息。完整链路见 [`tui-image-paste.md`](./tui-image-paste.md)。
 
-提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记当前 Session 忙碌并清空本次文字（普通 turn 也清空已发送图片），输入框保持聚焦，仍可编辑下一条草稿。同一 Session 忙碌或输入无效时拒绝工作输入并保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 解析的类别统一决定：`/new`、`/goal`（含 status）、`/goal pause`、`/goal clear`、`/schedule`、`/mcp` 状态查看及会话导航（`/session`、`/thread sessions`、`/thread open`）是运行中可达的控制输入。
+提交是否接收由 controller 同步返回：接受普通 turn 或异步命令时立即标记当前 Session 忙碌并清空本次文字（普通 turn 也清空已发送图片），输入框保持聚焦，仍可编辑下一条草稿。同一 Session 忙碌或输入无效时拒绝工作输入并保留文字和附件。斜杠命令不发送图片，原有附件继续留在输入框。准入由 `parseInput` 按实际子命令判断。运行中可以切换或新建 Session、修改本 Session 的主模型、浏览各 Agent 的状态和模型列表、查看 `/thread status/history`、列出 `/skill`、预览 `/rewind` 和执行 `/clear`。`/schedule`、`/mcp` 状态查看、`/goal` 状态与暂停、清除操作也继续可用；暂停和清除目标会停止该目标的执行。真正的历史搜索和技能调用仍要求目标 Session 空闲。
 
-`/new` 创建并选中空会话，原会话继续执行；`/session` 只切换查看目标。不同 Session 可同时执行，切回时恢复该会话已收到的流式内容、工具状态和计时。后台会话的完成不会清除当前会话的 busy 或计时，问答请求也按 Session 保存，不抢占其他会话。Esc 和无选区时的 Ctrl+C 只中断当前 Session；切到空闲会话后不会中断后台执行。同一 Session 的启动 agent、压缩等工作输入不插队；恢复文件的 rewind、切换模型／Agent 配置和 `/mcp reconnect <server>` 需要整个 runtime 空闲。MCP 配置见 [MCP 接入](./mcp.md)。
+`/new` 创建并选中空会话，原会话继续执行；`/session` 只切换查看目标。不同 Session 可同时执行，切回时恢复该会话已收到的流式内容、工具状态和计时。后台会话的完成不会清除当前会话的 busy 或计时，问答请求也按 Session 保存，不抢占其他会话。Esc 和无选区时的 Ctrl+C 只中断当前 Session；切到空闲会话后不会中断后台执行。同一 Session 的启动 agent、压缩等工作输入不插队；恢复文件的 rewind、修改 Worker / Dreamer 配置和 `/mcp reconnect <server>` 需要整个 runtime 空闲。MCP 配置见 [MCP 接入](./mcp.md)。
+
+主模型和推理档位按 Session 保存。运行中用 `/model` 或 `Shift+Tab` 修改时，本轮继续使用原来的模型和档位，下一轮才采用新选择。页脚保留本轮信息，并在设置不同时显示下一轮选择；切换 Session 后显示目标 Session 自己的设置。新 Session 使用启动默认值，不继承刚才查看的 Session。
+
+运行中执行本地命令时，结果或错误不会被活动提示遮住，也不会停止计时。已经关闭的面板、已经离开的 Session，不会被晚到的命令结果重新打开；等待用户回答的 ask 面板优先显示。`/clear` 只清当前历史显示，不删除持久历史，也不移除正在输出的轮次；本轮完成或切换 Session 后，历史会重新显示。
 
 文字可用鼠标拖选，再按 `Ctrl+C` 或 `Alt+C` 复制；输入框通过键盘选中的文字也支持复制。选区存在时，`Ctrl+C` 优先复制，不中断任务、清空输入或退出；`Esc` 先取消选区。没有选区时，`Ctrl+C` 保留原有的中断／清空／退出行为，`Alt+C` 不执行操作。终端若拦截复制快捷键，可用 `Alt+C`。欢迎页和文档页提供复制提示。
 
@@ -173,9 +177,9 @@ Diff 的整行颜色由同一个文本控件内的 styled chunks 表达，折行
 
 `/skill` 显示技能名称和描述。选择技能只把 `/skill <name> ` 填入输入框，用户可以追加指令，再按回车调用；浏览列表不会启动模型任务。
 
-`/agent` 先列出 main、worker 和 dreamer。Main 直接进入模型列表；次级 Agent 提供 Off、On 和 Choose model。On 沿用已有模型，没有模型时才进入选择；Choose model 始终打开模型列表，选定后启用该 Agent。
+`/agent` 先列出 main、worker 和 dreamer。Main 直接进入当前 Session 的模型列表；次级 Agent 提供项目级 Off、On 和 Choose model。On 沿用已有模型，没有模型时才进入选择；Choose model 始终打开模型列表，选定后启用该 Agent。
 
-模型面板支持直接输入 provider 或模型名称过滤，Backspace 删除过滤文字。列表末尾可切换 configured／all 范围；`/model list [provider]` 和各 Agent 的 model list 也复用这个面板。Esc 逐级返回，并保留上级的选中项。选择操作失败时留在原面板显示错误，允许重新选择或重试；成功切换模型、会话或完成 rewind 后关闭面板。
+模型面板支持直接输入 provider 或模型名称过滤，Backspace 删除过滤文字。列表末尾可切换 configured／all 范围；`/model list [provider]` 和各 Agent 的 model list 也复用这个面板。Esc 逐级返回，并保留上级的选中项。选择操作失败或因运行限制被拒绝时，留在原面板显示错误，允许重新选择或重试；成功切换模型、会话或完成 rewind 后关闭面板。
 
 完整命令仍可直接输入。plain 模式读取命令结果的文本内容，不依赖选择面板。
 

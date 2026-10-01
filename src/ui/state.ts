@@ -196,7 +196,9 @@ export function statusLineParts(
   const ms = turnElapsedMs(state, now);
   const elapsed = ms === undefined ? undefined : formatDurationMs(ms);
   if (state.busy) {
-    return { main: state.activity ?? "working", ...(elapsed ? { elapsed } : {}) };
+    const activity = state.activity ?? "working";
+    const main = state.notice?.text ? `${state.notice.text} · ${activity}` : activity;
+    return { main, ...(elapsed ? { elapsed } : {}) };
   }
   if (state.notice?.text) {
     return { main: state.notice.text, ...(elapsed ? { elapsed } : {}) };

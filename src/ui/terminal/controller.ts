@@ -43,6 +43,21 @@ export function primarySlashSuggestions(hasSkills: boolean, fileCheckpoints = fa
 
 type Listener = (kind: UiNotifyKind) => void;
 
+interface InputViewOwner {
+  sessionId: string;
+  screen: UiScreen;
+  generation: number;
+  /** Defined for menu actions; false retains the parent when opening a child. */
+  menuReplace?: boolean;
+}
+
+const RUNNING_INPUT_NOTICE = "This Session is running. Wait for the active turn or command to finish, or use /new or /session.";
+
+function switchesSession(route: RoutedInput): boolean {
+  return route.command === "new" || route.command === "session" ||
+    ((route.command === "thread" || route.command === "schedule") && /^open(?:\s|$)/.test(route.rest));
+}
+
 function notifyKind(event: UiEvent): UiNotifyKind {
   switch (event.type) {
     case "command_started":
@@ -71,6 +86,7 @@ export class ThreadTuiController {
   private lastCtrlC = 0;
   private idleExitTimer: NodeJS.Timeout | undefined;
   private gitGeneration = 0;
+  private viewGeneration = 0;
   private readonly questions = new Map<string, { service: AskService; screen?: AskScreen }>();
   private readonly detachAsk: () => void;
   private readonly detachRuntime: () => void;
@@ -85,17 +101,20 @@ export class ThreadTuiController {
     this.state.goal = app.runtime.readGoal(session.session.id);
     for (const sessionId of app.runtime.activeSessionIds) this.recoverLiveView(sessionId);
     this.state.busy = this.runtimeBusy;
+    const settings = app.runtime.getModelSettings(session.session.id);
+    const displayed = settings.active ?? settings;
     this.meta = {
       rootPath: app.runtime.rootPath,
-      modelName: app.runtime.model?.modelId ?? "no model",
-      thinkingLevel: app.runtime.thinkingLevel,
-      supportsThinking: app.runtime.supportsThinking,
+      modelName: displayed.model?.modelId ?? "no model",
+      thinkingLevel: displayed.thinkingLevel,
+      supportsThinking: settings.active ? settings.active.model.reasoning === true : settings.supportsThinking,
+      nextModelSettings: undefined,
       contextPercent: 0,
       cacheHitPercent: null,
       cacheMissedTokens: 0,
       cacheMissReason: null,
       gitBranch: undefined,
-      acceptsImages: app.runtime.model?.acceptsImages === true,
+      acceptsImages: settings.model?.acceptsImages === true,
     };
     this.donePromise = new Promise<void>((resolve) => { this.resolveDone = resolve; });
     this.batcher = new UiEventBatcher((events) => this.applyUiEvents(events));
@@ -144,8 +163,13 @@ export class ThreadTuiController {
 
   private showQuestion(): void {
     const screen = this.questions.get(this.app.selectedSessionId)?.screen;
-    if (screen) this.state.screen = screen;
-    else if (this.state.screen.type === "ask") this.state.screen = { type: "session" };
+    if (screen && this.state.screen !== screen) {
+      this.state.screen = screen;
+      this.viewGeneration++;
+    } else if (!screen && this.state.screen.type === "ask") {
+      this.state.screen = { type: "session" };
+      this.viewGeneration++;
+    }
   }
 
   subscribe(listener: Listener): () => void {
@@ -223,23 +247,27 @@ export class ThreadTuiController {
     let level: ModelThinkingLevel | undefined;
     try {
       // Preferences apply to the next turn, even while this turn is running.
-      level = this.app.runtime.cycleThinkingLevel();
-    } catch {
+      level = this.app.runtime.cycleThinkingLevel(this.app.selectedSessionId);
+    } catch (error) {
+      this.note(error instanceof Error ? error.message : String(error), "error");
       return;
     }
     if (!level) return;
-    this.meta.thinkingLevel = level;
-    this.state.notice = { level: "info", text: `Thinking: ${level}` };
+    this.refreshMeta();
+    const active = this.app.runtime.getModelSettings(this.app.selectedSessionId).active;
+    this.state.notice = { level: "info", text: `Thinking${active ? " (next turn)" : ""}: ${level}` };
     this.notify();
   }
 
   closeView(): void {
+    this.viewGeneration++;
     if (this.state.screen.type === "ask") {
       this.ask.dismiss(this.state.screen.request.id);
     } else {
       this.state.screen = this.viewHistory.pop() ?? { type: "session" };
       this.state.notice = undefined;
     }
+    this.showQuestion();
     this.notify();
   }
 
@@ -311,13 +339,13 @@ export class ThreadTuiController {
     return true;
   }
 
-  private executeInput(raw: string, images: readonly ComposerImage[] = []): Promise<boolean> | undefined {
+  private executeInput(raw: string, images: readonly ComposerImage[] = [], menuAction?: { replace: boolean }): Promise<boolean> | undefined {
     const input = /^\s*\/goal(?:\s|$)/.test(raw) ? raw.trimStart() : raw.trim();
     if ((!input && images.length === 0) || this.stopped || this.disposed) return undefined;
     const route = parseInput(input);
     const foreground = route.category === "work" && !this.active && !this.state.busy;
     if (!this.app.canHandleInput(route, Boolean(this.active || this.state.busy)) || (!foreground && images.length > 0)) {
-      this.note("This Session is running. Use /new or /session to work in another Session.");
+      this.note(RUNNING_INPUT_NOTICE, "error");
       return undefined;
     }
     if (input === "/exit") {
@@ -325,12 +353,14 @@ export class ThreadTuiController {
       return Promise.resolve(true);
     }
     const imageBlocks = images.map(composerImageContent);
-    if (imageBlocks.length > 0 && this.app.runtime.model?.acceptsImages !== true) {
+    if (imageBlocks.length > 0 && this.app.runtime.getModelSettings(this.app.selectedSessionId).model?.acceptsImages !== true) {
       this.note("Current model does not accept images. Use /model to pick a vision model.", "error");
       return undefined;
     }
     const controller = new AbortController();
     const sessionId = this.app.selectedSessionId;
+    const owner: InputViewOwner = { sessionId, screen: this.state.screen, generation: ++this.viewGeneration,
+      ...(menuAction ? { menuReplace: menuAction.replace } : {}) };
     this.inputControllers.add(controller);
     if (foreground) {
       this.activeInputs.set(sessionId, controller);
@@ -343,10 +373,11 @@ export class ThreadTuiController {
       this.state.turnFinishedAt = undefined;
       this.notify("live");
     }
-    return this.finishInput(route, imageBlocks, controller, foreground, sessionId);
+    return this.finishInput(route, imageBlocks, controller, foreground, owner);
   }
 
-  private async finishInput(route: RoutedInput, imageBlocks: ReturnType<typeof composerImageContent>[], controller: AbortController, foreground: boolean, sessionId: string): Promise<boolean> {
+  private async finishInput(route: RoutedInput, imageBlocks: ReturnType<typeof composerImageContent>[], controller: AbortController, foreground: boolean, owner: InputViewOwner): Promise<boolean> {
+    const { sessionId } = owner;
     try {
       const result = await this.app.handleInput(route, {
         signal: controller.signal,
@@ -360,11 +391,18 @@ export class ThreadTuiController {
       });
       if (this.stopped || this.disposed) return true;
       this.batcher.flush();
-      // A control may have switched selection while the original work was running.
+      // Check ownership before syncing a Session switch caused by this command itself.
+      const ownsView = owner.generation === this.viewGeneration && owner.screen === this.state.screen &&
+        sessionId === this.state.sessionId;
       const historyChanged = this.syncTranscript();
       this.showLiveView();
       if (historyChanged || (result.kind === "command" && result.result.changedState)) this.refreshMeta();
-      if (result.kind === "command" && (!foreground || sessionId === this.app.selectedSessionId)) this.presentCommand(result.result);
+      if (result.kind === "command") {
+        const navigated = switchesSession(route) && result.result.changedState;
+        const canPresentView = ownsView && (sessionId === this.app.selectedSessionId || navigated) &&
+          !this.questions.get(this.app.selectedSessionId)?.screen;
+        this.presentCommand(result.result, owner, canPresentView, navigated);
+      }
       return true;
     } catch (error) {
       if (this.stopped || this.disposed) return false;
@@ -375,6 +413,7 @@ export class ThreadTuiController {
       this.showLiveView();
       const message = error instanceof Error ? error.message : String(error);
       this.state.notice = { level: "error", text: sessionId === this.app.selectedSessionId ? message : `Session ${sessionId}: ${message}` };
+      if (owner.menuReplace !== undefined && isFloatingOverlay(owner.screen)) owner.screen.error = message;
       return false;
     } finally {
       this.inputControllers.delete(controller);
@@ -388,6 +427,7 @@ export class ThreadTuiController {
         }
         this.state.busy = this.runtimeBusy || Boolean(this.active);
         this.showLiveView();
+        this.refreshModelMeta();
         this.notify();
       }
     }
@@ -420,13 +460,17 @@ export class ThreadTuiController {
   private applyUiEvents(events: readonly UiEvent[]): void {
     if (this.stopped || this.disposed) return;
     let kind: UiNotifyKind = "live";
+    let modelChanged = false;
     for (const event of events) {
       try {
+        if ((event.type === "runtime_status" || event.type === "turn_preparing" || event.type === "turn_started" ||
+            event.type === "turn_finished") && event.sessionId === this.app.selectedSessionId) modelChanged = true;
         if (event.type === "runtime_status") {
           if (event.busy && event.sessionId && !this.liveViews.has(event.sessionId)) {
             const view = createUiState(event.sessionId, null, []);
             view.activity = "preparing";
             this.liveViews.set(event.sessionId, view);
+            if (event.sessionId === this.app.selectedSessionId) this.state.notice = undefined;
           }
           if (!event.busy && event.sessionId) {
             const view = this.liveViews.get(event.sessionId);
@@ -477,25 +521,50 @@ export class ThreadTuiController {
         // One malformed presentation event must not discard the rest of its frame.
       }
     }
-    if (this.syncTranscript()) {
-      this.refreshMeta();
-      kind = "full";
-    }
+    const historyChanged = this.syncTranscript();
+    if (historyChanged || modelChanged) this.refreshMeta();
+    if (historyChanged) kind = "full";
     this.state.busy = this.runtimeBusy || Boolean(this.active);
     this.showLiveView();
     if (events.length) this.notify(kind);
   }
 
-  private presentCommand(result: CommandResult): void {
+  private presentCommand(result: CommandResult, owner: InputViewOwner, canPresentView: boolean, navigated: boolean): void {
     if (result.presentation === "clear") {
-      this.state.transcript = [];
+      // /clear affects only the selected Session's visible transcript, not its live turn or history.
+      if (owner.sessionId === this.app.selectedSessionId) this.state.transcript = [];
+    } else if (result.view) {
+      if (canPresentView) {
+        if (owner.menuReplace === false && isFloatingOverlay(owner.screen) && result.view.type !== "composer") {
+          this.viewHistory.push(owner.screen);
+        }
+        this.openView(result.view);
+        if (owner.menuReplace && owner.screen.type === "model_picker" && this.state.screen.type === "model_picker") {
+          this.state.screen.filter = owner.screen.filter;
+          this.state.screen.selected = 0;
+        }
+      }
       return;
     }
-    if (result.view) this.openView(result.view);
-    else if (result.content) this.state.notice = { level: "success", text: result.content };
+    if (canPresentView && owner.menuReplace !== undefined) {
+      this.state.screen = { type: "session" };
+      this.viewHistory.length = 0;
+      this.viewGeneration++;
+    }
+    // Even an obsolete menu action must report its success without reopening the old view.
+    if (result.content && result.presentation !== "clear") {
+      const text = owner.sessionId === this.app.selectedSessionId || navigated
+        ? result.content : `Session ${owner.sessionId}: ${result.content}`;
+      this.state.notice = { level: "success", text };
+    }
   }
 
   private openView(view: EphemeralView): void {
+    if (this.questions.get(this.app.selectedSessionId)?.screen) {
+      this.showQuestion();
+      return;
+    }
+    this.viewGeneration++;
     if (view.type === "composer") {
       this.state.composerInput = view.text;
       this.state.screen = { type: "session" };
@@ -507,23 +576,24 @@ export class ThreadTuiController {
   /** Menu navigation keeps the parent and its selection; successful actions close it. */
   private async runScreenCommand(command: string, replace = false): Promise<void> {
     const screen = this.state.screen;
-    if (!isFloatingOverlay(screen) || screen.busy || this.stopped ||
-        !this.app.canHandleInput(parseInput(command), Boolean(this.active || this.state.busy))) return;
+    if (!isFloatingOverlay(screen) || screen.busy || this.stopped || this.disposed) return;
     screen.busy = true;
     screen.error = undefined;
     this.notify();
-    const execution = this.executeInput(command);
-    const succeeded = execution ? await execution : false;
+    const execution = this.executeInput(command, [], { replace });
+    if (!execution) {
+      screen.busy = false;
+      screen.error = this.state.notice?.text ?? "Command unavailable";
+      if (screen.type === "rewind") screen.confirm = false;
+      this.notify();
+      return;
+    }
+    const succeeded = await execution;
     if (this.stopped || this.disposed) return;
     screen.busy = false;
     if (!succeeded) {
-      screen.error = this.state.notice?.text ?? "Command failed";
+      screen.error ??= "Command failed";
       if (screen.type === "rewind") screen.confirm = false;
-    } else if (this.state.screen === screen || this.state.screen.type === "session") {
-      this.state.screen = { type: "session" };
-      this.viewHistory.length = 0;
-    } else if (!replace) {
-      this.viewHistory.push(screen);
     }
     this.notify();
   }
@@ -538,12 +608,6 @@ export class ThreadTuiController {
       await this.runScreenCommand(`${command} ${JSON.stringify(`${model.providerId}/${model.modelId}`)}`);
     } else if (screen.selected === models.length) {
       await this.runScreenCommand(`${command}${screen.scope === "configured" ? " all" : ""}`, true);
-      if (this.stopped || this.disposed) return;
-      if (this.state.screen.type === "model_picker" && this.state.screen !== screen) {
-        this.state.screen.filter = screen.filter;
-        this.state.screen.selected = 0;
-        this.notify();
-      }
     }
   }
 
@@ -573,7 +637,8 @@ export class ThreadTuiController {
       this.state.modelRetryError = view.modelRetryError;
       this.state.turnStartedAt = view.turnStartedAt;
       this.state.turnFinishedAt = view.turnFinishedAt;
-      if (view.notice) this.state.notice = view.notice;
+      // Runtime notices are handed off at turn_finished. Recopying them here
+      // would overwrite newer local command feedback on every streaming frame.
     } else {
       this.state.liveTurn = undefined;
       this.state.activity = this.runtimeBusy || this.active ? "preparing" : undefined;
@@ -595,6 +660,9 @@ export class ThreadTuiController {
     this.state.liveTipTurnId = liveTipTurnId;
     this.state.goal = this.app.runtime.readGoal(session.id);
     if (switched) {
+      this.viewGeneration++;
+      this.viewHistory.length = 0;
+      this.state.screen = { type: "session" };
       this.state.notice = undefined;
       this.state.turnStartedAt = undefined;
       this.state.turnFinishedAt = undefined;
@@ -618,14 +686,27 @@ export class ThreadTuiController {
   private refreshMeta(): void {
     const { messages, usage } = this.app.runtime.contextSnapshot(this.app.selectedSessionId);
     const scan = scanCacheUsage(messages);
-    this.meta.modelName = this.app.runtime.model?.modelId ?? "no model";
-    this.meta.thinkingLevel = this.app.runtime.thinkingLevel;
-    this.meta.supportsThinking = this.app.runtime.supportsThinking;
-    this.meta.acceptsImages = this.app.runtime.model?.acceptsImages === true;
+    this.refreshModelMeta();
     this.meta.contextPercent = usage ? Math.min(999, Math.round(usage.requestTokens / usage.contextWindow * 100)) : 0;
     this.meta.cacheHitPercent = cacheHitPercent(scan.hitTotals);
     this.meta.cacheMissedTokens = scan.missedTokens;
     this.meta.cacheMissReason = latestCacheMissReason(messages, scan);
+  }
+
+  private refreshModelMeta(): void {
+    const settings = this.app.runtime.getModelSettings(this.app.selectedSessionId);
+    const displayed = settings.active ?? settings;
+    this.meta.modelName = displayed.model?.modelId ?? "no model";
+    this.meta.thinkingLevel = displayed.thinkingLevel;
+    this.meta.supportsThinking = settings.active ? settings.active.model.reasoning === true : settings.supportsThinking;
+    this.meta.acceptsImages = settings.model?.acceptsImages === true;
+    const modelChanged = settings.active && (settings.model?.providerId !== settings.active.model.providerId ||
+      settings.model?.modelId !== settings.active.model.modelId);
+    const configuredName = settings.model
+      ? (modelChanged ? `${settings.model.providerId}/${settings.model.modelId}` : settings.model.modelId)
+      : "no model";
+    this.meta.nextModelSettings = settings.active && (modelChanged || settings.thinkingLevel !== settings.active.thinkingLevel)
+      ? `${configuredName} · ${settings.thinkingLevel}` : undefined;
   }
 
   private notify(kind: UiNotifyKind = "full"): void {

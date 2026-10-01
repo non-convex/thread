@@ -14,14 +14,22 @@ export interface PlainRunnerOptions {
   configDescription?: string;
 }
 
+function modelLine(app: ThreadApp): string {
+  const settings = app.runtime.getModelSettings(app.selectedSessionId);
+  const displayed = settings.active ?? settings;
+  const current = displayed.model
+    ? `model ${displayed.model.providerId}/${displayed.model.modelId}${displayed.model.reasoning ? ` · thinking ${displayed.thinkingLevel}` : ""}${settings.active ? " (active turn)" : ""}`
+    : "no model configured; use /model to select one";
+  const differs = settings.active && (settings.model?.providerId !== settings.active.model.providerId ||
+    settings.model?.modelId !== settings.active.model.modelId || settings.thinkingLevel !== settings.active.thinkingLevel);
+  const next = settings.model ? `${settings.model.providerId}/${settings.model.modelId}` : "no model";
+  return differs ? `${current}\nnext turn: ${next} · thinking ${settings.thinkingLevel}` : current;
+}
+
 export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): Promise<void> {
   const session = app.runtime.readSession(app.selectedSessionId);
   output.write(
-    `Session Tree ${app.runtime.treeId}\nSession ${session.session.id} @ ${session.liveTipTurnId ?? "Root"}\n${
-      app.runtime.model
-        ? `model ${app.runtime.model.providerId}/${app.runtime.model.modelId}`
-        : "no model configured; use /model to select one"
-    }${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
+    `Session Tree ${app.runtime.treeId}\nSession ${session.session.id} @ ${session.liveTipTurnId ?? "Root"}\n${modelLine(app)}${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
   output.write(`worker ${app.runtime.workerEnabled ? `on · ${app.runtime.workerModel?.provider}/${app.runtime.workerModel?.id}` : "off · use /agent to configure"}\n`);
   output.write(`dreamer ${app.runtime.dreamerEnabled ? `on · ${app.runtime.dreamerModel?.provider}/${app.runtime.dreamerModel?.id}` : "off · use /agent to configure"}\n`);
@@ -120,6 +128,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
         output.write(`\n[thread result]\n${result.result.content}\n`);
       }
       if (app.selectedSessionId !== previousSessionId) {
+        output.write(`${modelLine(app)}\n`);
         const goal = app.runtime.readGoal(app.selectedSessionId);
         if (goal) output.write(goalLine(goal));
         if (runningText.has(app.selectedSessionId)) {

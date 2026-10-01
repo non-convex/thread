@@ -7,6 +7,8 @@ export interface TerminalMeta {
   modelName: string;
   thinkingLevel: ModelThinkingLevel;
   supportsThinking: boolean;
+  /** Configured model/thinking for the next turn, only when different from the active turn. */
+  nextModelSettings: string | undefined;
   contextPercent: number;
   cacheHitPercent: number | null;
   cacheMissedTokens: number;

@@ -204,7 +204,7 @@ Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。�
 | `/session [<session-id>]` | 列出或恢复 Session。 |
 | `/rewind [<turn-id-or-user-entry-id>]` | 撤销已记录的内置文件编辑，并回退对话。 |
 | `/compact` | 压缩 active live context。 |
-| `/model [all\|list [provider]\|<provider>/<model>]` | 查看或选择主模型。 |
+| `/model [all\|list [provider]\|<provider>/<model>]` | 查看或选择当前 Session 下一轮使用的主模型。 |
 | `/agent` | 选择 Agent，再进入它的设置。 |
 | `/agent <id> [on\|off]` | 打开设置或启停次级 Agent。 |
 | `/agent <id> model [all\|list [provider]\|<provider>/<model>]` | 查看或选择 Agent 模型。 |
@@ -217,21 +217,19 @@ Dreamer 在累计十个已结束 turn、Main 连续空闲十分钟后启动。�
 | `/clear` | 清空当前可见 transcript。 |
 | `/exit` | 退出 Thread。 |
 
-全屏 TUI 中，`Shift+Tab` 循环切换模型支持的 thinking level，`Ctrl+V`（若被终端拦截则用 `Alt+V`）为视觉模型附上剪贴板图片，`Esc` 中断当前 turn。
+每个 Session 分别保存主模型和推理档位。运行中可以用 `/model` 或 `Shift+Tab` 修改，本轮继续使用原来的设置，下一轮才生效，不影响其他 Session。模型列表、Agent 状态、`/thread status/history`、技能列表和 `/clear` 也可以在运行期间使用。Worker 和 Dreamer 配置修改仍要求所有 Session 空闲。
+
+全屏 TUI 中，`Shift+Tab` 循环切换当前 Session 模型支持的推理档位，`Ctrl+V`（若被终端拦截则用 `Alt+V`）为视觉模型附上剪贴板图片，`Esc` 中断当前 turn。
 
 ## 配置与存储
 
-Thread 默认读取 `~/.thread/config.json`；该文件不存在时仍可启动，但不读取 Pi 配置。显式指定的配置文件必须存在。主模型选择优先级为：
+Thread 默认读取 `~/.thread/config.json`；该文件不存在时仍可启动，但不读取 Pi 配置。显式指定的配置文件必须存在。
 
-```text
---provider/--model 或 THREAD_PROVIDER/THREAD_MODEL
-→ ~/.thread/projects/<project-id>/state.json 中当前项目记住的选择
-→ ~/.thread/config.json 中的 model
-```
+主模型和推理档位按 Session ID 保存在 `~/.thread/projects/<project-id>/state.json` 的 `sessions` 中。已保存的 Session 选择优先于启动默认值。新建 Session 和独立定时任务使用默认值，不继承当前屏幕上那个 Session 的选择。Worker 和 Dreamer 的配置仍保存在项目级 `agents` 中。
 
-`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。每个项目的主模型、thinking level，以及次级 Agent 的模型和启停选择，分别保存在 `~/.thread/projects/<project-id>/state.json`。项目由根目录确定（`--root` 指定的目录，或启动目录），在一个项目中切换不会改变另一个项目的选择。推理档位优先使用当前项目记住的值，没有记录时使用配置默认值。
+`--provider/--model` 或 `THREAD_PROVIDER/THREAD_MODEL` 设置启动默认模型，并覆盖初始打开的 Session 的模型，不覆盖其他 Session 已保存的选择。没有显式指定时，默认模型和推理档位来自 `~/.thread/config.json`。
 
-提供方配置和登录凭据仍然跨项目共享。旧的 `~/.thread/state.json` 不再读取或迁移；项目尚未保存自己的选择时，使用配置默认值或显式命令行选择。
+`THREAD_HOME` 修改状态目录，`THREAD_CONFIG` 指定其他配置文件。提供方配置和登录凭据仍然跨项目共享。旧的项目级顶层 `model`、`thinkingLevel` 字段和旧的 `~/.thread/state.json` 不再读取或迁移。
 
 Thread 创建或 amend Git commit 时，默认添加 `Co-authored-by: Thread <324980244+thread-agent@users.noreply.github.com>`。用户原有的 Git author 保持不变，GitHub 会把 Thread 识别为共同作者。可通过 `~/.thread/config.json` 中的 `attribution.commit` 替换这段 trailer；设为空字符串即可关闭。
 
