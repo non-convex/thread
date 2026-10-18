@@ -7,6 +7,7 @@ import { PromptCacheDiagnostics } from "../agent/prompt-cache-diagnostics.js";
 import type { ModelCatalog } from "../agent/model-catalog.js";
 import { AgentProfileRegistry, MAIN_AGENT_PROFILE_ID, type AgentProfile, type AgentProfileDiagnostic } from "../agent/profile.js";
 import { AgentTaskOrchestrator } from "../agent-task/orchestrator.js";
+import type { AgentTask, AgentTaskSummary } from "../agent-task/model.js";
 import { createWorkerProfile, DEFAULT_WORKER_SETTINGS, WORKER_PROFILE_ID, type WorkerProfileSettings } from "../agent-task/profile.js";
 import { AGENT_TASK_ORCHESTRATION_PROMPT } from "../agent-task/prompt.js";
 import { createAgentTaskTools } from "../agent-task/tools.js";
@@ -27,7 +28,7 @@ import { formatGlobalMemoryPrompt, GlobalMemorySnapshots } from "../global-memor
 import type { Project } from "../project/model.js";
 import type { SessionRecallService } from "../session-recall/service.js";
 import type { SessionTreeRepository } from "../session-tree/repository.js";
-import type { SessionGoal, SessionGoalState } from "../session-tree/model.js";
+import type { SessionEntry, SessionGoal, SessionGoalState } from "../session-tree/model.js";
 import { createId } from "../utils/id.js";
 import { createGoalTool, goalPrompt, GOAL_TOOL_NAME, DEFAULT_GOAL_MAX_TURNS, type GoalDecision } from "./goal.js";
 import type { SessionTreeService } from "../session-tree/service.js";
@@ -73,6 +74,16 @@ interface ActiveOperation {
   controller: AbortController;
   signal: AbortSignal;
   done: Promise<unknown>;
+}
+
+function requestLabel(entry: SessionEntry | undefined): string {
+  const text = entry?.type === "message" && entry.message.role === "user"
+    ? (typeof entry.message.content === "string"
+      ? entry.message.content
+      : entry.message.content.filter((block) => block.type === "text")
+          .map((block) => block.type === "text" ? block.text : "").join(" "))
+    : "";
+  return text.replace(/\s+/g, " ").slice(0, 140) || "(no request text)";
 }
 
 /** A project-owned runtime. Sessions execute independently; project-wide mutations remain exclusive. */
@@ -262,10 +273,14 @@ export class ThreadRuntime {
 
   listSessions() {
     this.assertOpen();
+    const turnCounts = new Map<string, number>();
+    for (const turn of this.tree.projection.turns.values()) {
+      turnCounts.set(turn.sessionId, (turnCounts.get(turn.sessionId) ?? 0) + 1);
+    }
     return [...this.tree.projection.sessions.values()].map((session) => ({
       sessionId: session.id,
       liveTipTurnId: this.tree.projection.liveTips.get(session.id) ?? null,
-      turnCount: [...this.tree.projection.turns.values()].filter((turn) => turn.sessionId === session.id).length,
+      turnCount: turnCounts.get(session.id) ?? 0,
       createdAt: session.createdAt,
     })).sort((a, b) => b.createdAt - a.createdAt);
   }
@@ -275,11 +290,34 @@ export class ThreadRuntime {
     const session = this.tree.resolveSession(sessionId);
     const turns = this.tree.livePath(session.id);
     const running = this.tree.projection.runningTurnsBySession.get(session.id);
+    const turnIds = new Set(turns.map((turn) => turn.id));
+    if (running) turnIds.add(running.id);
+    const tasksByTurn = this.agentTaskDetailsByTurn(turnIds);
     return structuredClone({ session, liveTipTurnId: this.tree.projection.liveTips.get(session.id) ?? null,
       turns, entries: turns.flatMap((turn) => this.tree.projection.entriesByTurn.get(turn.id) ?? []),
-      tasks: turns.flatMap((turn) => this.agentTaskDetailsForTurn(turn.id)),
+      tasks: turns.flatMap((turn) => tasksByTurn.get(turn.id) ?? []),
       activeTurn: running ? { turn: running, entries: this.tree.projection.entriesByTurn.get(running.id) ?? [],
-        tasks: this.agentTaskDetailsForTurn(running.id) } : null });
+        tasks: tasksByTurn.get(running.id) ?? [] } : null });
+  }
+
+  /** Independent snapshot of only this Session's running turn, if one has started. */
+  readActiveTurn(sessionId: string) {
+    this.assertOpen();
+    const session = this.tree.resolveSession(sessionId);
+    const running = this.tree.projection.runningTurnsBySession.get(session.id);
+    if (!running) return null;
+    const tasksByTurn = this.agentTaskDetailsByTurn(new Set([running.id]));
+    return structuredClone({ turn: running, entries: this.tree.projection.entriesByTurn.get(running.id) ?? [],
+      tasks: tasksByTurn.get(running.id) ?? [] });
+  }
+
+  /** Retained tree metadata and request labels, without entries, images or worker traces. */
+  readHistorySummary() {
+    this.assertOpen();
+    return structuredClone({ tree: this.tree.tree, sessions: [...this.tree.projection.sessions.values()],
+      turns: [...this.tree.projection.turns.values()].map((turn) => ({ ...turn,
+        requestLabel: requestLabel(this.tree.projection.entries.get(turn.userEntryId)) })),
+      liveTips: Object.fromEntries(this.tree.projection.liveTips) });
   }
 
   /** Complete retained project history, including paths abandoned by rewind. */
@@ -759,8 +797,19 @@ export class ThreadRuntime {
   }
 
   agentTaskDetailsForTurn(parentTurnId: string) {
-    return [...this.tasks.repository.projection.tasks.values()].filter((task) => task.parentTurnId === parentTurnId)
-      .map((task) => ({ task: structuredClone(task), summary: this.tasks.repository.projection.summary(task.id) }));
+    return structuredClone(this.agentTaskDetailsByTurn(new Set([parentTurnId])).get(parentTurnId) ?? []);
+  }
+
+  /** Keep references internal so each public snapshot clones its tasks only once. */
+  private agentTaskDetailsByTurn(parentTurnIds: ReadonlySet<string>): Map<string, { task: AgentTask; summary: AgentTaskSummary }[]> {
+    const grouped = new Map<string, { task: AgentTask; summary: AgentTaskSummary }[]>();
+    for (const task of this.tasks.repository.projection.tasks.values()) {
+      if (!parentTurnIds.has(task.parentTurnId)) continue;
+      const details = grouped.get(task.parentTurnId) ?? [];
+      details.push({ task, summary: this.tasks.repository.projection.summary(task.id) });
+      grouped.set(task.parentTurnId, details);
+    }
+    return grouped;
   }
 
   async fsck(): Promise<string[]> {

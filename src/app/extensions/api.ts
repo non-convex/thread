@@ -3,7 +3,7 @@ import type { CommandRegistry, ThreadCommand } from "../commands/types.js";
 import type { AgentTool } from "../../core/tools/types.js";
 import type { ExtensionEventMap, ExtensionEventType, ExtensionHandler } from "../../core/extensions/events.js";
 
-export interface ExtensionAPI extends Pick<ThreadRuntime, "subscribe" | "listSessions" | "readSession" | "readHistory" | "agentTaskDetailsForTurn"> {
+export interface ExtensionAPI extends Pick<ThreadRuntime, "subscribe" | "listSessions" | "readSession" | "readActiveTurn" | "readHistory" | "readHistorySummary" | "agentTaskDetailsForTurn"> {
   registerTool(tool: AgentTool): () => void;
   registerCommand(command: ThreadCommand): () => void;
   on<K extends ExtensionEventType>(type: K, handler: ExtensionHandler<K>): () => void;
@@ -17,7 +17,9 @@ export function createExtensionAPI(
     subscribe: (listener, options) => runtime.subscribe(listener, options),
     listSessions: () => runtime.listSessions(),
     readSession: (sessionId) => runtime.readSession(sessionId),
+    readActiveTurn: (sessionId) => runtime.readActiveTurn(sessionId),
     readHistory: () => runtime.readHistory(),
+    readHistorySummary: () => runtime.readHistorySummary(),
     agentTaskDetailsForTurn: (turnId) => runtime.agentTaskDetailsForTurn(turnId),
     registerTool: (tool) => runtime.registerTool(tool),
     registerCommand: (command) => commands.register(command),

@@ -1,8 +1,5 @@
-import type { SessionEntry } from "../../core/session-tree/model.js";
 import type { ThreadCommand, CommandRegistry, HistoryViewItem, ThreadCommandContext } from "./types.js";
 import { ephemeral, viewResult } from "./types.js";
-
-type HistorySnapshot = ReturnType<ThreadCommandContext["runtime"]["readHistory"]>;
 
 function short(id: string | null): string {
   if (id === null) return "root";
@@ -14,36 +11,21 @@ const status: ThreadCommand = {
   description: "Show the project Session Tree and active Session.",
   async execute(_args, context) {
     context.signal.throwIfAborted();
-    const snapshot = context.runtime.readHistory();
-    const tree = snapshot.tree;
+    const sessions = context.runtime.listSessions();
+    const selected = sessions.find((session) => session.sessionId === context.selectedSessionId);
     const content = [
-      `project: ${tree.projectId}`,
-      `session tree: ${tree.id}`,
+      `project: ${context.runtime.project.id}`,
+      `session tree: ${context.runtime.treeId}`,
       `active session: ${context.selectedSessionId}`,
-      `live tip: ${snapshot.liveTips[context.selectedSessionId] ?? "root"}`,
-      `sessions: ${snapshot.sessions.length}`,
-      `turns: ${snapshot.turns.length}`,
+      `live tip: ${selected?.liveTipTurnId ?? "root"}`,
+      `sessions: ${sessions.length}`,
+      `turns: ${sessions.reduce((total, session) => total + session.turnCount, 0)}`,
       ...(context.skills?.length ? [`skills: ${context.skills.map((skill) => skill.name).join(", ")}`] : []),
       ...(context.skillDiagnostics ?? []).map((item) => `skill ${item.kind}: ${item.message} (${item.path})`),
     ].join("\n");
     return viewResult(content, { type: "document", title: "Session Tree status", content });
   },
 };
-
-function requestLabel(entry: SessionEntry | undefined): string {
-  const text = entry?.type === "message" && entry.message.role === "user"
-    ? (typeof entry.message.content === "string"
-      ? entry.message.content
-      : entry.message.content.filter((block) => block.type === "text")
-          .map((block) => block.type === "text" ? block.text : "").join(" "))
-    : "";
-  return text.replace(/\s+/g, " ").slice(0, 140) || "(no request text)";
-}
-
-function requestLabels(snapshot: HistorySnapshot): Map<string, string> {
-  const entries = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
-  return new Map(snapshot.turns.map((turn) => [turn.id, requestLabel(entries.get(turn.userEntryId))]));
-}
 
 const sessions: ThreadCommand = {
   name: "sessions",
@@ -54,8 +36,8 @@ const sessions: ThreadCommand = {
       ...session,
       active: session.sessionId === context.selectedSessionId,
     }));
-    const snapshot = context.runtime.readHistory();
-    const labels = requestLabels(snapshot);
+    const snapshot = context.runtime.readHistorySummary();
+    const labels = new Map(snapshot.turns.map((turn) => [turn.id, turn.requestLabel]));
     const running = new Map(snapshot.turns.filter((turn) => turn.status === "running").map((turn) => [turn.sessionId, turn.id]));
     const schedules = context.runtime.schedulingEnabled ? context.runtime.listSchedules() : [];
     const name = (session: typeof summaries[number]) => {
@@ -107,8 +89,7 @@ const history: ThreadCommand = {
   description: "Show turns across the whole project Session Tree.",
   async execute(_args, context) {
     context.signal.throwIfAborted();
-    const snapshot = context.runtime.readHistory();
-    const labels = requestLabels(snapshot);
+    const snapshot = context.runtime.readHistorySummary();
     const lines: string[] = [`Root ${snapshot.tree.rootId}`];
     const sessions = snapshot.sessions.sort((left, right) => left.createdAt - right.createdAt);
     for (const session of sessions) {
@@ -126,7 +107,7 @@ const history: ThreadCommand = {
       const render = (parentId: string | null, depth: number): void => {
         for (const turn of children.get(parentId) ?? []) {
           const live = snapshot.liveTips[session.id] === turn.id ? " live" : "";
-          lines.push(`${"│  ".repeat(depth + 1)}├─ ${short(turn.id)} ${turn.status}${live} — ${labels.get(turn.id) ?? "(no request text)"}`);
+          lines.push(`${"│  ".repeat(depth + 1)}├─ ${short(turn.id)} ${turn.status}${live} — ${turn.requestLabel}`);
           render(turn.id, depth + 1);
         }
       };

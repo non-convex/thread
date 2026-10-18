@@ -27,9 +27,10 @@ function modelLine(app: ThreadApp): string {
 }
 
 export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): Promise<void> {
-  const session = app.runtime.readSession(app.selectedSessionId);
+  const session = app.runtime.listSessions().find((item) => item.sessionId === app.selectedSessionId);
+  if (!session) throw new Error(`Unknown Session: ${app.selectedSessionId}`);
   output.write(
-    `Session Tree ${app.runtime.treeId}\nSession ${session.session.id} @ ${session.liveTipTurnId ?? "Root"}\n${modelLine(app)}${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
+    `Session Tree ${app.runtime.treeId}\nSession ${session.sessionId} @ ${session.liveTipTurnId ?? "Root"}\n${modelLine(app)}${options.configDescription ? `\nconfig ${options.configDescription}` : ""}\n`,
   );
   output.write(`worker ${app.runtime.workerEnabled ? `on · ${app.runtime.workerModel?.provider}/${app.runtime.workerModel?.id}` : "off · use /agent to configure"}\n`);
   output.write(`dreamer ${app.runtime.dreamerEnabled ? `on · ${app.runtime.dreamerModel?.provider}/${app.runtime.dreamerModel?.id}` : "off · use /agent to configure"}\n`);
@@ -56,7 +57,7 @@ export async function runPlainCli(app: ThreadApp, options: PlainRunnerOptions): 
   // Retain each Session's received text while another Session is selected.
   const runningText = new Map<string, string>();
   const recoverRunningText = (sessionId: string) => {
-    const running = app.runtime.readSession(sessionId).activeTurn;
+    const running = app.runtime.readActiveTurn(sessionId);
     return running ? projectTranscript(running.entries, running.tasks)
       .filter((item) => item.kind === "assistant").map((item) => item.content).join("\n") : "";
   };
