@@ -653,7 +653,7 @@ export class ThreadTuiController {
     const transcript = projectTranscript(entries, tasks);
     const last = turns.at(-1);
     if (last?.status === "interrupted") {
-      transcript.push({ id: `${last.id}:interrupted`, kind: "interrupted", content: "interrupted" });
+      transcript.push({ id: `${last.id}:interrupted`, kind: "interrupted", content: last.error?.message || "interrupted" });
     }
     this.state.transcript = transcript;
     this.state.sessionId = session.id;

@@ -153,7 +153,11 @@ export function reduceUiEvent(state: UiState, event: UiEvent): void {
     case "turn_finished":
       state.modelRetryError = undefined;
       if (state.turnStartedAt !== undefined) state.turnFinishedAt ??= Date.now();
-      if (event.outcome === "interrupted") state.notice = { level: "info", text: "Interrupted" };
+      if (event.outcome === "interrupted") state.notice = {
+        level: "info",
+        text: event.error || (event.limit === "maxSteps" ? "Model step limit reached"
+          : event.limit === "timeout" ? "Runtime limit exceeded" : "Interrupted"),
+      };
       else if (event.error) state.notice = { level: "error", text: event.error };
   }
 }

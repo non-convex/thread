@@ -177,7 +177,7 @@ export class TurnRunner {
   }
 
   async compactActive(options: RunTurnOptions): Promise<CompactionResult> {
-    this.tree.requireIdle();
+    this.tree.requireIdle(options.sessionId);
     const turnId = this.tree.projection.liveTips.get(options.sessionId);
     if (!turnId) return { compacted: false };
     const built = this.builder.build({ sessionId: options.sessionId });

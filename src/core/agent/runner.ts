@@ -104,7 +104,7 @@ export class AgentRunner {
       timestamp: settled.finishedAt ?? Date.now(),
       output: contentText(this.tree.messagesForTurn(turn.id).findLast((message) => message.role === "assistant")?.content ?? [], ""),
       outcome,
-      ...(outcome === "failed" && error ? { error: error.message } : {}),
+      ...(outcome !== "completed" && error ? { error: error.message } : {}),
       ...(error instanceof RuntimeLimitError ? { limit: error.limit } : {}),
     });
     safeExecutionEvent(options.onExecutionEvent, {

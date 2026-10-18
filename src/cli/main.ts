@@ -74,7 +74,7 @@ function parseArgs(argv: string[]): CliOptions {
       if (arg === "--extension") options.extensions.push(value);
       if (arg === "--tui") {
         if (value === "plain") options.tui = "plain";
-        else if (value === "fullscreen" || value === "hybrid" || value === "regular") options.tui = "fullscreen";
+        else if (value === "fullscreen") options.tui = "fullscreen";
         else throw new Error("--tui requires fullscreen or plain");
       }
     } else throw new Error(`Unknown option: ${arg}`);
