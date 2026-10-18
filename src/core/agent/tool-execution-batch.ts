@@ -23,7 +23,7 @@ function waitForRelease(signal: AbortSignal, release: Promise<void>): Promise<vo
   });
 }
 
-/** Launch state for one attempt; a model retry replaces it. */
+/** Launch state for one assistant attempt. Retries create a new batch. */
 class LaunchState {
   readonly controller = new AbortController();
   readonly signal: AbortSignal;
@@ -48,7 +48,7 @@ class LaunchState {
  * events emitted as tools finish.
  */
 export class ToolExecutionBatch {
-  private launch: LaunchState;
+  private readonly launch: LaunchState;
   private readonly queued = new Map<string, { name: string; assistantEntryId: string }>();
   private readonly prepared = new Map<string, PreparedToolCall>();
   private prepareTail: Promise<void> = Promise.resolve();
@@ -165,17 +165,6 @@ export class ToolExecutionBatch {
     return results;
   }
 
-  async restartForModelRetry(reason: unknown, nextAssistantEntryId: string): Promise<void> {
-    await this.prepareTail;
-    await this.cancel(reason);
-    this.input.assistantEntryId = nextAssistantEntryId;
-    this.launch = new LaunchState(this.input.signal);
-    this.prepared.clear();
-    this.finalized = undefined;
-    this.lastStreamContentIndex = -1;
-    this.prepareTail = Promise.resolve();
-  }
-
   async cancel(reason?: unknown): Promise<void> {
     await this.prepareTail.catch(() => undefined);
     const launch = this.launch;
@@ -196,14 +185,15 @@ export class ToolExecutionBatch {
    * order. Completed calls keep their real result; the rest become aborted
    * tool results so the conversation remains a valid model prefix.
    */
-  async collectSettled(reason?: unknown): Promise<Message[]> {
+  async collectSettled(reason?: unknown, calls?: readonly ToolCall[]): Promise<Message[]> {
     await this.cancel(reason);
-    const text = reason instanceof Error && reason.name !== "AbortError"
-      ? reason.message
-      : INTERRUPTED_TOOL_RESULT;
+    const text = reason instanceof Error ? reason.message : INTERRUPTED_TOOL_RESULT;
     const results: Message[] = [];
-    for (const prepared of this.finalized ?? [...this.prepared.values()]) {
-      const pending = this.launch.results.get(prepared.call.id);
+    // Failed preflight can leave a known call without a PreparedToolCall. Keep
+    // its cancelled result too, without trying authorization or execution again.
+    for (const call of calls ?? (this.finalized ?? [...this.prepared.values()]).map((item) => item.call)) {
+      const prepared = this.prepared.get(call.id);
+      const pending = this.launch.results.get(call.id);
       if (pending) {
         try {
           results.push(await pending);
@@ -212,7 +202,7 @@ export class ToolExecutionBatch {
           // The call was cancelled or failed after it started; synthesize below.
         }
       }
-      results.push(prepared.cancelledResult ?? abortedToolResult(prepared.call, text));
+      results.push(prepared?.cancelledResult ?? abortedToolResult(call, text));
     }
     return results;
   }

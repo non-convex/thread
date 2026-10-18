@@ -3,16 +3,23 @@ import type { ToolResult } from "../tools/types.js";
 
 /** Main-agent transforms only; worker and Dreamer executions use host policies instead. */
 export interface ExtensionEventMap {
+  /** Failure ends the admitted turn before its first model request. */
   turn_start: { turnId: string; sessionId: string; input: string };
+  /** Failure aborts context construction, including manual compaction. */
   before_context: { context: Context; turnId: string };
+  /** Failure stops preflight; it never authorizes the call. Received output is retained as a failed attempt. */
   before_tool_call: {
     toolName: string;
     args: Record<string, unknown>;
     denied?: boolean;
     denyReason?: string;
   };
-  /** Changes model-facing content only. Original tool output remains in durable details.raw. */
+  /**
+   * Changes model-facing content only. Original tool output remains in durable details.raw.
+   * Failure falls back to the original content plus a diagnostic; this is not a confidentiality boundary.
+   */
   tool_result: { toolName: string; raw: ToolResult; modelContent: string; modelImages?: readonly ImageContent[] };
+  /** Runs after durable turn completion. Failure is ignored and cannot change that outcome. */
   turn_end: { turnId: string; outcome: "completed" | "interrupted" | "failed" };
 }
 

@@ -49,14 +49,19 @@ export interface SessionTurnSegments {
 
 /** Format entries on demand, preserving narrative, ordinal order and omitted markers. */
 function segmentsForTurn(classify: (turn: Turn) => HistoryPathStatus, turn: Turn, options: ReadOptions,
-  entries: readonly SessionEntry[], length: number, omitted: string[], executed: ReadonlySet<string>): SessionTurnSegments {
+  entries: readonly SessionEntry[], length: number, omitted: string[], executed: ReadonlyMap<string, ReadonlySet<string>>,
+  failedAttempts: ReadonlyMap<string, string>): SessionTurnSegments {
   function* sections(): Generator<Iterable<string>> {
+    // Results follow their assistant message; execution facts can precede it.
+    let failedAttempt: string | undefined;
     for (let i = 0; i < length; i++) {
       const entry: SessionEntry = entries[i]!;
       if (entry.type === "compaction" || entry.type === "file_edit") continue;
       if (entry.type === "tool_execution") {
         if (options.toolCalls) yield (function* () {
           yield `[tool call ${entry.toolName}] `;
+          const attempt = failedAttempts.get(entry.assistantEntryId);
+          if (attempt) yield `[${attempt}] `;
           yield* jsonTextChunks(entry.effectiveArgs);
         })();
         continue;
@@ -65,21 +70,24 @@ function segmentsForTurn(classify: (turn: Turn) => HistoryPathStatus, turn: Turn
       if (message.role === "toolResult") {
         if (options.toolResults) yield (function* () {
           yield `[tool result ${message.toolName}] `;
+          if (failedAttempt) yield `[${failedAttempt}] `;
           yield* joined(textBlocks(message, false), "\n");
         })();
         continue;
       }
-      // There is no narrative line for messages without visible blocks.
+      failedAttempt = message.role === "assistant" ? failedAttempts.get(entry.id) : undefined;
+      // Failed attempts retain their status and reason even without visible blocks.
       const visible = [...textBlocks(message, options.thinking ?? false)];
-      if (visible.length) yield (function* () {
-        yield `[${message.role}]\n`;
+      if (visible.length || failedAttempt) yield (function* () {
+        yield `[${failedAttempt ?? message.role}]\n`;
         yield* joined(visible, "\n");
       })();
       if (message.role === "assistant") {
         for (const block of message.content) {
-          if (block.type === "toolCall" && options.toolCalls && !executed.has(block.id)) {
+          if (block.type === "toolCall" && options.toolCalls && !executed.get(entry.id)?.has(block.id)) {
             yield (function* () {
               yield `[tool call ${block.name}] `;
+              if (failedAttempt) yield `[${failedAttempt}] `;
               yield* jsonTextChunks(block.arguments);
             })();
           }
@@ -122,20 +130,26 @@ export async function readPathSegments(tree: SessionTreeService, sessionId: stri
   const maybeYield = cooperativeYield();
   for (const turn of turns) {
     const omitted = new Set<string>();
-    const executed = new Set<string>();
+    const executed = new Map<string, Set<string>>();
+    const failedAttempts = new Map<string, string>();
     const entries = tree.projection.entriesByTurn.get(turn.id) ?? [];
     const length = entries.length;
     for (let i = 0; i < length; i++) {
       signal.throwIfAborted();
       const entry = entries[i]!;
       if (entry.type === "tool_execution") {
-        executed.add(entry.toolCallId);
+        const calls = executed.get(entry.assistantEntryId) ?? new Set<string>();
+        calls.add(entry.toolCallId);
+        executed.set(entry.assistantEntryId, calls);
         if (!options.toolCalls) omitted.add("tool calls");
       } else if (entry.type === "message") {
         const message = entry.message;
         if (message.role === "toolResult") {
           if (!options.toolResults) omitted.add("tool results");
         } else if (message.role === "assistant") {
+          if (message.stopReason === "error" || message.stopReason === "aborted") {
+            failedAttempts.set(entry.id, `failed assistant attempt ${entry.id} (${message.stopReason})${message.errorMessage ? `: ${message.errorMessage}` : ""}`);
+          }
           for (const block of message.content) {
             if (block.type === "thinking" && !options.thinking) omitted.add("thinking");
             if (block.type === "toolCall" && !options.toolCalls) omitted.add("tool calls");
@@ -145,7 +159,7 @@ export async function readPathSegments(tree: SessionTreeService, sessionId: stri
       }
       await maybeYield(signal);
     }
-    result.push(segmentsForTurn(classify, turn, options, entries, length, [...omitted], executed));
+    result.push(segmentsForTurn(classify, turn, options, entries, length, [...omitted], executed, failedAttempts));
     await maybeYield(signal);
   }
   return result;

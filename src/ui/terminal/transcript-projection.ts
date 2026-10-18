@@ -28,14 +28,18 @@ export interface AgentTaskHistoryProjection {
 
 type ToolMessage = Extract<Message, { role: "toolResult" }>;
 
-function projectTool(message: ToolMessage, fact?: ToolExecutionFact, call?: ToolCall): LiveBlock {
+function toolKey(id: string, assistantEntryId: string | undefined, failedAssistantIds: ReadonlySet<string>): string {
+  return assistantEntryId && failedAssistantIds.has(assistantEntryId) ? `${assistantEntryId}:${id}` : id;
+}
+
+function projectTool(message: ToolMessage, fact?: ToolExecutionFact, call?: ToolCall, key = message.toolCallId): LiveBlock {
   const metadata = message.details as Partial<ToolResultMetadata> | undefined;
   return {
-    id: `tool:${message.toolCallId}`,
+    id: `tool:${key}`,
     kind: "tool",
     content: textContent(message.content),
     tool: {
-      id: message.toolCallId,
+      id: key,
       name: fact?.toolName ?? message.toolName,
       args: fact?.effectiveArgs ?? call?.arguments ?? {},
       status: metadata?.outcome ?? (message.isError ? "failed" : "completed"),
@@ -57,7 +61,7 @@ function messageBlocks(
   const lastText = copyable ? message.content.findLastIndex((block) => block.type === "text" && block.text.trim()) : -1;
   const replyCopyContent = copyable
     ? message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n\n") : "";
-  return message.content.flatMap((block, index): LiveBlock[] => {
+  const blocks = message.content.flatMap((block, index): LiveBlock[] => {
     if (block.type === "toolCall") return tool(block.id, block);
     if (block.type === "thinking" && block.thinking.trim()) {
       return [{ id: `${entryId}:thinking:${index}`, kind: "thinking", content: block.thinking }];
@@ -68,6 +72,13 @@ function messageBlocks(
     }
     return [];
   });
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    blocks.unshift({
+      id: `${entryId}:attempt-status`, kind: "assistant",
+      content: `[Assistant attempt ${message.stopReason === "aborted" ? "aborted" : "failed"}]${message.errorMessage ? `\n${message.errorMessage}` : ""}`,
+    });
+  }
+  return blocks;
 }
 
 function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
@@ -75,38 +86,76 @@ function projectTask(input: AgentTaskHistoryProjection): AgentTaskCard {
   // Each task input / revision starts an exchange, just as a user turn does in
   // the main transcript. Keep the final reply of every exchange copyable.
   const finalAssistantIds = new Set<string>();
+  const failedAssistantIds = new Set<string>();
   let finalAssistantId: string | undefined;
   for (const entry of task.trace) {
     if (entry.kind !== "message") continue;
     if (entry.message.role === "user") {
       if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
       finalAssistantId = undefined;
-    } else if (entry.message.role === "assistant") finalAssistantId = entry.entryId;
+    } else if (entry.message.role === "assistant") {
+      finalAssistantId = entry.entryId;
+      if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") failedAssistantIds.add(entry.entryId);
+    }
   }
   if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
-  const facts = new Map(task.trace.filter((entry) => entry.kind === "tool_execution").map((entry) => [entry.fact.toolCallId, entry.fact]));
-  const results = new Map(task.trace.flatMap((entry) => entry.kind !== "tool_execution" && entry.message.role === "toolResult"
-    ? [[entry.message.toolCallId, entry.message] as const] : []));
+  const facts = new Map<string, ToolExecutionFact>();
+  const results = new Map<string, ToolMessage>();
+  const owners = new Map<string, string | undefined>();
+  let assistantEntryId: string | undefined;
+  for (const entry of task.trace) {
+    if (entry.kind === "tool_execution") {
+      facts.set(toolKey(entry.fact.toolCallId, entry.fact.assistantEntryId, failedAssistantIds), entry.fact);
+      continue;
+    }
+    if (entry.message.role === "assistant") assistantEntryId = entry.entryId;
+    else if (entry.message.role === "user") assistantEntryId = undefined;
+    owners.set(entry.entryId, assistantEntryId);
+    if (entry.message.role === "toolResult") {
+      results.set(toolKey(entry.message.toolCallId, assistantEntryId, failedAssistantIds), entry.message);
+    }
+  }
   const rendered = new Set<string>();
-  const tool = (id: string, call?: ToolCall): LiveBlock[] => {
-    const result = results.get(id);
-    if (!result || rendered.has(id)) return [];
-    rendered.add(id);
-    return [projectTool(result, facts.get(id), call)];
+  const tool = (id: string, owner: string | undefined, call?: ToolCall): LiveBlock[] => {
+    const key = toolKey(id, owner, failedAssistantIds);
+    const result = results.get(key);
+    if (!result || rendered.has(key)) return [];
+    rendered.add(key);
+    return [projectTool(result, facts.get(key), call, key)];
   };
   return {
     summary: input.summary,
     trace: task.trace.flatMap((entry) => entry.kind === "tool_execution"
-      ? [] : messageBlocks(entry.message, entry.entryId, tool, finalAssistantIds.has(entry.entryId))),
+      ? [] : messageBlocks(entry.message, entry.entryId, (id, call) => tool(id, owners.get(entry.entryId), call),
+        finalAssistantIds.has(entry.entryId))),
   };
 }
 
 export function projectTranscript(entries: readonly SessionEntry[], tasks: readonly AgentTaskHistoryProjection[] = []): TranscriptItem[] {
-  const finalAssistantIds = new Map(entries.flatMap((entry) => entry.type === "message" && entry.message.role === "assistant"
-    ? [[entry.turnId, entry.id] as const] : []));
-  const facts = new Map(entries.filter((entry) => entry.type === "tool_execution").map((entry) => [entry.toolCallId, entry]));
-  const results = new Map(entries.flatMap((entry) => entry.type === "message" && entry.message.role === "toolResult"
-    ? [[entry.message.toolCallId, entry.message] as const] : []));
+  const finalAssistantIds = new Map<string, string>();
+  const failedAssistantIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    finalAssistantIds.set(entry.turnId, entry.id);
+    if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") failedAssistantIds.add(entry.id);
+  }
+  const facts = new Map<string, ToolExecutionFact>();
+  const results = new Map<string, ToolMessage>();
+  const owners = new Map<string, string | undefined>();
+  let assistantEntryId: string | undefined;
+  for (const entry of entries) {
+    if (entry.type === "tool_execution") {
+      facts.set(toolKey(entry.toolCallId, entry.assistantEntryId, failedAssistantIds), entry);
+      continue;
+    }
+    if (entry.type !== "message") continue;
+    if (entry.message.role === "assistant") assistantEntryId = entry.id;
+    else if (entry.message.role === "user") assistantEntryId = undefined;
+    owners.set(entry.id, assistantEntryId);
+    if (entry.message.role === "toolResult") {
+      results.set(toolKey(entry.message.toolCallId, assistantEntryId, failedAssistantIds), entry.message);
+    }
+  }
   const tasksByAnchor = new Map<string, AgentTaskHistoryProjection[]>();
   for (const task of tasks) {
     const anchored = tasksByAnchor.get(task.task.toolCallId) ?? [];
@@ -114,16 +163,18 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
     tasksByAnchor.set(task.task.toolCallId, anchored);
   }
   const rendered = new Set<string>();
-  const tool = (id: string, call?: ToolCall): LiveBlock[] => {
-    if (rendered.has(id)) return [];
-    rendered.add(id);
-    const children = tasksByAnchor.get(id);
+  const tool = (id: string, owner: string | undefined, call?: ToolCall): LiveBlock[] => {
+    const key = toolKey(id, owner, failedAssistantIds);
+    if (rendered.has(key)) return [];
+    rendered.add(key);
+    const failedAttempt = owner !== undefined && failedAssistantIds.has(owner);
+    const children = failedAttempt ? undefined : tasksByAnchor.get(id);
     if (children) return children.map((task) => ({
       id: `agent-task:${task.task.id}`, kind: "agent_task", content: "", agentTask: projectTask(task),
     }));
-    const result = results.get(id);
-    if (!result || AGENT_TASK_TOOL_NAMES.has(facts.get(id)?.toolName ?? result.toolName)) return [];
-    return [projectTool(result, facts.get(id), call)];
+    const result = results.get(key);
+    if (!result || (!failedAttempt && AGENT_TASK_TOOL_NAMES.has(facts.get(key)?.toolName ?? result.toolName))) return [];
+    return [projectTool(result, facts.get(key), call, key)];
   };
   const output: TranscriptItem[] = [];
   for (const entry of entries) {
@@ -135,7 +186,8 @@ export function projectTranscript(entries: readonly SessionEntry[], tasks: reado
     } else if (entry.message.role === "user") {
       output.push({ id: `${entry.turnId}:user`, kind: "user", content: userContentDisplay(entry.message.content) });
     } else {
-      output.push(...messageBlocks(entry.message, entry.id, tool, finalAssistantIds.get(entry.turnId) === entry.id));
+      output.push(...messageBlocks(entry.message, entry.id, (id, call) => tool(id, owners.get(entry.id), call),
+        finalAssistantIds.get(entry.turnId) === entry.id));
     }
   }
   return output;

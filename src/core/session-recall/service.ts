@@ -161,7 +161,13 @@ export class SessionRecallService {
         candidate.hit.entryId = doc.entryId;
         candidate.hit.kind = doc.kind;
         const location = snippetText.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
-        candidate.hit.snippet = snippetText.slice(Math.max(0, location - 100), Math.max(0, location - 100) + 320).replace(/\s+/g, " ").trim();
+        const snippet = snippetText.slice(Math.max(0, location - 100), Math.max(0, location - 100) + 320).replace(/\s+/g, " ").trim();
+        // Indexed fragments may begin after the diagnostic prefix. Recover the
+        // attempt context from canonical documents, not the derived index format.
+        const failure = doc.attemptFailure ?? this.turnDocuments(turn).documents
+          .find((item) => item.entryId === doc.entryId)?.attemptFailure;
+        const prefix = failure?.replace(/\s+/g, " ").trim();
+        candidate.hit.snippet = prefix && !snippet.startsWith(prefix) ? `${prefix} ${snippet}` : snippet;
       }
     };
     const maybeYield = cooperativeYield();

@@ -1,5 +1,5 @@
 import { streamModel } from "./model-observation.js";
-import { isContextOverflow, type AssistantMessage, type Context, type Message } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessage, type Context, type Message, type ToolCall } from "@earendil-works/pi-ai";
 import { executionEventSink, safeExecutionEvent, type ExecutionEventSink } from "../runtime/events.js";
 import type { ExecutionJournal } from "./execution-journal.js";
 import type { ModelClient } from "./model-client.js";
@@ -7,6 +7,7 @@ import { ToolExecutionBatch, type IndexedToolCall } from "./tool-execution-batch
 import type { ToolCallExecutor } from "./tool-call-executor.js";
 import { messageWithoutImages } from "../session-tree/user-content.js";
 import { ToolLoopGuard } from "./tool-loop-guard.js";
+import { placeholderAssistant } from "../session-tree/conversation-seal.js";
 
 export interface AgentStepResult {
   response: AssistantMessage;
@@ -31,22 +32,15 @@ export function assertModelStepSucceeded({ response, calls }: AgentStepResult, s
   }
 }
 
-async function persistBatchResults(
-  journal: ExecutionJournal,
-  collect: () => Promise<Message[]>,
-): Promise<Message[]> {
-  const results = await collect();
-  const existing = new Set(
-    journal.conversationMessages()
-      .filter((message) => message.role === "toolResult")
-      .map((message) => message.toolCallId),
-  );
-  for (const result of results) {
-    if (result.role !== "toolResult" || existing.has(result.toolCallId)) continue;
-    await journal.appendToolResult(result);
-    existing.add(result.toolCallId);
-  }
-  return results;
+async function persistBatchResults(journal: ExecutionJournal, results: readonly Message[]): Promise<void> {
+  // Results are committed once per attempt. A provider may reuse a call ID in
+  // a later attempt, so earlier conversation messages cannot deduplicate them.
+  for (const result of results) await journal.appendToolResult(result);
+}
+
+function responseCalls(response: AssistantMessage): IndexedToolCall[] {
+  return response.content.flatMap((content, contentIndex) =>
+    content.type === "toolCall" ? [{ contentIndex, call: content }] : []);
 }
 
 /** One model response plus its complete, source-ordered tool execution batch. */
@@ -66,7 +60,7 @@ export class AgentStepRunner {
     options = { ...options, onExecutionEvent: executionEventSink(journal.identity, options.onExecutionEvent) };
     let assistantEntryId = journal.planAssistantEntryId();
     safeExecutionEvent(options.onExecutionEvent, { type: "assistant_started", step: options.step, entryId: assistantEntryId });
-    const toolBatch = new ToolExecutionBatch({
+    const createBatch = () => new ToolExecutionBatch({
       journal,
       assistantEntryId,
       signal: options.signal,
@@ -74,26 +68,95 @@ export class AgentStepRunner {
       loopGuard: this.loopGuard,
       ...(options.onExecutionEvent ? { ui: options.onExecutionEvent } : {}),
     });
+    let toolBatch = createBatch();
+    let response: AssistantMessage | undefined;
+    let streamedContent: AssistantMessage["content"] = [];
+    const observedCalls = new Map<string, ToolCall>();
+    // A rejected durable append may already have updated the projection. Never
+    // retry that append with the same ID in the error handler.
+    let assistantWriteStarted = false;
+    let awaitingRetry = false;
+    const appendDelta = (type: "text" | "thinking", delta: string) => {
+      const last = streamedContent.at(-1);
+      if (type === "text") {
+        if (last?.type === "text") last.text += delta;
+        else streamedContent.push({ type, text: delta });
+      } else {
+        if (last?.type === "thinking") last.thinking += delta;
+        else streamedContent.push({ type, thinking: delta });
+      }
+    };
+    const persistFailedAttempt = async (cause: unknown): Promise<AgentStepResult> => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      const aborted = options.signal.aborted || error.name === "AbortError" || response?.stopReason === "aborted";
+      const failed: AssistantMessage = {
+        ...(response ?? {
+          ...placeholderAssistant({ messages: context.messages, status: aborted ? "interrupted" : "failed", error }),
+          provider: this.model.providerId,
+          model: this.model.modelId,
+          content: structuredClone(streamedContent),
+        }),
+        stopReason: aborted ? "aborted" : "error",
+        errorMessage: error.message,
+      };
+      // A malformed final response may omit a call already seen in the stream.
+      // Retain it in the failed attempt so its durable fact still has an owner.
+      const ids = new Set(responseCalls(failed).map(({ call }) => call.id));
+      for (const call of observedCalls.values()) {
+        if (!ids.has(call.id)) failed.content = [...failed.content, structuredClone(call)];
+      }
+      const calls = responseCalls(failed);
+      const results = await toolBatch.collectSettled(error, [...new Map(calls.map(({ call }) => [call.id, call])).values()]);
+      assistantWriteStarted = true;
+      await journal.appendAssistant(failed, assistantEntryId);
+      await persistBatchResults(journal, results);
+      await options.onAssistantPersisted?.(failed);
+      return { response: failed, calls, results };
+    };
     try {
-      const response = await streamModel(this.model, context, {
+      response = await streamModel(this.model, context, {
         signal: options.signal,
         maxTokens: this.model.maxOutputTokens,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
         onTextDelta: (delta) => {
+          awaitingRetry = false;
+          appendDelta("text", delta);
           safeExecutionEvent(options.onExecutionEvent, { type: "assistant_text_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onThinkingDelta: (delta) => {
+          awaitingRetry = false;
+          appendDelta("thinking", delta);
           safeExecutionEvent(options.onExecutionEvent, { type: "assistant_thinking_delta", step: options.step, delta, entryId: assistantEntryId });
         },
         onToolCallProgress: (progress) => {
+          awaitingRetry = false;
           safeExecutionEvent(options.onExecutionEvent, { type: "assistant_tool_call_progress", step: options.step,
             ...progress, entryId: assistantEntryId });
         },
-        onToolCallComplete: (call, contentIndex) => toolBatch.observe(call, contentIndex),
+        onToolCallComplete: (call, contentIndex) => {
+          awaitingRetry = false;
+          if (!observedCalls.has(call.id)) {
+            const snapshot = structuredClone(call);
+            observedCalls.set(call.id, snapshot);
+            streamedContent.push(snapshot);
+          }
+          return toolBatch.observe(call, contentIndex);
+        },
+        onAttempt: (event) => {
+          // Observation supplies provider metadata when available; deltas and
+          // completed calls also cover clients without attempt observations.
+          awaitingRetry = false;
+          if (event.type === "finished" && event.response) response = event.response;
+        },
         onRetryScheduled: async (attempt, maxAttempts, delayMs, errorMessage) => {
-          const nextEntryId = journal.planAssistantEntryId();
-          await toolBatch.restartForModelRetry(new Error(`Model attempt failed before retry ${attempt}`), nextEntryId);
-          assistantEntryId = nextEntryId;
+          await persistFailedAttempt(new Error(`${errorMessage} (before retry ${attempt})`));
+          assistantEntryId = journal.planAssistantEntryId();
+          assistantWriteStarted = false;
+          response = undefined;
+          streamedContent = [];
+          observedCalls.clear();
+          toolBatch = createBatch();
+          awaitingRetry = true;
           safeExecutionEvent(options.onExecutionEvent, {
             type: "model_retry_scheduled",
             step: options.step,
@@ -105,35 +168,38 @@ export class AgentStepRunner {
           });
         },
         onRetryAttemptStart: (attempt, maxAttempts) => {
+          awaitingRetry = false;
           safeExecutionEvent(options.onExecutionEvent, { type: "model_retry_started", step: options.step, attempt, maxAttempts, entryId: assistantEntryId });
         },
       }, options.onExecutionEvent, { purpose: "agent", entryId: () => assistantEntryId });
-      const calls: IndexedToolCall[] = response.content.flatMap((content, contentIndex) =>
-        content.type === "toolCall" ? [{ contentIndex, call: content }] : []
-      );
-      await toolBatch.reconcile(calls);
-      await journal.appendAssistant(response, assistantEntryId);
-      await options.onAssistantPersisted?.(response);
-
+      // Pi returns the preceding response as aborted if backoff is cancelled.
+      // That attempt is already saved; no new request or tool call took place.
+      if (awaitingRetry && options.signal.aborted) throw options.signal.reason;
+      const calls = responseCalls(response);
       if (response.stopReason === "aborted" || response.stopReason === "error" ||
           (calls.length > 0 && response.stopReason !== "toolUse")) {
-        const results = await persistBatchResults(journal, () =>
-          toolBatch.collectSettled(new Error("Assistant response cannot release tool execution")),
-        );
-        return { response, calls, results };
+        return await persistFailedAttempt(new Error(response.errorMessage ??
+          `Assistant response cannot release tool execution (${response.stopReason})`));
       }
+      await toolBatch.reconcile(calls);
+      assistantWriteStarted = true;
+      await journal.appendAssistant(response, assistantEntryId);
+      await options.onAssistantPersisted?.(response);
       if (calls.length === 0) return { response, calls, results: [] };
 
       toolBatch.releaseResponse();
+      let results: Message[];
       try {
-        const results = await persistBatchResults(journal, () => toolBatch.orderedResults());
-        return { response, calls, results };
+        results = await toolBatch.orderedResults();
       } catch (error) {
-        const results = await persistBatchResults(journal, () => toolBatch.collectSettled(error));
-        return { response, calls, results };
+        results = await toolBatch.collectSettled(error);
       }
+      // Persistence failures must escape, not retry a partially committed batch.
+      await persistBatchResults(journal, results);
+      return { response, calls, results };
     } catch (error) {
       await toolBatch.cancel(error);
+      if (!assistantWriteStarted && !awaitingRetry) await persistFailedAttempt(error);
       throw error;
     }
   }

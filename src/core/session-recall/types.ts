@@ -12,6 +12,8 @@ export interface RecallDocument {
   kind: ContentKind;
   text: string;
   semantic: boolean;
+  /** Canonical attempt context, also needed when a search snippet starts mid-document. */
+  attemptFailure?: string;
 }
 
 export interface TextSpan { start: number; end: number; text: string }
