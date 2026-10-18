@@ -302,6 +302,8 @@ await runtime.rewind(sessionId, turnId, { restoreFiles: true });
 | `listSessions()` | 返回会话 ID、live tip、turn 数和创建时间 |
 | `readSession(sessionId)` | 返回会话、已提交 live path 上的 `turns`、`entries`、`tasks`、`liveTipTurnId`，以及独立的 `activeTurn` |
 | `readHistory()` | 返回整个项目保留的会话、turn、条目和 live tips，包含回退后保留的分支 |
+| `readHistorySummary()` | 返回 tree、sessions、turns 和 live tips；每个 turn 带最多 140 字符的 `requestLabel`，不复制消息正文、图片和 Worker trace |
+| `readActiveTurn(sessionId)` | 仅返回正在运行的一轮 `{ turn, entries, tasks }`，没有运行回合时为 `null`，不读取已提交历史 |
 | `prompt(sessionId, input, options?)` | 执行并返回 `TurnResult`，包含 turn、结果和模型消息 |
 | `runGoal(sessionId, objective, options?)` | 设置或恢复持续目标，等待本次运行结束，返回最后一轮结果 |
 | `readGoal(sessionId)` | 返回当前目标的独立快照，运行中可读 |
@@ -323,7 +325,9 @@ Session Tree 的历史与传给模型的上下文分别保存。读取快照不�
 
 内置模型客户端在续接请求时，会一起跳过以 `aborted` 或 `error` 结束的未完成助手响应及其工具结果，避免留下没有对应调用的工具结果。完整助手响应之后发生的工具取消仍保留调用与取消结果。原始消息和诊断信息继续保存在 Session Tree 中。
 
-`activeTurn` 为 `{ turn, entries, tasks }` 或 `null`，包含目标会话正在运行的一轮及其已记录的输入、助手内容、工具调用和结果。它与顶层已提交的历史分开；完成、中断或失败后，该轮进入 live path，`activeTurn` 变为 `null`，不重复返回。运行中查询通过会话索引定位这一轮，不需要复制其他会话的历史。未形成记录的流式增量不在此快照中，刷新后继续通过 `subscribe()` 接收进度。
+模型重试前会先停止并等待该次尝试的工具，把已收到的助手内容以 `error` 状态保存到原来的 `assistantEntryId`，然后保存已完成工具的真实结果和其余调用的取消结果。新尝试使用新的助手条目 ID；历史读取、检索和终端历史会明确标注失败或中断的尝试。预检或最终调用核对失败时，同样保留已有响应，而不是只留下占位消息。只读工具仍可提前执行，因此重试可能重复发起读取或网络请求；写入、进程和交互工具仍须等完整响应通过核对并持久化后才会执行。
+
+`readSession()` 的 `activeTurn` 与 `readActiveTurn()` 的返回值均为 `{ turn, entries, tasks }` 或 `null`，包含目标会话正在运行的一轮及其已记录的输入、助手内容、工具调用和结果。它与顶层已提交的历史分开；完成、中断或失败后，该轮进入 live path，`activeTurn` 变为 `null`，不重复返回。运行中查询通过会话索引定位这一轮，不需要复制其他会话的历史。未形成记录的流式增量不在此快照中，刷新后继续通过 `subscribe()` 接收进度。
 
 Session Tree 的事件日志是唯一的持久记录。文件恢复和普通写入都会先同步临时文件；支持目录同步的平台还会同步替换或删除后的目录项。Windows 的 Node/Bun 接口不提供同样的目录同步能力，这不构成跨平台的断电事务保证。
 
@@ -456,9 +460,11 @@ const unsubscribe = runtime.subscribe((event) => {
 
 外部适配器只需依赖 `thread/runtime` 的订阅和公共查询；Langfuse/OTel SDK、凭据、数据映射、网络队列和 flush 都由适配器管理。宿主应先等待 `runtime.close()` 收齐终态，再取消订阅并等待适配器 flush/close；runtime 不关闭宿主共享的遥测客户端。
 
-coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(specifier)`。ExtensionAPI 提供相同的 subscribe、listSessions、readSession、readHistory、agentTaskDetailsForTurn。CLI 相对路径仍以启动目录为基准；app.loadExtension 相对路径以 runtime.rootPath 为基准。扩展的 activate/default 函数可返回异步清理函数：应用在 runtime 收尾之后调用它，清理失败不改变任务结果，CLI 仍受原有 5 秒关闭期限约束。
+coding 应用沿用 `--extension <module>`，也可调用 `app.loadExtension(specifier)`。ExtensionAPI 提供相同的 subscribe、listSessions、readSession、readActiveTurn、readHistory、readHistorySummary、agentTaskDetailsForTurn。CLI 相对路径仍以启动目录为基准；app.loadExtension 相对路径以 runtime.rootPath 为基准。扩展的 activate/default 函数可返回异步清理函数：应用在 runtime 收尾之后调用它，清理失败不改变任务结果，CLI 仍受原有 5 秒关闭期限约束。
 
 `on()` 是仅作用于主 agent 的执行钩子：`turn_start`、`before_context`、`before_tool_call`、`tool_result`、`turn_end` 不会转发给 Worker 或 Dreamer。`before_context` 也用于主 agent 的压缩上下文装配。跨 agent 的工具授权使用携带执行身份的 `toolPolicy`；跨 agent 的观测使用 `subscribe()`。
+
+执行钩子不是统一忽略异常的观察者。`turn_start` 失败会结束已入场的回合；`before_context` 失败会停止上下文构建，也会使手动压缩失败；`before_tool_call` 失败会停止该次预检，不会继续授权调用，已收到的助手输出保留为失败尝试。`turn_end` 在回合持久化结束后运行，异常被忽略，不改变已有结果。需要记录这些异常的扩展应自行记录诊断后再抛出。
 
 `tool_result` 只改写模型可见的 `modelContent` 和 `modelImages`；持久化 `details.raw` 保留原始工具文本，修改传入的 `raw` 副本不会改写它。钩子失败时会保留原文并附加错误提示，因此它不是日志脱敏或保密边界。需要确保敏感数据不进入模型及日志时，应在工具返回结果之前处理数据。
 

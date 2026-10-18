@@ -130,6 +130,12 @@ Built-in model metadata can be overridden in `~/.thread/config.json` without rep
 
 For an API key or compatible relay, copy [`thread.config.example.json`](./thread.config.example.json) to `~/.thread/config.json`, edit the provider and model, and set the environment variable named by `apiKeyEnv`. Custom providers can use `openai-responses`, `openai-completions`, or `anthropic-messages`.
 
+## Security
+
+The coding CLI has no tool approval layer or OS sandbox by default. Shell commands and custom tools run with the Thread process's OS permissions. Built-in file protections, worker write scopes, and `/rewind` do not constrain shell commands or arbitrary custom-tool I/O.
+
+Embedded hosts can set `toolPolicy` to control tool admission, but that alone is not an OS sandbox.
+
 ## Working within the tree
 
 ### Start and resume
